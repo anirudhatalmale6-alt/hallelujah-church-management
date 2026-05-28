@@ -1,5 +1,5 @@
 RewriteEngine On
-RewriteBase /
+RewriteBase /system/
 
 # Force HTTPS (uncomment for production)
 # RewriteCond %{HTTPS} off

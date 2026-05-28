@@ -24,11 +24,11 @@ function ProtectedRoute({ children, adminOnly = false }) {
   }
 
   if (!user) {
-    return <Navigate to="/public/login" replace />;
+    return <Navigate to="/system/public/login" replace />;
   }
 
   if (adminOnly && !isAdmin) {
-    return <Navigate to="/public/" replace />;
+    return <Navigate to="/system/public/" replace />;
   }
 
   return <Layout>{children}</Layout>;
@@ -47,16 +47,16 @@ function AppRoutes() {
 
   return (
     <Routes>
-      <Route path="/public/install" element={<InstallPage />} />
-      <Route path="/public/login" element={user ? <Navigate to="/public/" replace /> : <LoginPage />} />
-      <Route path="/public/" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
-      <Route path="/public/members" element={<ProtectedRoute><MembersPage /></ProtectedRoute>} />
-      <Route path="/public/members/:id" element={<ProtectedRoute><MemberDetailPage /></ProtectedRoute>} />
-      <Route path="/public/attendance" element={<ProtectedRoute><AttendancePage /></ProtectedRoute>} />
-      <Route path="/public/services" element={<ProtectedRoute><ServicesPage /></ProtectedRoute>} />
-      <Route path="/public/users" element={<ProtectedRoute adminOnly><UsersPage /></ProtectedRoute>} />
-      <Route path="/public/settings" element={<ProtectedRoute adminOnly><SettingsPage /></ProtectedRoute>} />
-      <Route path="*" element={<Navigate to="/public/" replace />} />
+      <Route path="/system/public/install" element={<InstallPage />} />
+      <Route path="/system/public/login" element={user ? <Navigate to="/system/public/" replace /> : <LoginPage />} />
+      <Route path="/system/public/" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
+      <Route path="/system/public/members" element={<ProtectedRoute><MembersPage /></ProtectedRoute>} />
+      <Route path="/system/public/members/:id" element={<ProtectedRoute><MemberDetailPage /></ProtectedRoute>} />
+      <Route path="/system/public/attendance" element={<ProtectedRoute><AttendancePage /></ProtectedRoute>} />
+      <Route path="/system/public/services" element={<ProtectedRoute><ServicesPage /></ProtectedRoute>} />
+      <Route path="/system/public/users" element={<ProtectedRoute adminOnly><UsersPage /></ProtectedRoute>} />
+      <Route path="/system/public/settings" element={<ProtectedRoute adminOnly><SettingsPage /></ProtectedRoute>} />
+      <Route path="*" element={<Navigate to="/system/public/" replace />} />
     </Routes>
   );
 }

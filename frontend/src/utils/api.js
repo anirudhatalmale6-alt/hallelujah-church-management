@@ -1,4 +1,4 @@
-const API_BASE = import.meta.env.VITE_API_URL || '/api';
+const API_BASE = import.meta.env.VITE_API_URL || '/system/api';
 
 class ApiError extends Error {
   constructor(message, status, data) {
@@ -68,7 +68,7 @@ async function request(endpoint, options = {}) {
   if (!response.ok) {
     if (response.status === 401) {
       removeToken();
-      window.location.href = '/public/';
+      window.location.href = '/system/public/';
     }
     throw new ApiError(data.error || 'Request failed', response.status, data);
   }

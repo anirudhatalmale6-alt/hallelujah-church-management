@@ -7,15 +7,15 @@ import {
 } from 'lucide-react';
 
 const navItems = [
-  { path: '/public/', icon: LayoutDashboard, label: 'Dashboard' },
-  { path: '/public/members', icon: Users, label: 'Members' },
-  { path: '/public/attendance', icon: UserCheck, label: 'Attendance' },
-  { path: '/public/services', icon: Calendar, label: 'Services' },
+  { path: '/system/public/', icon: LayoutDashboard, label: 'Dashboard' },
+  { path: '/system/public/members', icon: Users, label: 'Members' },
+  { path: '/system/public/attendance', icon: UserCheck, label: 'Attendance' },
+  { path: '/system/public/services', icon: Calendar, label: 'Services' },
 ];
 
 const adminItems = [
-  { path: '/public/users', icon: Users, label: 'Users' },
-  { path: '/public/settings', icon: Settings, label: 'Settings' },
+  { path: '/system/public/users', icon: Users, label: 'Users' },
+  { path: '/system/public/settings', icon: Settings, label: 'Settings' },
 ];
 
 export default function Layout({ children }) {
@@ -25,7 +25,7 @@ export default function Layout({ children }) {
   const [profileOpen, setProfileOpen] = useState(false);
 
   const isActive = (path) => {
-    if (path === '/public/') return location.pathname === '/public/' || location.pathname === '/public';
+    if (path === '/system/public/') return location.pathname === '/system/public/' || location.pathname === '/public';
     return location.pathname.startsWith(path);
   };
 
@@ -60,7 +60,7 @@ export default function Layout({ children }) {
       }`}>
         {/* Logo */}
         <div className="h-16 flex items-center px-4 border-b border-gray-100">
-          <Link to="/public/" className="flex items-center gap-3" onClick={() => setSidebarOpen(false)}>
+          <Link to="/system/public/" className="flex items-center gap-3" onClick={() => setSidebarOpen(false)}>
             <div className="w-9 h-9 bg-primary-700 rounded-lg flex items-center justify-center">
               <Church size={20} className="text-gold-400" />
             </div>

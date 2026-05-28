@@ -11,9 +11,9 @@ ini_set('log_errors', 1);
 
 // Database Configuration
 define('DB_HOST', getenv('DB_HOST') ?: 'localhost');
-define('DB_NAME', getenv('DB_NAME') ?: 'church_management');
-define('DB_USER', getenv('DB_USER') ?: 'root');
-define('DB_PASS', getenv('DB_PASS') ?: '');
+define('DB_NAME', getenv('DB_NAME') ?: 'u802978444_church_mgmt');
+define('DB_USER', getenv('DB_USER') ?: 'u802978444_hallelujah');
+define('DB_PASS', getenv('DB_PASS') ?: 'FMlEjeV:1');
 
 // JWT Configuration
 define('JWT_SECRET', getenv('JWT_SECRET') ?: 'hitc-church-mgmt-secret-2026-change-in-production');
@@ -25,6 +25,8 @@ $allowed_origins = [
     'http://localhost:3000',
     'https://hallelujahinthecity.org',
     'https://www.hallelujahinthecity.org',
+    'https://system.hallelujahinthecity.org',
+    'http://system.hallelujahinthecity.org',
 ];
 
 $origin = $_SERVER['HTTP_ORIGIN'] ?? '';

@@ -65,7 +65,7 @@ export default function InstallPage() {
               <CheckCircle size={48} className="text-green-500 mx-auto mb-4" />
               <h2 className="text-xl font-semibold text-gray-900 mb-2">Already Installed</h2>
               <p className="text-gray-600 mb-6">{message}</p>
-              <button onClick={() => navigate('/public/login')} className="btn-primary">
+              <button onClick={() => navigate('/system/public/login')} className="btn-primary">
                 Go to Login
               </button>
             </div>
@@ -114,7 +114,7 @@ export default function InstallPage() {
                 </div>
               )}
               <div className="text-center">
-                <button onClick={() => navigate('/public/login')} className="btn-primary py-3 px-8 text-base">
+                <button onClick={() => navigate('/system/public/login')} className="btn-primary py-3 px-8 text-base">
                   Go to Login
                 </button>
               </div>

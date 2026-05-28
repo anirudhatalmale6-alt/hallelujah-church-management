@@ -41,7 +41,7 @@ export default function MemberDetailPage() {
       <div className="text-center py-20">
         <AlertCircle size={48} className="text-red-400 mx-auto mb-4" />
         <p className="text-gray-600">{error || 'Member not found'}</p>
-        <button onClick={() => navigate('/public/members')} className="btn-primary mt-4">
+        <button onClick={() => navigate('/system/public/members')} className="btn-primary mt-4">
           <ArrowLeft size={16} /> Back to Members
         </button>
       </div>
@@ -78,7 +78,7 @@ export default function MemberDetailPage() {
     <div>
       {/* Back button */}
       <button
-        onClick={() => navigate('/public/members')}
+        onClick={() => navigate('/system/public/members')}
         className="flex items-center gap-2 text-gray-600 hover:text-primary-700 mb-6 transition-colors"
       >
         <ArrowLeft size={18} /> Back to Members

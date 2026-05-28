@@ -84,7 +84,7 @@ export default function DashboardPage() {
           value={data.members.total}
           sub={`${data.members.active} active`}
           color="bg-blue-100 text-blue-600"
-          to="/public/members"
+          to="/system/public/members"
         />
         <StatCard
           icon={UserPlus}
@@ -92,7 +92,7 @@ export default function DashboardPage() {
           value={data.members.new_this_month}
           sub={`${data.members.visitors} visitors`}
           color="bg-green-100 text-green-600"
-          to="/public/members"
+          to="/system/public/members"
         />
         <StatCard
           icon={UserCheck}
@@ -100,14 +100,14 @@ export default function DashboardPage() {
           value={Math.round(data.attendance.avg_last_4_weeks)}
           sub="Last 4 weeks"
           color="bg-gold-100 text-gold-600"
-          to="/public/attendance"
+          to="/system/public/attendance"
         />
         <StatCard
           icon={Calendar}
           label="Upcoming Services"
           value={data.upcoming_services.length}
           color="bg-purple-100 text-purple-600"
-          to="/public/services"
+          to="/system/public/services"
         />
       </div>
 
@@ -116,7 +116,7 @@ export default function DashboardPage() {
         <div className="lg:col-span-2 card">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-semibold text-gray-900">Attendance Trend</h2>
-            <Link to="/public/attendance" className="text-sm text-primary-700 hover:underline flex items-center gap-1">
+            <Link to="/system/public/attendance" className="text-sm text-primary-700 hover:underline flex items-center gap-1">
               View All <ChevronRight size={14} />
             </Link>
           </div>
@@ -158,13 +158,13 @@ export default function DashboardPage() {
           <div className="card">
             <h2 className="text-lg font-semibold text-gray-900 mb-4">Quick Actions</h2>
             <div className="space-y-2">
-              <Link to="/public/members?new=1" className="btn-primary w-full justify-center">
+              <Link to="/system/public/members?new=1" className="btn-primary w-full justify-center">
                 <UserPlus size={18} /> Add Member
               </Link>
-              <Link to="/public/services?new=1" className="btn-gold w-full justify-center">
+              <Link to="/system/public/services?new=1" className="btn-gold w-full justify-center">
                 <Calendar size={18} /> Create Service
               </Link>
-              <Link to="/public/attendance" className="btn-secondary w-full justify-center">
+              <Link to="/system/public/attendance" className="btn-secondary w-full justify-center">
                 <UserCheck size={18} /> Mark Attendance
               </Link>
             </div>
@@ -180,7 +180,7 @@ export default function DashboardPage() {
                 {data.birthdays_this_month.map(m => (
                   <Link
                     key={m.id}
-                    to={`/public/members/${m.id}`}
+                    to={`/system/public/members/${m.id}`}
                     className="flex items-center justify-between py-1.5 hover:bg-gray-50 -mx-2 px-2 rounded"
                   >
                     <span className="text-sm text-gray-700">{m.first_name} {m.last_name}</span>

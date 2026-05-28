@@ -216,7 +216,7 @@ export default function MembersPage() {
                   {members.map(m => (
                     <tr key={m.id} className="hover:bg-gray-50 transition-colors">
                       <td className="px-4 py-3">
-                        <Link to={`/public/members/${m.id}`} className="flex items-center gap-3">
+                        <Link to={`/system/public/members/${m.id}`} className="flex items-center gap-3">
                           <div className="w-9 h-9 bg-primary-700 rounded-full flex items-center justify-center text-white text-sm font-medium shrink-0">
                             {m.first_name?.charAt(0)}{m.last_name?.charAt(0)}
                           </div>
@@ -237,7 +237,7 @@ export default function MembersPage() {
                       <td className="px-4 py-3">
                         <div className="flex items-center justify-end gap-1">
                           <Link
-                            to={`/public/members/${m.id}`}
+                            to={`/system/public/members/${m.id}`}
                             className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg"
                             title="View"
                           >

@@ -146,22 +146,24 @@ function handleLogin(): void {
     ]);
 }
 
-// Route handling
-$method = $_SERVER['REQUEST_METHOD'];
-$action = $_GET['action'] ?? '';
+// Route handling - only when auth.php is accessed directly
+if (basename($_SERVER['SCRIPT_FILENAME']) === 'auth.php') {
+    $method = $_SERVER['REQUEST_METHOD'];
+    $action = $_GET['action'] ?? '';
 
-if ($method === 'POST' && $action === 'login') {
-    handleLogin();
-} elseif ($method === 'GET' && $action === 'me') {
-    $user = authenticate();
-    $db = getDB();
-    $stmt = $db->prepare("SELECT id, email, name, role, status, created_at FROM users WHERE id = ?");
-    $stmt->execute([$user['user_id']]);
-    $userData = $stmt->fetch();
-    if (!$userData) {
-        jsonResponse(['error' => 'User not found'], 404);
+    if ($method === 'POST' && $action === 'login') {
+        handleLogin();
+    } elseif ($method === 'GET' && $action === 'me') {
+        $user = authenticate();
+        $db = getDB();
+        $stmt = $db->prepare("SELECT id, email, name, role, status, created_at FROM users WHERE id = ?");
+        $stmt->execute([$user['user_id']]);
+        $userData = $stmt->fetch();
+        if (!$userData) {
+            jsonResponse(['error' => 'User not found'], 404);
+        }
+        jsonResponse(['user' => $userData]);
+    } else {
+        jsonResponse(['error' => 'Invalid auth action'], 400);
     }
-    jsonResponse(['user' => $userData]);
-} else {
-    jsonResponse(['error' => 'Invalid auth action'], 400);
 }
