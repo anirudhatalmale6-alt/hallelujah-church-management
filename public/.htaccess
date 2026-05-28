@@ -1,0 +1,9 @@
+RewriteEngine On
+RewriteBase /public/
+
+# Don't rewrite existing files
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+
+# SPA fallback
+RewriteRule ^(.*)$ index.html [L]

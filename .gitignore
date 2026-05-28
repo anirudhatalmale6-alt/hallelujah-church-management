@@ -1,0 +1,16 @@
+# Dependencies
+frontend/node_modules/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment overrides (if any local config files are used)
+.env
+.env.local
