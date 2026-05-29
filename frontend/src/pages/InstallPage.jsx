@@ -45,10 +45,8 @@ export default function InstallPage() {
     <div className="min-h-screen bg-gradient-to-br from-primary-700 via-primary-800 to-primary-900 flex items-center justify-center p-4">
       <div className="w-full max-w-lg">
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 bg-white/10 backdrop-blur rounded-2xl mb-4">
-            <Church size={32} className="text-gold-400" />
-          </div>
-          <h1 className="text-2xl font-bold text-white">HITC Church Management</h1>
+          <img src={import.meta.env.BASE_URL + 'logo.png'} alt="Hallelujah In The City" className="h-16 mx-auto mb-2" />
+          <h1 className="text-2xl font-bold text-white">Church Management</h1>
           <p className="text-primary-200 mt-1">System Installation</p>
         </div>
 

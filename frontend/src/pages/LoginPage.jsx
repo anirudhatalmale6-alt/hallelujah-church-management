@@ -30,10 +30,7 @@ export default function LoginPage() {
       <div className="w-full max-w-md">
         {/* Logo */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 bg-white/10 backdrop-blur rounded-2xl mb-4">
-            <Church size={32} className="text-gold-400" />
-          </div>
-          <h1 className="text-2xl font-bold text-white">Hallelujah In The City</h1>
+          <img src={import.meta.env.BASE_URL + 'logo.png'} alt="Hallelujah In The City" className="h-16 mx-auto mb-3" />
           <p className="text-primary-200 mt-1">Church Management System</p>
         </div>
 

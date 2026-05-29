@@ -75,12 +75,16 @@ switch ($method) {
             $stmt->execute($params);
             $services = $stmt->fetchAll();
 
+            $typesStmt = $db->query("SELECT DISTINCT type FROM services WHERE type IS NOT NULL AND type != '' ORDER BY type");
+            $distinctTypes = $typesStmt->fetchAll(PDO::FETCH_COLUMN);
+
             jsonResponse([
                 'services' => $services,
                 'total' => (int)$total,
                 'page' => $page,
                 'limit' => $limit,
                 'pages' => ceil($total / $limit),
+                'distinct_types' => $distinctTypes,
             ]);
         }
         break;
@@ -93,9 +97,8 @@ switch ($method) {
             jsonResponse(['error' => $error], 400);
         }
 
-        $validTypes = ['sunday_1st', 'sunday_2nd', 'bible_study', 'fasting', 'special'];
-        if (!in_array($data['type'], $validTypes)) {
-            jsonResponse(['error' => 'Invalid service type'], 400);
+        if (empty(trim($data['type']))) {
+            jsonResponse(['error' => 'Service type is required'], 400);
         }
 
         $stmt = $db->prepare("INSERT INTO services (name, date, time, type, notes) VALUES (?, ?, ?, ?, ?)");

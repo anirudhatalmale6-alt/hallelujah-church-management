@@ -95,25 +95,86 @@ switch ($method) {
                 'limit' => $limit,
             ]);
         } elseif ($action === 'history') {
-            // Get attendance history across all services
             $from = $_GET['from'] ?? date('Y-m-01');
             $to = $_GET['to'] ?? date('Y-m-d');
+            $groupBy = $_GET['group_by'] ?? 'service';
 
-            $stmt = $db->prepare("
-                SELECT s.id, s.name, s.date, s.time, s.type,
-                    COUNT(CASE WHEN a.status = 'present' OR a.status = 'late' THEN 1 END) as attended,
-                    COUNT(CASE WHEN a.status = 'absent' THEN 1 END) as absent,
-                    COUNT(a.id) as total_marked
-                FROM services s
-                LEFT JOIN attendance a ON a.service_id = s.id
-                WHERE s.date BETWEEN ? AND ?
-                GROUP BY s.id
-                ORDER BY s.date DESC, s.time DESC
-            ");
-            $stmt->execute([$from, $to]);
-            $history = $stmt->fetchAll();
+            if ($groupBy === 'week') {
+                $stmt = $db->prepare("
+                    SELECT
+                        YEARWEEK(s.date, 1) as period_key,
+                        MIN(s.date) as period_start,
+                        MAX(s.date) as period_end,
+                        COUNT(DISTINCT s.id) as service_count,
+                        ROUND(AVG(sub.attended), 1) as avg_attended,
+                        SUM(sub.attended) as total_attended,
+                        SUM(sub.absent) as total_absent,
+                        SUM(sub.total_marked) as total_marked
+                    FROM services s
+                    JOIN (
+                        SELECT s2.id,
+                            COUNT(CASE WHEN a.status = 'present' OR a.status = 'late' THEN 1 END) as attended,
+                            COUNT(CASE WHEN a.status = 'absent' THEN 1 END) as absent,
+                            COUNT(a.id) as total_marked
+                        FROM services s2
+                        LEFT JOIN attendance a ON a.service_id = s2.id
+                        WHERE s2.date BETWEEN ? AND ?
+                        GROUP BY s2.id
+                    ) sub ON sub.id = s.id
+                    WHERE s.date BETWEEN ? AND ?
+                    GROUP BY YEARWEEK(s.date, 1)
+                    ORDER BY period_key DESC
+                ");
+                $stmt->execute([$from, $to, $from, $to]);
+                $history = $stmt->fetchAll();
+                jsonResponse(['history' => $history, 'group_by' => 'week']);
 
-            jsonResponse(['history' => $history]);
+            } elseif ($groupBy === 'month') {
+                $stmt = $db->prepare("
+                    SELECT
+                        DATE_FORMAT(s.date, '%Y-%m') as period_key,
+                        MIN(s.date) as period_start,
+                        MAX(s.date) as period_end,
+                        COUNT(DISTINCT s.id) as service_count,
+                        ROUND(AVG(sub.attended), 1) as avg_attended,
+                        SUM(sub.attended) as total_attended,
+                        SUM(sub.absent) as total_absent,
+                        SUM(sub.total_marked) as total_marked
+                    FROM services s
+                    JOIN (
+                        SELECT s2.id,
+                            COUNT(CASE WHEN a.status = 'present' OR a.status = 'late' THEN 1 END) as attended,
+                            COUNT(CASE WHEN a.status = 'absent' THEN 1 END) as absent,
+                            COUNT(a.id) as total_marked
+                        FROM services s2
+                        LEFT JOIN attendance a ON a.service_id = s2.id
+                        WHERE s2.date BETWEEN ? AND ?
+                        GROUP BY s2.id
+                    ) sub ON sub.id = s.id
+                    WHERE s.date BETWEEN ? AND ?
+                    GROUP BY DATE_FORMAT(s.date, '%Y-%m')
+                    ORDER BY period_key DESC
+                ");
+                $stmt->execute([$from, $to, $from, $to]);
+                $history = $stmt->fetchAll();
+                jsonResponse(['history' => $history, 'group_by' => 'month']);
+
+            } else {
+                $stmt = $db->prepare("
+                    SELECT s.id, s.name, s.date, s.time, s.type,
+                        COUNT(CASE WHEN a.status = 'present' OR a.status = 'late' THEN 1 END) as attended,
+                        COUNT(CASE WHEN a.status = 'absent' THEN 1 END) as absent,
+                        COUNT(a.id) as total_marked
+                    FROM services s
+                    LEFT JOIN attendance a ON a.service_id = s.id
+                    WHERE s.date BETWEEN ? AND ?
+                    GROUP BY s.id
+                    ORDER BY s.date DESC, s.time DESC
+                ");
+                $stmt->execute([$from, $to]);
+                $history = $stmt->fetchAll();
+                jsonResponse(['history' => $history, 'group_by' => 'service']);
+            }
         } else {
             jsonResponse(['error' => 'Invalid action. Use by_service, by_member, or history'], 400);
         }

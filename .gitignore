@@ -14,3 +14,6 @@ Thumbs.db
 # Environment overrides (if any local config files are used)
 .env
 .env.local
+api/debug-db.php
+api/reset-admin.php
+api/migrate.php

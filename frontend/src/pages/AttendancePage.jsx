@@ -1,16 +1,34 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { attendance as attendanceApi, services as servicesApi } from '../utils/api';
+import { formatTime12h } from '../utils/format';
 import {
   UserCheck, Check, X, Clock, Search, AlertCircle,
-  ChevronDown, Save, Calendar, BarChart3, Users
+  ChevronDown, Save, Calendar, BarChart3, Users, TrendingUp
 } from 'lucide-react';
 
+const serviceTypeLabels = {
+  sunday_1st: '1st Service',
+  sunday_2nd: '2nd Service',
+  bible_study: 'Bible Study',
+  fasting: 'Fasting',
+  special: 'Special',
+};
+
+const statusColors = {
+  present: 'bg-green-500 text-white',
+  late: 'bg-yellow-500 text-white',
+  absent: 'bg-red-500 text-white',
+};
+const statusInactive = 'bg-gray-100 text-gray-500 hover:bg-gray-200';
+
 export default function AttendancePage() {
-  const [tab, setTab] = useState('mark'); // mark | history
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [tab, setTab] = useState('mark');
   const [services, setServices] = useState([]);
   const [selectedServiceId, setSelectedServiceId] = useState('');
   const [attendanceData, setAttendanceData] = useState(null);
-  const [records, setRecords] = useState({}); // { memberId: { status, notes } }
+  const [records, setRecords] = useState({});
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -21,16 +39,24 @@ export default function AttendancePage() {
   const [history, setHistory] = useState([]);
   const [historyFrom, setHistoryFrom] = useState(() => {
     const d = new Date();
-    d.setMonth(d.getMonth() - 1);
+    d.setMonth(d.getMonth() - 3);
     return d.toISOString().split('T')[0];
   });
   const [historyTo, setHistoryTo] = useState(() => new Date().toISOString().split('T')[0]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [groupBy, setGroupBy] = useState('service');
 
-  // Load recent services for dropdown
   useEffect(() => {
     loadServices();
   }, []);
+
+  useEffect(() => {
+    const svcParam = searchParams.get('service');
+    if (svcParam && services.length > 0) {
+      setSelectedServiceId(svcParam);
+      setSearchParams({}, { replace: true });
+    }
+  }, [searchParams, services]);
 
   const loadServices = async () => {
     try {
@@ -41,7 +67,6 @@ export default function AttendancePage() {
     }
   };
 
-  // Load attendance for selected service
   const loadAttendance = useCallback(async () => {
     if (!selectedServiceId) return;
     setLoading(true);
@@ -50,8 +75,6 @@ export default function AttendancePage() {
     try {
       const data = await attendanceApi.byService(selectedServiceId);
       setAttendanceData(data);
-
-      // Build records map from existing attendance
       const rec = {};
       data.attendance.forEach(a => {
         rec[a.member_id] = { status: a.status, notes: a.notes || '' };
@@ -64,30 +87,25 @@ export default function AttendancePage() {
   }, [selectedServiceId]);
 
   useEffect(() => {
-    if (selectedServiceId) {
-      loadAttendance();
-    }
+    if (selectedServiceId) loadAttendance();
   }, [selectedServiceId, loadAttendance]);
 
-  // Load history
   const loadHistory = useCallback(async () => {
     setHistoryLoading(true);
+    setHistory([]);
     try {
-      const data = await attendanceApi.history({ from: historyFrom, to: historyTo });
+      const data = await attendanceApi.history({ from: historyFrom, to: historyTo, group_by: groupBy });
       setHistory(data.history);
     } catch (err) {
       setError(err.message);
     }
     setHistoryLoading(false);
-  }, [historyFrom, historyTo]);
+  }, [historyFrom, historyTo, groupBy]);
 
   useEffect(() => {
-    if (tab === 'history') {
-      loadHistory();
-    }
+    if (tab === 'history') loadHistory();
   }, [tab, loadHistory]);
 
-  // Toggle member attendance
   const toggleStatus = (memberId, status) => {
     setRecords(prev => ({
       ...prev,
@@ -95,7 +113,6 @@ export default function AttendancePage() {
     }));
   };
 
-  // Mark all present
   const markAllPresent = () => {
     if (!attendanceData) return;
     const allMembers = [
@@ -109,7 +126,6 @@ export default function AttendancePage() {
     setRecords(rec);
   };
 
-  // Save attendance
   const saveAttendance = async () => {
     setSaving(true);
     setError('');
@@ -120,23 +136,20 @@ export default function AttendancePage() {
         status: data.status,
         notes: data.notes,
       }));
-
       if (recordsArray.length === 0) {
         setError('No attendance records to save');
         setSaving(false);
         return;
       }
-
       const result = await attendanceApi.bulkMark(parseInt(selectedServiceId), recordsArray);
       setMessage(result.message);
-      loadAttendance(); // Refresh
+      loadAttendance();
     } catch (err) {
       setError(err.message);
     }
     setSaving(false);
   };
 
-  // All members for the marking view
   const allMembers = attendanceData
     ? [
         ...attendanceData.attendance.map(a => ({
@@ -161,21 +174,24 @@ export default function AttendancePage() {
     );
   });
 
-  const serviceTypeLabels = {
-    sunday_1st: '1st Service',
-    sunday_2nd: '2nd Service',
-    bible_study: 'Bible Study',
-    fasting: 'Fasting',
-    special: 'Special',
-  };
+  function getTypeLabel(type) {
+    return serviceTypeLabels[type] || type;
+  }
 
-  const statusColors = {
-    present: 'bg-green-500 text-white',
-    late: 'bg-yellow-500 text-white',
-    absent: 'bg-red-500 text-white',
-  };
+  function formatWeekRange(start, end) {
+    const s = new Date(start + 'T00:00:00');
+    const e = new Date(end + 'T00:00:00');
+    const opts = { month: 'short', day: 'numeric' };
+    return `${s.toLocaleDateString('en-US', opts)} - ${e.toLocaleDateString('en-US', opts)}`;
+  }
 
-  const statusInactive = 'bg-gray-100 text-gray-500 hover:bg-gray-200';
+  function formatMonth(key) {
+    const str = String(key || '');
+    const [y, m] = str.split('-');
+    if (!m) return str;
+    const d = new Date(parseInt(y), parseInt(m) - 1, 1);
+    return d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  }
 
   return (
     <div>
@@ -201,7 +217,7 @@ export default function AttendancePage() {
             }`}
           >
             <BarChart3 size={16} className="inline mr-1.5 -mt-0.5" />
-            History
+            History & Trends
           </button>
         </div>
       </div>
@@ -224,7 +240,6 @@ export default function AttendancePage() {
 
       {tab === 'mark' && (
         <>
-          {/* Service Selector */}
           <div className="card mb-6">
             <div className="flex flex-col sm:flex-row gap-3">
               <div className="flex-1">
@@ -237,7 +252,7 @@ export default function AttendancePage() {
                   <option value="">-- Choose a service --</option>
                   {services.map(s => (
                     <option key={s.id} value={s.id}>
-                      {s.name} - {new Date(s.date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} ({serviceTypeLabels[s.type] || s.type})
+                      {s.name} - {new Date(s.date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} {formatTime12h(s.time)} ({getTypeLabel(s.type)})
                     </option>
                   ))}
                 </select>
@@ -253,7 +268,6 @@ export default function AttendancePage() {
 
           {selectedServiceId && !loading && attendanceData && (
             <>
-              {/* Summary */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
                 <div className="bg-white rounded-lg border border-gray-200 p-3 text-center">
                   <div className="text-2xl font-bold text-green-600">
@@ -281,7 +295,6 @@ export default function AttendancePage() {
                 </div>
               </div>
 
-              {/* Actions bar */}
               <div className="card mb-4">
                 <div className="flex flex-col sm:flex-row gap-3">
                   <div className="relative flex-1">
@@ -304,7 +317,6 @@ export default function AttendancePage() {
                 </div>
               </div>
 
-              {/* Members list */}
               <div className="card p-0">
                 <div className="divide-y divide-gray-100">
                   {filteredMembers.length === 0 ? (
@@ -317,16 +329,13 @@ export default function AttendancePage() {
                       const rec = records[m.id];
                       return (
                         <div key={m.id} className="flex items-center gap-3 px-4 py-3 hover:bg-gray-50">
-                          {/* Avatar */}
                           <div className="w-9 h-9 bg-primary-700 rounded-full flex items-center justify-center text-white text-sm font-medium shrink-0">
                             {m.first_name?.charAt(0)}{m.last_name?.charAt(0)}
                           </div>
-                          {/* Name */}
                           <div className="flex-1 min-w-0">
                             <div className="font-medium text-gray-900 text-sm">{m.first_name} {m.last_name}</div>
                             <div className="text-xs text-gray-500 truncate">{m.phone || m.email || ''}</div>
                           </div>
-                          {/* Status buttons */}
                           <div className="flex gap-1.5 shrink-0">
                             <button
                               onClick={() => toggleStatus(m.id, 'present')}
@@ -376,7 +385,6 @@ export default function AttendancePage() {
 
       {tab === 'history' && (
         <>
-          {/* Date range */}
           <div className="card mb-6">
             <div className="flex flex-col sm:flex-row gap-3 items-end">
               <div>
@@ -387,8 +395,16 @@ export default function AttendancePage() {
                 <label className="label">To</label>
                 <input type="date" className="input" value={historyTo} onChange={e => setHistoryTo(e.target.value)} />
               </div>
+              <div>
+                <label className="label">View By</label>
+                <select className="input" value={groupBy} onChange={e => setGroupBy(e.target.value)}>
+                  <option value="service">Each Service</option>
+                  <option value="week">Weekly Average</option>
+                  <option value="month">Monthly Average</option>
+                </select>
+              </div>
               <button onClick={loadHistory} className="btn-primary">
-                <BarChart3 size={16} /> Load History
+                <BarChart3 size={16} /> Load
               </button>
             </div>
           </div>
@@ -402,7 +418,7 @@ export default function AttendancePage() {
               <BarChart3 size={48} className="text-gray-300 mx-auto mb-3" />
               <p className="text-gray-500">No attendance records in this date range</p>
             </div>
-          ) : (
+          ) : groupBy === 'service' ? (
             <div className="card p-0 overflow-hidden">
               <div className="overflow-x-auto">
                 <table className="w-full">
@@ -423,12 +439,16 @@ export default function AttendancePage() {
                         ? Math.round((parseInt(h.attended) / parseInt(h.total_marked)) * 100)
                         : 0;
                       return (
-                        <tr key={h.id} className="hover:bg-gray-50">
+                        <tr
+                          key={h.id}
+                          className="hover:bg-gray-50 cursor-pointer"
+                          onClick={() => { setSelectedServiceId(String(h.id)); setTab('mark'); }}
+                        >
                           <td className="px-4 py-3 text-sm font-medium text-gray-900">{h.name}</td>
                           <td className="px-4 py-3 text-sm text-gray-600">
                             {new Date(h.date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
                           </td>
-                          <td className="px-4 py-3 text-sm text-gray-500">{serviceTypeLabels[h.type] || h.type}</td>
+                          <td className="px-4 py-3 text-sm text-gray-500">{getTypeLabel(h.type)}</td>
                           <td className="px-4 py-3 text-sm text-center font-medium text-green-600">{h.attended}</td>
                           <td className="px-4 py-3 text-sm text-center font-medium text-red-500">{h.absent}</td>
                           <td className="px-4 py-3 text-sm text-center text-gray-600">{h.total_marked}</td>
@@ -444,6 +464,128 @@ export default function AttendancePage() {
                 </table>
               </div>
             </div>
+          ) : (
+            <>
+              {/* Summary cards for grouped view */}
+              {history.length > 0 && (
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-4">
+                  <div className="bg-white rounded-lg border border-gray-200 p-4 text-center">
+                    <TrendingUp size={20} className="text-primary-700 mx-auto mb-1" />
+                    <div className="text-2xl font-bold text-gray-900">
+                      {(history.reduce((sum, h) => sum + parseFloat(h.avg_attended || 0), 0) / history.length).toFixed(1)}
+                    </div>
+                    <div className="text-xs text-gray-500">Overall Avg Attendance</div>
+                  </div>
+                  <div className="bg-white rounded-lg border border-gray-200 p-4 text-center">
+                    <Calendar size={20} className="text-blue-600 mx-auto mb-1" />
+                    <div className="text-2xl font-bold text-gray-900">
+                      {history.reduce((sum, h) => sum + parseInt(h.service_count || 0), 0)}
+                    </div>
+                    <div className="text-xs text-gray-500">Total Services</div>
+                  </div>
+                  <div className="bg-white rounded-lg border border-gray-200 p-4 text-center">
+                    <Users size={20} className="text-green-600 mx-auto mb-1" />
+                    <div className="text-2xl font-bold text-gray-900">
+                      {history.reduce((sum, h) => sum + parseInt(h.total_attended || 0), 0)}
+                    </div>
+                    <div className="text-xs text-gray-500">Total Attendees</div>
+                  </div>
+                </div>
+              )}
+
+              <div className="card p-0 overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead className="bg-gray-50 border-b border-gray-200">
+                      <tr>
+                        <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">
+                          {groupBy === 'week' ? 'Week' : 'Month'}
+                        </th>
+                        <th className="text-center px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Services</th>
+                        <th className="text-center px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Avg Attendance</th>
+                        <th className="text-center px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Total Attended</th>
+                        <th className="text-center px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Total Absent</th>
+                        <th className="text-center px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Rate</th>
+                        <th className="text-center px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Trend</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {history.map((h, idx) => {
+                        const rate = parseInt(h.total_marked) > 0
+                          ? Math.round((parseInt(h.total_attended) / parseInt(h.total_marked)) * 100)
+                          : 0;
+                        const prevAvg = idx < history.length - 1 ? parseFloat(history[idx + 1].avg_attended) : null;
+                        const currAvg = parseFloat(h.avg_attended);
+                        const trendUp = prevAvg !== null ? currAvg > prevAvg : null;
+                        const trendSame = prevAvg !== null ? currAvg === prevAvg : null;
+                        return (
+                          <tr key={h.period_key} className="hover:bg-gray-50">
+                            <td className="px-4 py-3 text-sm font-medium text-gray-900">
+                              {groupBy === 'week'
+                                ? formatWeekRange(h.period_start, h.period_end)
+                                : formatMonth(h.period_key)}
+                            </td>
+                            <td className="px-4 py-3 text-sm text-center text-gray-600">{h.service_count}</td>
+                            <td className="px-4 py-3 text-sm text-center font-semibold text-primary-700">{h.avg_attended}</td>
+                            <td className="px-4 py-3 text-sm text-center font-medium text-green-600">{h.total_attended}</td>
+                            <td className="px-4 py-3 text-sm text-center font-medium text-red-500">{h.total_absent}</td>
+                            <td className="px-4 py-3 text-center">
+                              <span className={`text-sm font-medium ${rate >= 70 ? 'text-green-600' : rate >= 40 ? 'text-yellow-600' : 'text-red-500'}`}>
+                                {rate}%
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 text-center">
+                              {trendUp === null ? (
+                                <span className="text-gray-400 text-sm">-</span>
+                              ) : trendSame ? (
+                                <span className="text-gray-400 text-sm">=</span>
+                              ) : trendUp ? (
+                                <span className="text-green-600 text-sm font-medium">&#9650; +{(currAvg - prevAvg).toFixed(1)}</span>
+                              ) : (
+                                <span className="text-red-500 text-sm font-medium">&#9660; {(currAvg - prevAvg).toFixed(1)}</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Visual comparison bars */}
+              <div className="card mt-4">
+                <h3 className="text-sm font-semibold text-gray-700 mb-3">
+                  {groupBy === 'week' ? 'Weekly' : 'Monthly'} Attendance Comparison
+                </h3>
+                <div className="space-y-2">
+                  {[...history].reverse().map(h => {
+                    const maxAvg = Math.max(...history.map(x => parseFloat(x.avg_attended) || 1), 1);
+                    const pct = (parseFloat(h.avg_attended) / maxAvg) * 100;
+                    return (
+                      <div key={h.period_key} className="flex items-center gap-3">
+                        <div className="w-32 text-xs text-gray-500 shrink-0 text-right">
+                          {groupBy === 'week'
+                            ? formatWeekRange(h.period_start, h.period_end)
+                            : formatMonth(h.period_key)}
+                        </div>
+                        <div className="flex-1">
+                          <div className="h-6 bg-gray-100 rounded-full overflow-hidden">
+                            <div
+                              className="h-full bg-gradient-to-r from-primary-700 to-gold-400 rounded-full flex items-center justify-end pr-2 transition-all duration-500"
+                              style={{ width: `${Math.max(pct, 8)}%` }}
+                            >
+                              <span className="text-xs font-medium text-white">{h.avg_attended}</span>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="w-12 text-xs text-gray-500 shrink-0">{h.service_count} svc</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </>
           )}
         </>
       )}

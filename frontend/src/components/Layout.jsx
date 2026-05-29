@@ -60,14 +60,8 @@ export default function Layout({ children }) {
       }`}>
         {/* Logo */}
         <div className="h-16 flex items-center px-4 border-b border-gray-100">
-          <Link to="/system/public/" className="flex items-center gap-3" onClick={() => setSidebarOpen(false)}>
-            <div className="w-9 h-9 bg-primary-700 rounded-lg flex items-center justify-center">
-              <Church size={20} className="text-gold-400" />
-            </div>
-            <div className="leading-tight">
-              <div className="text-sm font-bold text-primary-700">Hallelujah</div>
-              <div className="text-[10px] font-medium text-gold-400 uppercase tracking-wider">In The City</div>
-            </div>
+          <Link to="/system/public/" className="flex items-center" onClick={() => setSidebarOpen(false)}>
+            <img src={import.meta.env.BASE_URL + 'logo.png'} alt="Hallelujah In The City" className="h-10" style={{ filter: 'brightness(0.3) sepia(1) hue-rotate(350deg) saturate(3)' }} />
           </Link>
           <button
             onClick={() => setSidebarOpen(false)}

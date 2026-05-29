@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { dashboard } from '../utils/api';
+import { formatTime12h } from '../utils/format';
 import {
   Users, UserCheck, Calendar, TrendingUp, UserPlus,
   ChevronRight, Cake, Clock, AlertCircle
@@ -23,6 +24,7 @@ function StatCard({ icon: Icon, label, value, sub, color, to }) {
 }
 
 export default function DashboardPage() {
+  const navigate = useNavigate();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -126,7 +128,12 @@ export default function DashboardPage() {
                 const maxAttendance = Math.max(...data.attendance.trend.map(t => Number(t.attended) || 1), 1);
                 const pct = ((Number(s.attended) || 0) / maxAttendance) * 100;
                 return (
-                  <div key={s.id} className="flex items-center gap-3">
+                  <div
+                    key={s.id}
+                    className="flex items-center gap-3 cursor-pointer hover:bg-gray-50 rounded-lg p-1 -m-1 transition-colors"
+                    onClick={() => navigate(`/system/public/attendance?service=${s.id}`)}
+                    title="Click to view attendance details"
+                  >
                     <div className="w-24 text-xs text-gray-500 shrink-0">
                       {new Date(s.date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                     </div>
@@ -205,7 +212,7 @@ export default function DashboardPage() {
                     <div className="text-sm font-medium text-gray-900">{s.name}</div>
                     <div className="text-xs text-gray-500">
                       {new Date(s.date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
-                      {' '}{s.time?.substring(0, 5)}
+                      {' '}{formatTime12h(s.time)}
                     </div>
                   </div>
                 ))}

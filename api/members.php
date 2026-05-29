@@ -84,8 +84,16 @@ switch ($method) {
             $countStmt->execute($params);
             $total = $countStmt->fetch()['total'];
 
+            // Sort
+            $sort = $_GET['sort'] ?? 'last_name';
+            $orderBy = match($sort) {
+                'first_name' => 'first_name ASC, last_name ASC',
+                'newest' => 'created_at DESC',
+                default => 'last_name ASC, first_name ASC',
+            };
+
             // Fetch members
-            $sql = "SELECT * FROM members $whereClause ORDER BY last_name ASC, first_name ASC LIMIT $limit OFFSET $offset";
+            $sql = "SELECT * FROM members $whereClause ORDER BY $orderBy LIMIT $limit OFFSET $offset";
             $stmt = $db->prepare($sql);
             $stmt->execute($params);
             $members = $stmt->fetchAll();

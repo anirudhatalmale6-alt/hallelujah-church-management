@@ -6,7 +6,7 @@ import Modal from '../components/Modal';
 import Pagination from '../components/Pagination';
 import {
   Search, Plus, Edit2, Trash2, Eye, Filter, Users,
-  UserPlus, AlertCircle, Check, X
+  UserPlus, AlertCircle, Check, X, ArrowDownAZ
 } from 'lucide-react';
 
 const emptyMember = {
@@ -27,6 +27,7 @@ export default function MembersPage() {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [groupFilter, setGroupFilter] = useState('');
+  const [sortBy, setSortBy] = useState('last_name');
   const [page, setPage] = useState(1);
   const [showModal, setShowModal] = useState(false);
   const [editMember, setEditMember] = useState(null);
@@ -42,6 +43,7 @@ export default function MembersPage() {
         search,
         status: statusFilter,
         family_group: groupFilter,
+        sort: sortBy,
         page,
         limit: 25,
       });
@@ -53,7 +55,7 @@ export default function MembersPage() {
       setError(err.message);
     }
     setLoading(false);
-  }, [search, statusFilter, groupFilter, page]);
+  }, [search, statusFilter, groupFilter, sortBy, page]);
 
   useEffect(() => {
     loadMembers();
@@ -160,6 +162,15 @@ export default function MembersPage() {
               className="input pl-10"
             />
           </div>
+          <select
+            value={sortBy}
+            onChange={(e) => { setSortBy(e.target.value); setPage(1); }}
+            className="input w-auto"
+          >
+            <option value="last_name">A-Z Last Name</option>
+            <option value="first_name">A-Z First Name</option>
+            <option value="newest">Newest First</option>
+          </select>
           <select
             value={statusFilter}
             onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}

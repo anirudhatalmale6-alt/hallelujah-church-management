@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { services as servicesApi } from '../utils/api';
 import { useAuth } from '../contexts/AuthContext';
+import { formatTime12h } from '../utils/format';
 import Modal from '../components/Modal';
 import Pagination from '../components/Pagination';
 import {
@@ -9,7 +10,7 @@ import {
   AlertCircle, Check, X
 } from 'lucide-react';
 
-const serviceTypes = [
+const defaultServiceTypes = [
   { value: 'sunday_1st', label: '1st Sunday Service' },
   { value: 'sunday_2nd', label: '2nd Sunday Service' },
   { value: 'bible_study', label: 'Bible Study' },
@@ -17,7 +18,7 @@ const serviceTypes = [
   { value: 'special', label: 'Special Event' },
 ];
 
-const typeLabels = Object.fromEntries(serviceTypes.map(t => [t.value, t.label]));
+const defaultTypeLabels = Object.fromEntries(defaultServiceTypes.map(t => [t.value, t.label]));
 const typeColors = {
   sunday_1st: 'bg-blue-100 text-blue-700',
   sunday_2nd: 'bg-indigo-100 text-indigo-700',
@@ -25,6 +26,21 @@ const typeColors = {
   fasting: 'bg-purple-100 text-purple-700',
   special: 'bg-gold-100 text-gold-700',
 };
+const customTypeColors = [
+  'bg-teal-100 text-teal-700', 'bg-pink-100 text-pink-700',
+  'bg-orange-100 text-orange-700', 'bg-cyan-100 text-cyan-700',
+  'bg-rose-100 text-rose-700', 'bg-lime-100 text-lime-700',
+];
+
+function getTypeLabel(type) {
+  return defaultTypeLabels[type] || type;
+}
+function getTypeColor(type) {
+  if (typeColors[type]) return typeColors[type];
+  let hash = 0;
+  for (let i = 0; i < type.length; i++) hash = type.charCodeAt(i) + ((hash << 5) - hash);
+  return customTypeColors[Math.abs(hash) % customTypeColors.length];
+}
 
 const emptyService = {
   name: '', date: '', time: '10:00', type: 'sunday_1st', notes: '',
@@ -45,6 +61,9 @@ export default function ServicesPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [deleteId, setDeleteId] = useState(null);
+  const [customTypes, setCustomTypes] = useState([]);
+  const [showCustomType, setShowCustomType] = useState(false);
+  const [customTypeName, setCustomTypeName] = useState('');
 
   const loadServices = useCallback(async () => {
     setLoading(true);
@@ -53,6 +72,9 @@ export default function ServicesPage() {
       setServices(data.services);
       setTotal(data.total);
       setPages(data.pages);
+      const defaultVals = defaultServiceTypes.map(t => t.value);
+      const extra = (data.distinct_types || []).filter(t => !defaultVals.includes(t));
+      setCustomTypes(extra);
     } catch (err) {
       setError(err.message);
     }
@@ -73,19 +95,27 @@ export default function ServicesPage() {
   const openNew = () => {
     setEditService(null);
     setForm({ ...emptyService, date: new Date().toISOString().split('T')[0] });
+    setShowCustomType(false);
+    setCustomTypeName('');
     setError('');
     setShowModal(true);
   };
 
+  const allTypes = [...defaultServiceTypes, ...customTypes.map(t => ({ value: t, label: t }))];
+
   const openEdit = (service) => {
     setEditService(service);
+    const isDefault = defaultServiceTypes.some(t => t.value === service.type);
+    const isKnownCustom = customTypes.includes(service.type);
     setForm({
       name: service.name || '',
       date: service.date || '',
       time: service.time?.substring(0, 5) || '10:00',
-      type: service.type || 'sunday_1st',
+      type: isDefault || isKnownCustom ? service.type : '__custom__',
       notes: service.notes || '',
     });
+    setShowCustomType(!isDefault && !isKnownCustom);
+    setCustomTypeName(!isDefault && !isKnownCustom ? (service.type || '') : '');
     setError('');
     setShowModal(true);
   };
@@ -95,10 +125,19 @@ export default function ServicesPage() {
     setSaving(true);
     setError('');
     try {
+      const submitData = { ...form };
+      if (submitData.type === '__custom__') {
+        if (!customTypeName.trim()) {
+          setError('Please enter a custom type name');
+          setSaving(false);
+          return;
+        }
+        submitData.type = customTypeName.trim();
+      }
       if (editService) {
-        await servicesApi.update(editService.id, form);
+        await servicesApi.update(editService.id, submitData);
       } else {
-        await servicesApi.create(form);
+        await servicesApi.create(submitData);
       }
       setShowModal(false);
       loadServices();
@@ -144,7 +183,7 @@ export default function ServicesPage() {
             className="input w-auto"
           >
             <option value="">All Types</option>
-            {serviceTypes.map(t => (
+            {allTypes.map(t => (
               <option key={t.value} value={t.value}>{t.label}</option>
             ))}
           </select>
@@ -185,13 +224,13 @@ export default function ServicesPage() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <h3 className="font-semibold text-gray-900">{s.name}</h3>
-                    <span className={`badge ${typeColors[s.type] || 'badge-gray'}`}>
-                      {typeLabels[s.type] || s.type}
+                    <span className={`badge ${getTypeColor(s.type)}`}>
+                      {getTypeLabel(s.type)}
                     </span>
                   </div>
                   <div className="flex items-center gap-4 mt-1 text-sm text-gray-500">
                     <span className="flex items-center gap-1">
-                      <Clock size={14} /> {s.time?.substring(0, 5)}
+                      <Clock size={14} /> {formatTime12h(s.time)}
                     </span>
                     <span className="flex items-center gap-1">
                       <Calendar size={14} />
@@ -272,11 +311,26 @@ export default function ServicesPage() {
             </div>
             <div>
               <label className="label">Type *</label>
-              <select className="input" value={form.type} onChange={e => updateField('type', e.target.value)} required>
-                {serviceTypes.map(t => (
+              <select className="input" value={form.type} onChange={e => {
+                const val = e.target.value;
+                updateField('type', val);
+                setShowCustomType(val === '__custom__');
+                if (val !== '__custom__') setCustomTypeName('');
+              }} required>
+                {allTypes.map(t => (
                   <option key={t.value} value={t.value}>{t.label}</option>
                 ))}
+                <option value="__custom__">+ Create New Type...</option>
               </select>
+              {showCustomType && (
+                <input
+                  className="input mt-2"
+                  value={customTypeName}
+                  onChange={e => setCustomTypeName(e.target.value)}
+                  placeholder="Enter custom type name (e.g. Youth Service)"
+                  required
+                />
+              )}
             </div>
             <div>
               <label className="label">Notes</label>

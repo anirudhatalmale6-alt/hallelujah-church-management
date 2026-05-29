@@ -37,16 +37,17 @@ async function request(endpoint, options = {}) {
   const { method = 'GET', body, params } = options;
 
   let url = `${API_BASE}/${endpoint}`;
+  const searchParams = new URLSearchParams();
+  searchParams.append('_t', Date.now());
   if (params) {
-    const searchParams = new URLSearchParams();
     Object.entries(params).forEach(([key, val]) => {
       if (val !== undefined && val !== null && val !== '') {
         searchParams.append(key, val);
       }
     });
-    const qs = searchParams.toString();
-    if (qs) url += (url.includes('?') ? '&' : '?') + qs;
   }
+  const qs = searchParams.toString();
+  if (qs) url += (url.includes('?') ? '&' : '?') + qs;
 
   const headers = {
     'Content-Type': 'application/json',

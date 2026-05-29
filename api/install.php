@@ -93,7 +93,7 @@ try {
             name VARCHAR(255) NOT NULL,
             date DATE NOT NULL,
             time TIME NOT NULL,
-            type ENUM('sunday_1st', 'sunday_2nd', 'bible_study', 'fasting', 'special') NOT NULL DEFAULT 'sunday_1st',
+            type VARCHAR(100) NOT NULL DEFAULT 'sunday_1st',
             notes TEXT DEFAULT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             INDEX idx_date (date),
