@@ -2,13 +2,15 @@ import React, { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import {
-  LayoutDashboard, Users, UserCheck, Calendar, Church,
-  Settings, LogOut, Menu, X, ChevronDown, FileText
+  LayoutDashboard, Users, UserCheck, Calendar, Church, Home,
+  Settings, LogOut, Menu, X, ChevronDown, FileText, FolderOpen
 } from 'lucide-react';
 
 const navItems = [
   { path: '/system/public/', icon: LayoutDashboard, label: 'Dashboard' },
   { path: '/system/public/members', icon: Users, label: 'Members' },
+  { path: '/system/public/households', icon: Home, label: 'Households' },
+  { path: '/system/public/groups', icon: FolderOpen, label: 'Groups' },
   { path: '/system/public/attendance', icon: UserCheck, label: 'Attendance' },
   { path: '/system/public/services', icon: Calendar, label: 'Services' },
   { path: '/system/public/reports', icon: FileText, label: 'Reports' },

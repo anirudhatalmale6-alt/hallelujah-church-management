@@ -3,8 +3,34 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import { members as membersApi } from '../utils/api';
 import {
   ArrowLeft, Mail, Phone, MapPin, Calendar, Users,
-  UserCheck, BarChart3, AlertCircle
+  UserCheck, BarChart3, AlertCircle, Home, Heart,
+  Droplets, BookOpen, Baby, Church, Star
 } from 'lucide-react';
+
+const formatDate = (d) => {
+  if (!d || d === '0000-00-00') return null;
+  const date = new Date(d + 'T00:00:00');
+  if (isNaN(date.getTime())) return null;
+  return date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+};
+
+const milestoneConfig = [
+  { key: 'first_visit_date', label: 'First Visit', icon: Star, color: 'text-yellow-500' },
+  { key: 'salvation_date', label: 'Salvation', icon: Heart, color: 'text-red-500' },
+  { key: 'baptism_date', label: 'Baptism', icon: Droplets, color: 'text-blue-500' },
+  { key: 'membership_class_date', label: 'Membership Class', icon: BookOpen, color: 'text-green-500' },
+  { key: 'membership_date', label: 'Became Member', icon: Church, color: 'text-primary-700' },
+  { key: 'dedication_date', label: 'Dedication', icon: Baby, color: 'text-pink-500' },
+  { key: 'wedding_date', label: 'Wedding', icon: Heart, color: 'text-rose-400' },
+];
+
+const roleBadge = (role) => {
+  switch (role) {
+    case 'head': return <span className="badge-green">Head</span>;
+    case 'spouse': return <span className="badge-blue">Spouse</span>;
+    default: return <span className="badge-gray capitalize">{role || 'Member'}</span>;
+  }
+};
 
 export default function MemberDetailPage() {
   const { id } = useParams();
@@ -66,17 +92,10 @@ export default function MemberDetailPage() {
     }
   };
 
-  const serviceTypeLabels = {
-    sunday_1st: '1st Service',
-    sunday_2nd: '2nd Service',
-    bible_study: 'Bible Study',
-    fasting: 'Fasting',
-    special: 'Special',
-  };
+  const activeMilestones = milestoneConfig.filter(m => member[m.key] && member[m.key] !== '0000-00-00');
 
   return (
     <div>
-      {/* Back button */}
       <button
         onClick={() => navigate('/system/public/members')}
         className="flex items-center gap-2 text-gray-600 hover:text-primary-700 mb-6 transition-colors"
@@ -86,77 +105,115 @@ export default function MemberDetailPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Profile Card */}
-        <div className="card text-center">
-          <div className="w-20 h-20 bg-primary-700 rounded-full flex items-center justify-center text-white text-2xl font-bold mx-auto mb-4">
-            {member.first_name?.charAt(0)}{member.last_name?.charAt(0)}
-          </div>
-          <h2 className="text-xl font-bold text-gray-900">{member.first_name} {member.last_name}</h2>
-          <div className="mt-2">{statusBadge(member.status)}</div>
-
-          {/* Contact Info */}
-          <div className="mt-6 space-y-3 text-left">
-            {member.email && (
-              <div className="flex items-center gap-3 text-sm">
-                <Mail size={16} className="text-gray-400 shrink-0" />
-                <a href={`mailto:${member.email}`} className="text-primary-700 hover:underline truncate">{member.email}</a>
-              </div>
-            )}
-            {member.phone && (
-              <div className="flex items-center gap-3 text-sm">
-                <Phone size={16} className="text-gray-400 shrink-0" />
-                <a href={`tel:${member.phone}`} className="text-gray-700">{member.phone}</a>
-              </div>
-            )}
-            {(member.address || member.city) && (
-              <div className="flex items-center gap-3 text-sm">
-                <MapPin size={16} className="text-gray-400 shrink-0" />
-                <span className="text-gray-700">
-                  {[member.address, member.city, member.state, member.zip].filter(Boolean).join(', ')}
-                </span>
-              </div>
-            )}
-            {member.date_of_birth && (
-              <div className="flex items-center gap-3 text-sm">
-                <Calendar size={16} className="text-gray-400 shrink-0" />
-                <span className="text-gray-700">
-                  Born: {new Date(member.date_of_birth + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}
-                </span>
-              </div>
-            )}
-            {member.family_group && (
-              <div className="flex items-center gap-3 text-sm">
-                <Users size={16} className="text-gray-400 shrink-0" />
-                <span className="text-gray-700">{member.family_group}</span>
-              </div>
-            )}
-            {member.membership_date && (
-              <div className="flex items-center gap-3 text-sm">
-                <UserCheck size={16} className="text-gray-400 shrink-0" />
-                <span className="text-gray-700">
-                  Member since {new Date(member.membership_date + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
-                </span>
-              </div>
-            )}
-          </div>
-
-          {member.gender && (
-            <div className="mt-4 pt-4 border-t border-gray-100">
-              <span className="text-sm text-gray-500">Gender: </span>
-              <span className="text-sm text-gray-700 capitalize">{member.gender}</span>
+        <div className="space-y-6">
+          <div className="card text-center">
+            <div className="w-20 h-20 bg-primary-700 rounded-full flex items-center justify-center text-white text-2xl font-bold mx-auto mb-4">
+              {member.first_name?.charAt(0)}{member.last_name?.charAt(0)}
             </div>
-          )}
+            <h2 className="text-xl font-bold text-gray-900">{member.first_name} {member.last_name}</h2>
+            <div className="mt-2">{statusBadge(member.status)}</div>
 
-          {member.notes && (
-            <div className="mt-4 pt-4 border-t border-gray-100 text-left">
-              <span className="text-sm font-medium text-gray-700">Notes:</span>
-              <p className="text-sm text-gray-600 mt-1 whitespace-pre-wrap">{member.notes}</p>
+            <div className="mt-6 space-y-3 text-left">
+              {member.email && (
+                <div className="flex items-center gap-3 text-sm">
+                  <Mail size={16} className="text-gray-400 shrink-0" />
+                  <a href={`mailto:${member.email}`} className="text-primary-700 hover:underline truncate">{member.email}</a>
+                </div>
+              )}
+              {member.phone && (
+                <div className="flex items-center gap-3 text-sm">
+                  <Phone size={16} className="text-gray-400 shrink-0" />
+                  <a href={`tel:${member.phone}`} className="text-gray-700">{member.phone}</a>
+                </div>
+              )}
+              {(member.address || member.city) && (
+                <div className="flex items-center gap-3 text-sm">
+                  <MapPin size={16} className="text-gray-400 shrink-0" />
+                  <span className="text-gray-700">
+                    {[member.address, member.city, member.state, member.zip].filter(Boolean).join(', ')}
+                  </span>
+                </div>
+              )}
+              {formatDate(member.date_of_birth) && (
+                <div className="flex items-center gap-3 text-sm">
+                  <Calendar size={16} className="text-gray-400 shrink-0" />
+                  <span className="text-gray-700">Born: {formatDate(member.date_of_birth)}</span>
+                </div>
+              )}
+              {member.family_group && (
+                <div className="flex items-center gap-3 text-sm">
+                  <Users size={16} className="text-gray-400 shrink-0" />
+                  <span className="text-gray-700">{member.family_group}</span>
+                </div>
+              )}
+              {formatDate(member.membership_date) && (
+                <div className="flex items-center gap-3 text-sm">
+                  <UserCheck size={16} className="text-gray-400 shrink-0" />
+                  <span className="text-gray-700">
+                    Member since {formatDate(member.membership_date)}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {member.gender && (
+              <div className="mt-4 pt-4 border-t border-gray-100">
+                <span className="text-sm text-gray-500">Gender: </span>
+                <span className="text-sm text-gray-700 capitalize">{member.gender}</span>
+              </div>
+            )}
+
+            {member.notes && (
+              <div className="mt-4 pt-4 border-t border-gray-100 text-left">
+                <span className="text-sm font-medium text-gray-700">Notes:</span>
+                <p className="text-sm text-gray-600 mt-1 whitespace-pre-wrap">{member.notes}</p>
+              </div>
+            )}
+          </div>
+
+          {/* Household Card */}
+          {member.household && (
+            <div className="card">
+              <div className="flex items-center gap-2 mb-4">
+                <Home size={20} className="text-primary-700" />
+                <h3 className="text-lg font-semibold text-gray-900">Household</h3>
+              </div>
+              <div className="mb-3">
+                <Link to={`/system/public/households`} className="text-primary-700 font-medium hover:underline">
+                  {member.household.name}
+                </Link>
+                {member.household_role && (
+                  <span className="ml-2">{roleBadge(member.household_role)}</span>
+                )}
+              </div>
+              {(member.household.address || member.household.city) && (
+                <div className="flex items-center gap-2 text-sm text-gray-500 mb-3">
+                  <MapPin size={14} />
+                  {[member.household.address, member.household.city, member.household.state, member.household.zip].filter(Boolean).join(', ')}
+                </div>
+              )}
+              {member.household_members && member.household_members.length > 0 && (
+                <div className="border-t border-gray-100 pt-3 space-y-2">
+                  <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Family Members</div>
+                  {member.household_members.map(fm => (
+                    <Link
+                      key={fm.id}
+                      to={`/system/public/members/${fm.id}`}
+                      className="flex items-center justify-between py-1.5 hover:bg-gray-50 rounded px-2 -mx-2 transition-colors"
+                    >
+                      <span className="text-sm text-gray-800">{fm.first_name} {fm.last_name}</span>
+                      {roleBadge(fm.household_role)}
+                    </Link>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>
 
-        {/* Attendance */}
+        {/* Right column */}
         <div className="lg:col-span-2 space-y-6">
-          {/* Stats */}
+          {/* Attendance Stats */}
           <div className="card">
             <div className="flex items-center gap-2 mb-4">
               <BarChart3 size={20} className="text-primary-700" />
@@ -173,6 +230,37 @@ export default function MemberDetailPage() {
             </div>
           </div>
 
+          {/* Spiritual Journey */}
+          {activeMilestones.length > 0 && (
+            <div className="card">
+              <div className="flex items-center gap-2 mb-4">
+                <Church size={20} className="text-primary-700" />
+                <h3 className="text-lg font-semibold text-gray-900">Spiritual Journey</h3>
+              </div>
+              <div className="relative">
+                <div className="absolute left-5 top-0 bottom-0 w-0.5 bg-gray-200"></div>
+                <div className="space-y-4">
+                  {activeMilestones
+                    .sort((a, b) => new Date(member[a.key]) - new Date(member[b.key]))
+                    .map((m) => {
+                      const Icon = m.icon;
+                      return (
+                        <div key={m.key} className="relative flex items-center gap-4 pl-0">
+                          <div className={`w-10 h-10 rounded-full bg-white border-2 border-gray-200 flex items-center justify-center z-10 shrink-0 ${m.color}`}>
+                            <Icon size={18} />
+                          </div>
+                          <div>
+                            <div className="text-sm font-medium text-gray-900">{m.label}</div>
+                            <div className="text-xs text-gray-500">{formatDate(member[m.key])}</div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Recent Attendance */}
           <div className="card">
             <h3 className="text-lg font-semibold text-gray-900 mb-4">Recent Attendance</h3>
@@ -184,7 +272,7 @@ export default function MemberDetailPage() {
                       <div className="text-sm font-medium text-gray-900">{a.service_name}</div>
                       <div className="text-xs text-gray-500">
                         {new Date(a.service_date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}
-                        {' '}&middot;{' '}{serviceTypeLabels[a.service_type] || a.service_type}
+                        {' '}&middot;{' '}{a.service_type}
                       </div>
                     </div>
                     {attendanceStatusBadge(a.status)}

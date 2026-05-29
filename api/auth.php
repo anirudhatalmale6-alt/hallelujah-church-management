@@ -146,6 +146,129 @@ function handleLogin(): void {
     ]);
 }
 
+/**
+ * Handle forgot password request - sends reset email
+ */
+function handleForgotPassword(): void {
+    $data = getRequestBody();
+    $email = trim($data['email'] ?? '');
+    if (!$email) {
+        jsonResponse(['error' => 'Email is required'], 400);
+    }
+
+    $db = getDB();
+    $stmt = $db->prepare("SELECT id, name, email FROM users WHERE email = ? AND status = 'active'");
+    $stmt->execute([$email]);
+    $user = $stmt->fetch();
+
+    // Always return success to prevent email enumeration
+    if (!$user) {
+        jsonResponse(['message' => 'If that email exists, a reset link has been sent.']);
+    }
+
+    // Generate token
+    $token = bin2hex(random_bytes(32));
+    $expiresAt = date('Y-m-d H:i:s', time() + 3600); // 1 hour
+
+    // Invalidate old tokens
+    $db->prepare("UPDATE password_resets SET used = 1 WHERE email = ? AND used = 0")->execute([$email]);
+
+    // Store new token
+    $db->prepare("INSERT INTO password_resets (email, token, expires_at) VALUES (?, ?, ?)")
+       ->execute([$email, $token, $expiresAt]);
+
+    // Get church name for email
+    $churchName = 'Hallelujah In The City';
+    try {
+        $s = $db->prepare("SELECT value FROM settings WHERE `key` = 'church_name'");
+        $s->execute();
+        $r = $s->fetch();
+        if ($r) $churchName = $r['value'];
+    } catch (Exception $e) {}
+
+    // Build reset URL
+    $protocol = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+    $host = $_SERVER['HTTP_HOST'] ?? 'hallelujahinthecity.org';
+    $resetUrl = "$protocol://$host/system/public/reset-password?token=$token";
+
+    // Send email
+    $subject = "$churchName - Password Reset";
+    $htmlBody = "
+    <div style='font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto; padding: 20px;'>
+        <h2 style='color: #4f1d0a;'>Password Reset</h2>
+        <p>Hello {$user['name']},</p>
+        <p>You requested a password reset for your $churchName account.</p>
+        <p><a href='$resetUrl' style='display: inline-block; padding: 12px 24px; background-color: #4f1d0a; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: bold;'>Reset My Password</a></p>
+        <p style='color: #666; font-size: 13px;'>This link expires in 1 hour. If you didn't request this, please ignore this email.</p>
+        <p style='color: #666; font-size: 13px;'>If the button doesn't work, copy and paste this link:<br>$resetUrl</p>
+        <hr style='border: none; border-top: 1px solid #eee; margin: 20px 0;'>
+        <p style='color: #999; font-size: 12px;'>$churchName Church Management System</p>
+    </div>";
+
+    $headers = "MIME-Version: 1.0\r\n";
+    $headers .= "Content-Type: text/html; charset=UTF-8\r\n";
+    $headers .= "From: $churchName <noreply@" . preg_replace('/^www\./', '', $host) . ">\r\n";
+
+    @mail($user['email'], $subject, $htmlBody, $headers);
+
+    jsonResponse(['message' => 'If that email exists, a reset link has been sent.']);
+}
+
+/**
+ * Verify a reset token is valid
+ */
+function handleVerifyReset(): void {
+    $token = $_GET['token'] ?? '';
+    if (!$token) {
+        jsonResponse(['error' => 'Token is required'], 400);
+    }
+
+    $db = getDB();
+    $stmt = $db->prepare("SELECT * FROM password_resets WHERE token = ? AND used = 0 AND expires_at > NOW()");
+    $stmt->execute([$token]);
+    $reset = $stmt->fetch();
+
+    if (!$reset) {
+        jsonResponse(['valid' => false, 'error' => 'Invalid or expired reset link'], 400);
+    }
+
+    jsonResponse(['valid' => true, 'email' => $reset['email']]);
+}
+
+/**
+ * Reset password with token
+ */
+function handleResetPassword(): void {
+    $data = getRequestBody();
+    $token = trim($data['token'] ?? '');
+    $password = $data['password'] ?? '';
+
+    if (!$token || !$password) {
+        jsonResponse(['error' => 'Token and new password are required'], 400);
+    }
+    if (strlen($password) < 6) {
+        jsonResponse(['error' => 'Password must be at least 6 characters'], 400);
+    }
+
+    $db = getDB();
+    $stmt = $db->prepare("SELECT * FROM password_resets WHERE token = ? AND used = 0 AND expires_at > NOW()");
+    $stmt->execute([$token]);
+    $reset = $stmt->fetch();
+
+    if (!$reset) {
+        jsonResponse(['error' => 'Invalid or expired reset link. Please request a new one.'], 400);
+    }
+
+    // Update password
+    $hash = password_hash($password, PASSWORD_BCRYPT);
+    $db->prepare("UPDATE users SET password_hash = ? WHERE email = ?")->execute([$hash, $reset['email']]);
+
+    // Mark token as used
+    $db->prepare("UPDATE password_resets SET used = 1 WHERE id = ?")->execute([$reset['id']]);
+
+    jsonResponse(['message' => 'Password has been reset successfully. You can now sign in.']);
+}
+
 // Route handling - only when auth.php is accessed directly
 if (basename($_SERVER['SCRIPT_FILENAME']) === 'auth.php') {
     $method = $_SERVER['REQUEST_METHOD'];
@@ -153,6 +276,12 @@ if (basename($_SERVER['SCRIPT_FILENAME']) === 'auth.php') {
 
     if ($method === 'POST' && $action === 'login') {
         handleLogin();
+    } elseif ($method === 'POST' && $action === 'forgot_password') {
+        handleForgotPassword();
+    } elseif ($method === 'POST' && $action === 'reset_password') {
+        handleResetPassword();
+    } elseif ($method === 'GET' && $action === 'verify_reset') {
+        handleVerifyReset();
     } elseif ($method === 'GET' && $action === 'me') {
         $user = authenticate();
         $db = getDB();

@@ -50,6 +50,21 @@ switch ($method) {
                 ? round(($stats['attended'] / $stats['total']) * 100, 1)
                 : 0;
 
+            // Get household info if member belongs to one
+            if ($member['household_id']) {
+                $stmt = $db->prepare("SELECT * FROM households WHERE id = ?");
+                $stmt->execute([$member['household_id']]);
+                $member['household'] = $stmt->fetch();
+
+                $stmt = $db->prepare("
+                    SELECT id, first_name, last_name, household_role, status
+                    FROM members WHERE household_id = ? AND id != ?
+                    ORDER BY FIELD(household_role, 'head', 'spouse', 'child', 'relative', 'other')
+                ");
+                $stmt->execute([$member['household_id'], $id]);
+                $member['household_members'] = $stmt->fetchAll();
+            }
+
             jsonResponse(['member' => $member]);
         } else {
             // List members with search/filter
@@ -121,8 +136,8 @@ switch ($method) {
         }
 
         $stmt = $db->prepare("
-            INSERT INTO members (first_name, last_name, email, phone, address, city, state, zip, gender, date_of_birth, family_group, membership_date, status, notes, photo_url)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO members (first_name, last_name, email, phone, address, city, state, zip, gender, date_of_birth, family_group, household_id, household_role, membership_date, status, notes, photo_url, baptism_date, salvation_date, first_visit_date, membership_class_date, dedication_date, wedding_date)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ");
         $stmt->execute([
             trim($data['first_name']),
@@ -136,10 +151,18 @@ switch ($method) {
             $data['gender'] ?? null,
             $data['date_of_birth'] ?? null,
             $data['family_group'] ?? null,
+            $data['household_id'] ? (int)$data['household_id'] : null,
+            $data['household_role'] ?? null,
             $data['membership_date'] ?? null,
             $data['status'] ?? 'active',
             $data['notes'] ?? null,
             $data['photo_url'] ?? null,
+            $data['baptism_date'] ?? null,
+            $data['salvation_date'] ?? null,
+            $data['first_visit_date'] ?? null,
+            $data['membership_class_date'] ?? null,
+            $data['dedication_date'] ?? null,
+            $data['wedding_date'] ?? null,
         ]);
 
         $newId = $db->lastInsertId();
@@ -169,7 +192,10 @@ switch ($method) {
         $allowedFields = [
             'first_name', 'last_name', 'email', 'phone', 'address', 'city',
             'state', 'zip', 'gender', 'date_of_birth', 'family_group',
-            'membership_date', 'status', 'notes', 'photo_url'
+            'household_id', 'household_role',
+            'membership_date', 'status', 'notes', 'photo_url',
+            'baptism_date', 'salvation_date', 'first_visit_date',
+            'membership_class_date', 'dedication_date', 'wedding_date'
         ];
 
         foreach ($allowedFields as $field) {

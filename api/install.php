@@ -61,6 +61,21 @@ try {
     ");
 
     $rawDb->exec("
+        CREATE TABLE IF NOT EXISTS households (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            name VARCHAR(255) NOT NULL,
+            address VARCHAR(255) DEFAULT NULL,
+            city VARCHAR(100) DEFAULT NULL,
+            state VARCHAR(100) DEFAULT NULL,
+            zip VARCHAR(20) DEFAULT NULL,
+            phone VARCHAR(30) DEFAULT NULL,
+            notes TEXT DEFAULT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB
+    ");
+
+    $rawDb->exec("
         CREATE TABLE IF NOT EXISTS members (
             id INT AUTO_INCREMENT PRIMARY KEY,
             first_name VARCHAR(100) NOT NULL,
@@ -74,15 +89,24 @@ try {
             gender ENUM('male', 'female', 'other') DEFAULT NULL,
             date_of_birth DATE DEFAULT NULL,
             family_group VARCHAR(100) DEFAULT NULL,
+            household_id INT DEFAULT NULL,
+            household_role VARCHAR(20) DEFAULT NULL,
             membership_date DATE DEFAULT NULL,
             status ENUM('active', 'inactive', 'visitor') NOT NULL DEFAULT 'active',
             notes TEXT DEFAULT NULL,
+            baptism_date DATE DEFAULT NULL,
+            salvation_date DATE DEFAULT NULL,
+            first_visit_date DATE DEFAULT NULL,
+            membership_class_date DATE DEFAULT NULL,
+            dedication_date DATE DEFAULT NULL,
+            wedding_date DATE DEFAULT NULL,
             photo_url VARCHAR(500) DEFAULT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             INDEX idx_name (last_name, first_name),
             INDEX idx_status (status),
             INDEX idx_family_group (family_group),
+            INDEX idx_household (household_id),
             INDEX idx_email (email)
         ) ENGINE=InnoDB
     ");
@@ -127,6 +151,19 @@ try {
             INDEX idx_service (service_id),
             INDEX idx_member (member_id),
             INDEX idx_status (status)
+        ) ENGINE=InnoDB
+    ");
+
+    $rawDb->exec("
+        CREATE TABLE IF NOT EXISTS password_resets (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            email VARCHAR(255) NOT NULL,
+            token VARCHAR(100) NOT NULL UNIQUE,
+            expires_at DATETIME NOT NULL,
+            used TINYINT(1) NOT NULL DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_email (email),
+            INDEX idx_token (token)
         ) ENGINE=InnoDB
     ");
 

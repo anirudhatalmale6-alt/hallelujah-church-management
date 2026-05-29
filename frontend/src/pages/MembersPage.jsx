@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { members as membersApi, groups as groupsApi } from '../utils/api';
+import { members as membersApi, groups as groupsApi, households as householdsApi } from '../utils/api';
 import { useAuth } from '../contexts/AuthContext';
 import Modal from '../components/Modal';
 import Pagination from '../components/Pagination';
@@ -13,7 +13,10 @@ const emptyMember = {
   first_name: '', last_name: '', email: '', phone: '',
   address: '', city: '', state: '', zip: '',
   gender: '', date_of_birth: '', family_group: '',
+  household_id: '', household_role: '',
   membership_date: '', status: 'active', notes: '',
+  baptism_date: '', salvation_date: '', first_visit_date: '',
+  membership_class_date: '', dedication_date: '', wedding_date: '',
 };
 
 export default function MembersPage() {
@@ -36,9 +39,11 @@ export default function MembersPage() {
   const [error, setError] = useState('');
   const [deleteId, setDeleteId] = useState(null);
   const [availableGroups, setAvailableGroups] = useState([]);
+  const [availableHouseholds, setAvailableHouseholds] = useState([]);
 
   useEffect(() => {
     groupsApi.list().then(d => setAvailableGroups(d.groups || [])).catch(() => {});
+    householdsApi.list().then(d => setAvailableHouseholds(d.households || [])).catch(() => {});
   }, []);
 
   const loadMembers = useCallback(async () => {
@@ -94,9 +99,17 @@ export default function MembersPage() {
       gender: member.gender || '',
       date_of_birth: member.date_of_birth || '',
       family_group: member.family_group || '',
+      household_id: member.household_id || '',
+      household_role: member.household_role || '',
       membership_date: member.membership_date || '',
       status: member.status || 'active',
       notes: member.notes || '',
+      baptism_date: member.baptism_date || '',
+      salvation_date: member.salvation_date || '',
+      first_visit_date: member.first_visit_date || '',
+      membership_class_date: member.membership_class_date || '',
+      dedication_date: member.dedication_date || '',
+      wedding_date: member.wedding_date || '',
     });
     setError('');
     setShowModal(true);
@@ -371,6 +384,60 @@ export default function MembersPage() {
                 <option value="visitor">Visitor</option>
               </select>
             </div>
+
+            {/* Household */}
+            <div>
+              <label className="label">Household</label>
+              <select className="input" value={form.household_id} onChange={e => updateField('household_id', e.target.value)}>
+                <option value="">-- No Household --</option>
+                {availableHouseholds.map(h => (
+                  <option key={h.id} value={h.id}>{h.name}</option>
+                ))}
+              </select>
+            </div>
+            {form.household_id && (
+              <div>
+                <label className="label">Role in Household</label>
+                <select className="input" value={form.household_role} onChange={e => updateField('household_role', e.target.value)}>
+                  <option value="">-- Select Role --</option>
+                  <option value="head">Head of Household</option>
+                  <option value="spouse">Spouse</option>
+                  <option value="child">Child</option>
+                  <option value="relative">Relative</option>
+                  <option value="other">Other</option>
+                </select>
+              </div>
+            )}
+
+            {/* Milestones Section */}
+            <div className="sm:col-span-2 pt-2">
+              <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Spiritual Journey / Milestones</div>
+            </div>
+            <div>
+              <label className="label">First Visit Date</label>
+              <input type="date" className="input" value={form.first_visit_date} onChange={e => updateField('first_visit_date', e.target.value)} />
+            </div>
+            <div>
+              <label className="label">Salvation Date</label>
+              <input type="date" className="input" value={form.salvation_date} onChange={e => updateField('salvation_date', e.target.value)} />
+            </div>
+            <div>
+              <label className="label">Baptism Date</label>
+              <input type="date" className="input" value={form.baptism_date} onChange={e => updateField('baptism_date', e.target.value)} />
+            </div>
+            <div>
+              <label className="label">Membership Class Date</label>
+              <input type="date" className="input" value={form.membership_class_date} onChange={e => updateField('membership_class_date', e.target.value)} />
+            </div>
+            <div>
+              <label className="label">Dedication Date</label>
+              <input type="date" className="input" value={form.dedication_date} onChange={e => updateField('dedication_date', e.target.value)} />
+            </div>
+            <div>
+              <label className="label">Wedding Date</label>
+              <input type="date" className="input" value={form.wedding_date} onChange={e => updateField('wedding_date', e.target.value)} />
+            </div>
+
             <div className="sm:col-span-2">
               <label className="label">Notes</label>
               <textarea className="input" rows="3" value={form.notes} onChange={e => updateField('notes', e.target.value)} />

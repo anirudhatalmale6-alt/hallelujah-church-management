@@ -3,11 +3,15 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import Layout from './components/Layout';
 import LoginPage from './pages/LoginPage';
+import ForgotPasswordPage from './pages/ForgotPasswordPage';
+import ResetPasswordPage from './pages/ResetPasswordPage';
 import DashboardPage from './pages/DashboardPage';
 import MembersPage from './pages/MembersPage';
 import MemberDetailPage from './pages/MemberDetailPage';
 import AttendancePage from './pages/AttendancePage';
 import ServicesPage from './pages/ServicesPage';
+import HouseholdsPage from './pages/HouseholdsPage';
+import GroupsPage from './pages/GroupsPage';
 import UsersPage from './pages/UsersPage';
 import SettingsPage from './pages/SettingsPage';
 import ReportsPage from './pages/ReportsPage';
@@ -50,11 +54,15 @@ function AppRoutes() {
     <Routes>
       <Route path="/system/public/install" element={<InstallPage />} />
       <Route path="/system/public/login" element={user ? <Navigate to="/system/public/" replace /> : <LoginPage />} />
+      <Route path="/system/public/forgot-password" element={<ForgotPasswordPage />} />
+      <Route path="/system/public/reset-password" element={<ResetPasswordPage />} />
       <Route path="/system/public/" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
       <Route path="/system/public/members" element={<ProtectedRoute><MembersPage /></ProtectedRoute>} />
       <Route path="/system/public/members/:id" element={<ProtectedRoute><MemberDetailPage /></ProtectedRoute>} />
       <Route path="/system/public/attendance" element={<ProtectedRoute><AttendancePage /></ProtectedRoute>} />
       <Route path="/system/public/services" element={<ProtectedRoute><ServicesPage /></ProtectedRoute>} />
+      <Route path="/system/public/households" element={<ProtectedRoute><HouseholdsPage /></ProtectedRoute>} />
+      <Route path="/system/public/groups" element={<ProtectedRoute><GroupsPage /></ProtectedRoute>} />
       <Route path="/system/public/reports" element={<ProtectedRoute><ReportsPage /></ProtectedRoute>} />
       <Route path="/system/public/users" element={<ProtectedRoute adminOnly><UsersPage /></ProtectedRoute>} />
       <Route path="/system/public/settings" element={<ProtectedRoute adminOnly><SettingsPage /></ProtectedRoute>} />

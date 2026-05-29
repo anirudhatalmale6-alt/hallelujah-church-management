@@ -82,6 +82,12 @@ export const auth = {
   login: (email, password) =>
     request('auth.php', { method: 'POST', body: { email, password }, params: { action: 'login' } }),
   me: () => request('auth.php', { params: { action: 'me' } }),
+  forgotPassword: (email) =>
+    request('auth.php', { method: 'POST', body: { email }, params: { action: 'forgot_password' } }),
+  verifyReset: (token) =>
+    request('auth.php', { params: { action: 'verify_reset', token } }),
+  resetPassword: (token, password) =>
+    request('auth.php', { method: 'POST', body: { token, password }, params: { action: 'reset_password' } }),
 };
 
 // Install
@@ -139,6 +145,15 @@ export const groups = {
   create: (data) => request('groups.php', { method: 'POST', body: data }),
   update: (id, data) => request('groups.php', { method: 'PUT', body: data, params: { id } }),
   delete: (id) => request('groups.php', { method: 'DELETE', params: { id } }),
+};
+
+// Households
+export const households = {
+  list: (params) => request('households.php', { params }),
+  get: (id) => request('households.php', { params: { id } }),
+  create: (data) => request('households.php', { method: 'POST', body: data }),
+  update: (id, data) => request('households.php', { method: 'PUT', body: data, params: { id } }),
+  delete: (id) => request('households.php', { method: 'DELETE', params: { id } }),
 };
 
 // Reports
