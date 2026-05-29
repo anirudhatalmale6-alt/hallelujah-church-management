@@ -101,13 +101,15 @@ switch ($method) {
             jsonResponse(['error' => 'Service type is required'], 400);
         }
 
-        $stmt = $db->prepare("INSERT INTO services (name, date, time, type, notes) VALUES (?, ?, ?, ?, ?)");
+        $stmt = $db->prepare("INSERT INTO services (name, date, time, type, notes, visitor_count, head_count) VALUES (?, ?, ?, ?, ?, ?, ?)");
         $stmt->execute([
             trim($data['name']),
             $data['date'],
             $data['time'],
             $data['type'],
             $data['notes'] ?? null,
+            (int)($data['visitor_count'] ?? 0),
+            (int)($data['head_count'] ?? 0),
         ]);
 
         $newId = $db->lastInsertId();
@@ -133,7 +135,7 @@ switch ($method) {
         $data = getRequestBody();
         $fields = [];
         $params = [];
-        $allowed = ['name', 'date', 'time', 'type', 'notes'];
+        $allowed = ['name', 'date', 'time', 'type', 'notes', 'visitor_count', 'head_count'];
 
         foreach ($allowed as $field) {
             if (array_key_exists($field, $data)) {

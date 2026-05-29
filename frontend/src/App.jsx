@@ -10,6 +10,7 @@ import AttendancePage from './pages/AttendancePage';
 import ServicesPage from './pages/ServicesPage';
 import UsersPage from './pages/UsersPage';
 import SettingsPage from './pages/SettingsPage';
+import ReportsPage from './pages/ReportsPage';
 import InstallPage from './pages/InstallPage';
 
 function ProtectedRoute({ children, adminOnly = false }) {
@@ -54,6 +55,7 @@ function AppRoutes() {
       <Route path="/system/public/members/:id" element={<ProtectedRoute><MemberDetailPage /></ProtectedRoute>} />
       <Route path="/system/public/attendance" element={<ProtectedRoute><AttendancePage /></ProtectedRoute>} />
       <Route path="/system/public/services" element={<ProtectedRoute><ServicesPage /></ProtectedRoute>} />
+      <Route path="/system/public/reports" element={<ProtectedRoute><ReportsPage /></ProtectedRoute>} />
       <Route path="/system/public/users" element={<ProtectedRoute adminOnly><UsersPage /></ProtectedRoute>} />
       <Route path="/system/public/settings" element={<ProtectedRoute adminOnly><SettingsPage /></ProtectedRoute>} />
       <Route path="*" element={<Navigate to="/system/public/" replace />} />

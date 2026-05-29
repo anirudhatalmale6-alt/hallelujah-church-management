@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { attendance as attendanceApi, services as servicesApi } from '../utils/api';
+import { attendance as attendanceApi, services as servicesApi, services as svcApi } from '../utils/api';
 import { formatTime12h } from '../utils/format';
 import {
   UserCheck, Check, X, Clock, Search, AlertCircle,
@@ -32,6 +32,9 @@ export default function AttendancePage() {
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [savingCounts, setSavingCounts] = useState(false);
+  const [visitorCount, setVisitorCount] = useState(0);
+  const [headCount, setHeadCount] = useState(0);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
@@ -75,6 +78,8 @@ export default function AttendancePage() {
     try {
       const data = await attendanceApi.byService(selectedServiceId);
       setAttendanceData(data);
+      setVisitorCount(parseInt(data.service?.visitor_count) || 0);
+      setHeadCount(parseInt(data.service?.head_count) || 0);
       const rec = {};
       data.attendance.forEach(a => {
         rec[a.member_id] = { status: a.status, notes: a.notes || '' };
@@ -148,6 +153,20 @@ export default function AttendancePage() {
       setError(err.message);
     }
     setSaving(false);
+  };
+
+  const saveCounts = async () => {
+    setSavingCounts(true);
+    try {
+      await svcApi.update(parseInt(selectedServiceId), {
+        visitor_count: parseInt(visitorCount) || 0,
+        head_count: parseInt(headCount) || 0,
+      });
+      setMessage('Visitor & head count saved');
+    } catch (err) {
+      setError(err.message);
+    }
+    setSavingCounts(false);
   };
 
   const allMembers = attendanceData
@@ -293,6 +312,39 @@ export default function AttendancePage() {
                   </div>
                   <div className="text-xs text-gray-500">Unmarked</div>
                 </div>
+              </div>
+
+              {/* Visitor & Head Count */}
+              <div className="card mb-4">
+                <div className="flex flex-col sm:flex-row gap-3 items-end">
+                  <div className="flex-1">
+                    <label className="label">Visitors (Guests)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      className="input"
+                      value={visitorCount}
+                      onChange={e => setVisitorCount(e.target.value)}
+                      placeholder="Number of visitors"
+                    />
+                  </div>
+                  <div className="flex-1">
+                    <label className="label">Total Head Count (Manual)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      className="input"
+                      value={headCount}
+                      onChange={e => setHeadCount(e.target.value)}
+                      placeholder="Total people present"
+                    />
+                  </div>
+                  <button onClick={saveCounts} disabled={savingCounts} className="btn-secondary whitespace-nowrap">
+                    {savingCounts ? <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600" /> : <Save size={16} />}
+                    Save Counts
+                  </button>
+                </div>
+                <p className="text-xs text-gray-400 mt-2">Use head count for large events where marking each member individually is not necessary.</p>
               </div>
 
               <div className="card mb-4">

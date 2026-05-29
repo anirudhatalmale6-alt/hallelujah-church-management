@@ -133,6 +133,23 @@ export const dashboard = {
   stats: () => request('dashboard.php'),
 };
 
+// Groups
+export const groups = {
+  list: () => request('groups.php'),
+  create: (data) => request('groups.php', { method: 'POST', body: data }),
+  update: (id, data) => request('groups.php', { method: 'PUT', body: data, params: { id } }),
+  delete: (id) => request('groups.php', { method: 'DELETE', params: { id } }),
+};
+
+// Reports
+export const reports = {
+  memberGrowth: (months) => request('reports.php', { params: { action: 'member_growth', months } }),
+  engagement: (period) => request('reports.php', { params: { action: 'engagement', period } }),
+  inactive: (days) => request('reports.php', { params: { action: 'inactive', days } }),
+  directory: () => request('reports.php', { params: { action: 'directory' } }),
+  attendanceSummary: (params) => request('reports.php', { params: { action: 'attendance_summary', ...params } }),
+};
+
 // Settings
 export const settings = {
   get: () => request('settings.php'),

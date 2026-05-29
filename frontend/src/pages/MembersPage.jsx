@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { members as membersApi } from '../utils/api';
+import { members as membersApi, groups as groupsApi } from '../utils/api';
 import { useAuth } from '../contexts/AuthContext';
 import Modal from '../components/Modal';
 import Pagination from '../components/Pagination';
@@ -35,6 +35,11 @@ export default function MembersPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [deleteId, setDeleteId] = useState(null);
+  const [availableGroups, setAvailableGroups] = useState([]);
+
+  useEffect(() => {
+    groupsApi.list().then(d => setAvailableGroups(d.groups || [])).catch(() => {});
+  }, []);
 
   const loadMembers = useCallback(async () => {
     setLoading(true);
@@ -346,8 +351,13 @@ export default function MembersPage() {
               <input type="date" className="input" value={form.date_of_birth} onChange={e => updateField('date_of_birth', e.target.value)} />
             </div>
             <div>
-              <label className="label">Family Group</label>
-              <input className="input" value={form.family_group} onChange={e => updateField('family_group', e.target.value)} placeholder="e.g. Johnson Family" />
+              <label className="label">Group</label>
+              <select className="input" value={form.family_group} onChange={e => updateField('family_group', e.target.value)}>
+                <option value="">-- No Group --</option>
+                {availableGroups.map(g => (
+                  <option key={g.id} value={g.name}>{g.name}</option>
+                ))}
+              </select>
             </div>
             <div>
               <label className="label">Membership Date</label>

@@ -95,9 +95,20 @@ try {
             time TIME NOT NULL,
             type VARCHAR(100) NOT NULL DEFAULT 'sunday_1st',
             notes TEXT DEFAULT NULL,
+            visitor_count INT NOT NULL DEFAULT 0,
+            head_count INT NOT NULL DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             INDEX idx_date (date),
             INDEX idx_type (type)
+        ) ENGINE=InnoDB
+    ");
+
+    $rawDb->exec("
+        CREATE TABLE IF NOT EXISTS `groups` (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            name VARCHAR(100) NOT NULL UNIQUE,
+            description VARCHAR(255) DEFAULT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         ) ENGINE=InnoDB
     ");
 

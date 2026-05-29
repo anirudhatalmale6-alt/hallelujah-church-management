@@ -3,7 +3,7 @@ import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import {
   LayoutDashboard, Users, UserCheck, Calendar, Church,
-  Settings, LogOut, Menu, X, ChevronDown
+  Settings, LogOut, Menu, X, ChevronDown, FileText
 } from 'lucide-react';
 
 const navItems = [
@@ -11,6 +11,7 @@ const navItems = [
   { path: '/system/public/members', icon: Users, label: 'Members' },
   { path: '/system/public/attendance', icon: UserCheck, label: 'Attendance' },
   { path: '/system/public/services', icon: Calendar, label: 'Services' },
+  { path: '/system/public/reports', icon: FileText, label: 'Reports' },
 ];
 
 const adminItems = [
