@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { members as membersApi } from '../utils/api';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import {
   ArrowLeft, Mail, Phone, MapPin, Calendar, Users,
   UserCheck, BarChart3, AlertCircle, Home, Heart,
-  Droplets, BookOpen, Baby, Church, Star
+  Droplets, BookOpen, Baby, Church, Star, Download
 } from 'lucide-react';
 
 const formatDate = (d) => {
@@ -94,14 +96,101 @@ export default function MemberDetailPage() {
 
   const activeMilestones = milestoneConfig.filter(m => member[m.key] && member[m.key] !== '0000-00-00');
 
+  const downloadMemberPDF = () => {
+    const doc = new jsPDF();
+    const fullName = `${member.first_name} ${member.last_name}`;
+
+    doc.setFontSize(20);
+    doc.text(fullName, 14, 20);
+    doc.setFontSize(10);
+    doc.text(`Generated: ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`, 14, 28);
+
+    let y = 38;
+    doc.setFontSize(12);
+    doc.text('Personal Information', 14, y);
+    y += 8;
+
+    const info = [];
+    if (member.email) info.push(['Email', member.email]);
+    if (member.phone) info.push(['Phone', member.phone]);
+    if (member.address || member.city) info.push(['Address', [member.address, member.city, member.state, member.zip].filter(Boolean).join(', ')]);
+    if (formatDate(member.date_of_birth)) info.push(['Date of Birth', formatDate(member.date_of_birth)]);
+    if (member.gender) info.push(['Gender', member.gender.charAt(0).toUpperCase() + member.gender.slice(1)]);
+    info.push(['Status', member.status.charAt(0).toUpperCase() + member.status.slice(1)]);
+    if (member.family_group) info.push(['Group', member.family_group]);
+    if (member.household?.name) info.push(['Household', `${member.household.name} (${member.household_role || 'Member'})`]);
+
+    autoTable(doc, {
+      startY: y,
+      body: info,
+      theme: 'plain',
+      styles: { fontSize: 10, cellPadding: 2 },
+      columnStyles: { 0: { fontStyle: 'bold', cellWidth: 45 } },
+    });
+
+    y = doc.lastAutoTable.finalY + 10;
+
+    if (activeMilestones.length > 0) {
+      doc.setFontSize(12);
+      doc.text('Spiritual Journey', 14, y);
+      y += 4;
+      autoTable(doc, {
+        startY: y,
+        head: [['Milestone', 'Date']],
+        body: activeMilestones
+          .sort((a, b) => new Date(member[a.key]) - new Date(member[b.key]))
+          .map(m => [m.label, formatDate(member[m.key])]),
+        styles: { fontSize: 10 },
+        headStyles: { fillColor: [79, 29, 10] },
+      });
+      y = doc.lastAutoTable.finalY + 10;
+    }
+
+    doc.setFontSize(12);
+    doc.text(`Attendance Rate (3 months): ${member.attendance_rate}%`, 14, y);
+    y += 10;
+
+    if (member.recent_attendance?.length > 0) {
+      doc.text('Recent Attendance', 14, y);
+      y += 4;
+      autoTable(doc, {
+        startY: y,
+        head: [['Service', 'Date', 'Type', 'Status']],
+        body: member.recent_attendance.map(a => [
+          a.service_name,
+          new Date(a.service_date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+          a.service_type,
+          a.status.charAt(0).toUpperCase() + a.status.slice(1),
+        ]),
+        styles: { fontSize: 9 },
+        headStyles: { fillColor: [79, 29, 10] },
+      });
+    }
+
+    if (member.notes) {
+      y = doc.lastAutoTable ? doc.lastAutoTable.finalY + 10 : y + 10;
+      doc.setFontSize(12);
+      doc.text('Notes', 14, y);
+      doc.setFontSize(10);
+      doc.text(member.notes, 14, y + 6, { maxWidth: 180 });
+    }
+
+    doc.save(`${fullName.replace(/\s+/g, '-').toLowerCase()}-profile.pdf`);
+  };
+
   return (
     <div>
-      <button
-        onClick={() => navigate('/system/public/members')}
-        className="flex items-center gap-2 text-gray-600 hover:text-primary-700 mb-6 transition-colors"
-      >
-        <ArrowLeft size={18} /> Back to Members
-      </button>
+      <div className="flex items-center justify-between mb-6">
+        <button
+          onClick={() => navigate('/system/public/members')}
+          className="flex items-center gap-2 text-gray-600 hover:text-primary-700 transition-colors"
+        >
+          <ArrowLeft size={18} /> Back to Members
+        </button>
+        <button onClick={downloadMemberPDF} className="btn-primary">
+          <Download size={16} /> Download PDF
+        </button>
+      </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Profile Card */}

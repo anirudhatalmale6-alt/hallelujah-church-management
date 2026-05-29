@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { reports } from '../utils/api';
 import jsPDF from 'jspdf';
-import 'jspdf-autotable';
+import autoTable from 'jspdf-autotable';
 import {
   FileText, Download, Users, TrendingUp, AlertTriangle,
   BarChart3, Calendar, UserX
@@ -103,7 +103,7 @@ export default function ReportsPage() {
     doc.text(`Period: Last ${growthPeriod} months`, 14, 34);
     doc.text(`Total Members: ${growthData.total_members}  |  Active Members: ${growthData.active_members}`, 14, 40);
 
-    doc.autoTable({
+    autoTable(doc, {
       startY: 48,
       head: [['Month', 'New Members', 'Active New', 'Visitor New']],
       body: growthData.growth.map(g => [
@@ -128,7 +128,7 @@ export default function ReportsPage() {
     doc.text(`Generated: ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`, 14, 28);
     doc.text(`Period: Last ${engagementData.period_months} month(s)  |  Total Services: ${engagementData.total_services}`, 14, 34);
 
-    doc.autoTable({
+    autoTable(doc, {
       startY: 42,
       head: [['Name', 'Attended', 'Rate (%)', 'Last Attended', 'Group']],
       body: engagementData.members.map(m => [
@@ -154,7 +154,7 @@ export default function ReportsPage() {
     doc.text(`Generated: ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`, 14, 28);
     doc.text(`Threshold: ${inactiveData.threshold_days} days  |  Inactive Members: ${inactiveData.inactive_members.length}`, 14, 34);
 
-    doc.autoTable({
+    autoTable(doc, {
       startY: 42,
       head: [['Name', 'Phone', 'Email', 'Group', 'Last Attended', 'Days Absent']],
       body: inactiveData.inactive_members.map(m => [
