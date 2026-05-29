@@ -13,6 +13,28 @@ $action = $_GET['action'] ?? 'list';
 $id = isset($_GET['id']) ? (int)$_GET['id'] : null;
 $db = getDB();
 
+if ($method === 'POST' && $action === 'reset_password') {
+    requireRole($currentUser, ['pastor', 'admin']);
+    $data = getRequestBody();
+    $targetId = $data['user_id'] ?? null;
+    $newPassword = $data['password'] ?? null;
+    if (!$targetId || !$newPassword) {
+        jsonResponse(['error' => 'user_id and password are required'], 400);
+    }
+    if (strlen($newPassword) < 6) {
+        jsonResponse(['error' => 'Password must be at least 6 characters'], 400);
+    }
+    $stmt = $db->prepare("SELECT id, name FROM users WHERE id = ?");
+    $stmt->execute([$targetId]);
+    $target = $stmt->fetch();
+    if (!$target) {
+        jsonResponse(['error' => 'User not found'], 404);
+    }
+    $hash = password_hash($newPassword, PASSWORD_BCRYPT);
+    $db->prepare("UPDATE users SET password_hash = ? WHERE id = ?")->execute([$hash, $targetId]);
+    jsonResponse(['message' => "Password reset for {$target['name']}"]);
+}
+
 switch ($method) {
     case 'GET':
         if ($id) {

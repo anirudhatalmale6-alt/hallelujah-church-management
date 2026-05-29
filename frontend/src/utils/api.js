@@ -103,6 +103,8 @@ export const users = {
   create: (data) => request('users.php', { method: 'POST', body: data }),
   update: (id, data) => request('users.php', { method: 'PUT', body: data, params: { id } }),
   delete: (id) => request('users.php', { method: 'DELETE', params: { id } }),
+  resetPassword: (userId, password) =>
+    request('users.php', { method: 'POST', body: { user_id: userId, password }, params: { action: 'reset_password' } }),
 };
 
 // Members
@@ -163,6 +165,20 @@ export const reports = {
   inactive: (days) => request('reports.php', { params: { action: 'inactive', days } }),
   directory: () => request('reports.php', { params: { action: 'directory' } }),
   attendanceSummary: (params) => request('reports.php', { params: { action: 'attendance_summary', ...params } }),
+};
+
+// Periods (closed months)
+export const periods = {
+  list: () => request('periods.php'),
+  close: (yearMonth, notes) => request('periods.php', { method: 'POST', body: { year_month: yearMonth, notes } }),
+  reopen: (id) => request('periods.php', { method: 'DELETE', params: { id } }),
+};
+
+// Pending Changes
+export const pending = {
+  list: (status) => request('pending.php', { params: status ? { status } : {} }),
+  approve: (id, notes) => request('pending.php', { method: 'PUT', body: { action: 'approve', notes }, params: { id } }),
+  reject: (id, notes) => request('pending.php', { method: 'PUT', body: { action: 'reject', notes }, params: { id } }),
 };
 
 // Settings

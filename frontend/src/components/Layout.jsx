@@ -3,7 +3,8 @@ import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import {
   LayoutDashboard, Users, UserCheck, Calendar, Church, Home,
-  Settings, LogOut, Menu, X, ChevronDown, FileText, FolderOpen
+  Settings, LogOut, Menu, X, ChevronDown, FileText, FolderOpen,
+  Lock, ClipboardCheck
 } from 'lucide-react';
 
 const navItems = [
@@ -18,6 +19,8 @@ const navItems = [
 
 const adminItems = [
   { path: '/system/public/users', icon: Users, label: 'Users' },
+  { path: '/system/public/periods', icon: Lock, label: 'Periods' },
+  { path: '/system/public/pending', icon: ClipboardCheck, label: 'Pending Changes' },
   { path: '/system/public/settings', icon: Settings, label: 'Settings' },
 ];
 

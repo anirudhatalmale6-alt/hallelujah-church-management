@@ -183,20 +183,33 @@ switch ($method) {
     case 'POST':
         $data = getRequestBody();
         $action = $data['action'] ?? 'mark';
+        $isAdmin = in_array($currentUser['role'], ['pastor', 'admin']);
 
         if ($action === 'bulk_mark') {
-            // Bulk mark attendance for a service
             if (!isset($data['service_id']) || !isset($data['records']) || !is_array($data['records'])) {
                 jsonResponse(['error' => 'service_id and records array required'], 400);
             }
 
             $svcId = (int)$data['service_id'];
 
-            // Verify service exists
-            $stmt = $db->prepare("SELECT id FROM services WHERE id = ?");
+            $stmt = $db->prepare("SELECT id, date FROM services WHERE id = ?");
             $stmt->execute([$svcId]);
-            if (!$stmt->fetch()) {
+            $svc = $stmt->fetch();
+            if (!$svc) {
                 jsonResponse(['error' => 'Service not found'], 404);
+            }
+
+            if (!$isAdmin && isClosedPeriod($db, $svc['date'])) {
+                $period = substr($svc['date'], 0, 7);
+                $pendingId = createPendingChange($db, [
+                    'entity_type' => 'attendance',
+                    'action_type' => 'bulk_mark',
+                    'change_data' => ['service_id' => $svcId, 'records' => $data['records']],
+                    'description' => "Bulk mark attendance for service #$svcId (" . $svc['date'] . ")",
+                    'period' => $period,
+                    'requested_by' => $currentUser['user_id'],
+                ]);
+                jsonResponse(['message' => 'This period is closed. Your change has been submitted for approval.', 'pending_id' => $pendingId, 'pending' => true], 202);
             }
 
             $db->beginTransaction();
@@ -232,7 +245,6 @@ switch ($method) {
                 jsonResponse(['error' => 'Failed to save attendance: ' . $e->getMessage()], 500);
             }
         } elseif ($action === 'mark') {
-            // Mark single attendance
             $error = validateRequired($data, ['service_id', 'member_id', 'status']);
             if ($error) {
                 jsonResponse(['error' => $error], 400);
@@ -241,6 +253,22 @@ switch ($method) {
             $validStatuses = ['present', 'absent', 'late'];
             if (!in_array($data['status'], $validStatuses)) {
                 jsonResponse(['error' => 'Invalid status'], 400);
+            }
+
+            $stmt = $db->prepare("SELECT id, date FROM services WHERE id = ?");
+            $stmt->execute([(int)$data['service_id']]);
+            $svc = $stmt->fetch();
+            if ($svc && !$isAdmin && isClosedPeriod($db, $svc['date'])) {
+                $period = substr($svc['date'], 0, 7);
+                $pendingId = createPendingChange($db, [
+                    'entity_type' => 'attendance',
+                    'action_type' => 'mark',
+                    'change_data' => $data,
+                    'description' => "Mark attendance for member #{$data['member_id']} on service #" . $data['service_id'],
+                    'period' => $period,
+                    'requested_by' => $currentUser['user_id'],
+                ]);
+                jsonResponse(['message' => 'This period is closed. Your change has been submitted for approval.', 'pending_id' => $pendingId, 'pending' => true], 202);
             }
 
             $checkInTime = ($data['status'] === 'present' || $data['status'] === 'late')
@@ -267,18 +295,39 @@ switch ($method) {
         break;
 
     case 'DELETE':
-        // Remove attendance record
         $id = isset($_GET['id']) ? (int)$_GET['id'] : null;
         if (!$id) {
             jsonResponse(['error' => 'Attendance record ID required'], 400);
         }
 
-        $stmt = $db->prepare("DELETE FROM attendance WHERE id = ?");
+        $stmt = $db->prepare("
+            SELECT a.id, s.date FROM attendance a
+            JOIN services s ON s.id = a.service_id
+            WHERE a.id = ?
+        ");
         $stmt->execute([$id]);
-
-        if ($stmt->rowCount() === 0) {
+        $record = $stmt->fetch();
+        if (!$record) {
             jsonResponse(['error' => 'Record not found'], 404);
         }
+
+        $isAdmin = in_array($currentUser['role'], ['pastor', 'admin']);
+        if (!$isAdmin && isClosedPeriod($db, $record['date'])) {
+            $period = substr($record['date'], 0, 7);
+            $pendingId = createPendingChange($db, [
+                'entity_type' => 'attendance',
+                'entity_id' => $id,
+                'action_type' => 'delete',
+                'change_data' => ['attendance_id' => $id],
+                'description' => "Delete attendance record #$id",
+                'period' => $period,
+                'requested_by' => $currentUser['user_id'],
+            ]);
+            jsonResponse(['message' => 'This period is closed. Your change has been submitted for approval.', 'pending_id' => $pendingId, 'pending' => true], 202);
+        }
+
+        $stmt = $db->prepare("DELETE FROM attendance WHERE id = ?");
+        $stmt->execute([$id]);
 
         jsonResponse(['message' => 'Attendance record deleted']);
         break;

@@ -121,3 +121,27 @@ function validateRequired(array $data, array $fields): ?string {
     }
     return null;
 }
+
+function isClosedPeriod(PDO $db, string $date): bool {
+    $yearMonth = substr($date, 0, 7);
+    $stmt = $db->prepare("SELECT id FROM closed_periods WHERE year_month = ?");
+    $stmt->execute([$yearMonth]);
+    return (bool)$stmt->fetch();
+}
+
+function createPendingChange(PDO $db, array $params): int {
+    $stmt = $db->prepare("
+        INSERT INTO pending_changes (entity_type, entity_id, action_type, change_data, description, period, requested_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    ");
+    $stmt->execute([
+        $params['entity_type'],
+        $params['entity_id'] ?? null,
+        $params['action_type'],
+        json_encode($params['change_data']),
+        $params['description'],
+        $params['period'],
+        $params['requested_by'],
+    ]);
+    return (int)$db->lastInsertId();
+}

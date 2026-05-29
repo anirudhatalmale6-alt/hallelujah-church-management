@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { dashboard } from '../utils/api';
+import { useAuth } from '../contexts/AuthContext';
 import { formatTime12h } from '../utils/format';
 import {
   Users, UserCheck, Calendar, TrendingUp, UserPlus,
-  ChevronRight, Cake, Clock, AlertCircle
+  ChevronRight, Cake, Clock, AlertCircle, ClipboardCheck
 } from 'lucide-react';
 
 function StatCard({ icon: Icon, label, value, sub, color, to }) {
@@ -25,6 +26,7 @@ function StatCard({ icon: Icon, label, value, sub, color, to }) {
 
 export default function DashboardPage() {
   const navigate = useNavigate();
+  const { isAdmin } = useAuth();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -112,6 +114,22 @@ export default function DashboardPage() {
           to="/system/public/services"
         />
       </div>
+
+      {isAdmin && data.pending_changes_count > 0 && (
+        <Link
+          to="/system/public/pending"
+          className="mb-6 flex items-center gap-3 p-4 bg-amber-50 border border-amber-200 rounded-xl hover:bg-amber-100 transition-colors"
+        >
+          <ClipboardCheck size={24} className="text-amber-600 shrink-0" />
+          <div className="flex-1">
+            <p className="font-medium text-amber-800">
+              {data.pending_changes_count} pending change{data.pending_changes_count !== 1 ? 's' : ''} awaiting review
+            </p>
+            <p className="text-sm text-amber-600">Click to review and approve or reject changes to closed periods</p>
+          </div>
+          <ChevronRight size={20} className="text-amber-400" />
+        </Link>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Attendance Trend */}

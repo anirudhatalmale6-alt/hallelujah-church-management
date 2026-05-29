@@ -4,7 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import Modal from '../components/Modal';
 import {
   Users, Plus, Edit2, Trash2, Shield,
-  AlertCircle, Check, Eye, EyeOff
+  AlertCircle, Check, Eye, EyeOff, KeyRound, Copy
 } from 'lucide-react';
 
 const roles = [
@@ -31,6 +31,10 @@ export default function UsersPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [deleteId, setDeleteId] = useState(null);
+  const [resetUser, setResetUser] = useState(null);
+  const [resetPassword, setResetPassword] = useState('');
+  const [resetDone, setResetDone] = useState(false);
+  const [resetting, setResetting] = useState(false);
 
   const loadUsers = useCallback(async () => {
     setLoading(true);
@@ -107,6 +111,33 @@ export default function UsersPage() {
     }
   };
 
+  const openResetPassword = (user) => {
+    setResetUser(user);
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
+    let pw = '';
+    for (let i = 0; i < 10; i++) pw += chars[Math.floor(Math.random() * chars.length)];
+    setResetPassword(pw);
+    setResetDone(false);
+    setError('');
+  };
+
+  const handleResetPassword = async () => {
+    if (!resetUser || !resetPassword) return;
+    setResetting(true);
+    setError('');
+    try {
+      await usersApi.resetPassword(resetUser.id, resetPassword);
+      setResetDone(true);
+    } catch (err) {
+      setError(err.message);
+    }
+    setResetting(false);
+  };
+
+  const copyToClipboard = (text) => {
+    navigator.clipboard.writeText(text);
+  };
+
   const updateField = (field, value) => setForm(f => ({ ...f, [field]: value }));
 
   return (
@@ -178,6 +209,15 @@ export default function UsersPage() {
                         >
                           <Edit2 size={16} />
                         </button>
+                        {u.id !== currentUser?.id && (
+                          <button
+                            onClick={() => openResetPassword(u)}
+                            className="p-2 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg"
+                            title="Reset Password"
+                          >
+                            <KeyRound size={16} />
+                          </button>
+                        )}
                         {u.id !== currentUser?.id && (
                           <button
                             onClick={() => setDeleteId(u.id)}
@@ -279,6 +319,70 @@ export default function UsersPage() {
             <Trash2 size={16} /> Delete
           </button>
         </div>
+      </Modal>
+
+      {/* Reset Password Modal */}
+      <Modal isOpen={!!resetUser} onClose={() => setResetUser(null)} title="Reset Password" size="sm">
+        {resetDone ? (
+          <div>
+            <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded-lg text-green-700 text-sm">
+              Password has been reset for {resetUser?.name}.
+            </div>
+            <div className="mb-4">
+              <label className="label">New Password</label>
+              <div className="flex items-center gap-2">
+                <input type="text" className="input font-mono" value={resetPassword} readOnly />
+                <button
+                  onClick={() => copyToClipboard(resetPassword)}
+                  className="p-2 text-gray-500 hover:text-primary-700 hover:bg-primary-50 rounded-lg shrink-0"
+                  title="Copy"
+                >
+                  <Copy size={18} />
+                </button>
+              </div>
+              <p className="text-xs text-gray-500 mt-2">Copy this password and share it with the user. It won't be shown again.</p>
+            </div>
+            <div className="flex justify-end">
+              <button onClick={() => setResetUser(null)} className="btn-primary">Done</button>
+            </div>
+          </div>
+        ) : (
+          <div>
+            <p className="text-gray-600 mb-4">
+              Reset password for <strong>{resetUser?.name}</strong> ({resetUser?.email})?
+            </p>
+            {error && (
+              <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg flex items-center gap-2 text-red-700 text-sm">
+                <AlertCircle size={16} /> {error}
+              </div>
+            )}
+            <div className="mb-4">
+              <label className="label">New Password</label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  className="input font-mono"
+                  value={resetPassword}
+                  onChange={e => setResetPassword(e.target.value)}
+                />
+                <button
+                  onClick={() => copyToClipboard(resetPassword)}
+                  className="p-2 text-gray-500 hover:text-primary-700 hover:bg-primary-50 rounded-lg shrink-0"
+                  title="Copy"
+                >
+                  <Copy size={18} />
+                </button>
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-3">
+              <button onClick={() => setResetUser(null)} className="btn-secondary">Cancel</button>
+              <button onClick={handleResetPassword} disabled={resetting || !resetPassword} className="btn-primary">
+                {resetting ? <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" /> : <KeyRound size={16} />}
+                Reset Password
+              </button>
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   );

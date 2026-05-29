@@ -13,6 +13,8 @@ import ServicesPage from './pages/ServicesPage';
 import HouseholdsPage from './pages/HouseholdsPage';
 import GroupsPage from './pages/GroupsPage';
 import UsersPage from './pages/UsersPage';
+import PeriodsPage from './pages/PeriodsPage';
+import PendingChangesPage from './pages/PendingChangesPage';
 import SettingsPage from './pages/SettingsPage';
 import ReportsPage from './pages/ReportsPage';
 import InstallPage from './pages/InstallPage';
@@ -65,6 +67,8 @@ function AppRoutes() {
       <Route path="/system/public/groups" element={<ProtectedRoute><GroupsPage /></ProtectedRoute>} />
       <Route path="/system/public/reports" element={<ProtectedRoute><ReportsPage /></ProtectedRoute>} />
       <Route path="/system/public/users" element={<ProtectedRoute adminOnly><UsersPage /></ProtectedRoute>} />
+      <Route path="/system/public/periods" element={<ProtectedRoute adminOnly><PeriodsPage /></ProtectedRoute>} />
+      <Route path="/system/public/pending" element={<ProtectedRoute adminOnly><PendingChangesPage /></ProtectedRoute>} />
       <Route path="/system/public/settings" element={<ProtectedRoute adminOnly><SettingsPage /></ProtectedRoute>} />
       <Route path="*" element={<Navigate to="/system/public/" replace />} />
     </Routes>

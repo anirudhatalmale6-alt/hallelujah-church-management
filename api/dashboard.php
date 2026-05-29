@@ -93,6 +93,14 @@ $birthdays = $db->query("
 // Total system users
 $totalUsers = $db->query("SELECT COUNT(*) as count FROM users WHERE status = 'active'")->fetch()['count'];
 
+// Pending changes count (for admin notification)
+$pendingCount = 0;
+try {
+    $pendingCount = (int)$db->query("SELECT COUNT(*) as cnt FROM pending_changes WHERE status = 'pending'")->fetch()['cnt'];
+} catch (Exception $e) {
+    // Table may not exist yet
+}
+
 jsonResponse([
     'members' => [
         'total' => (int)$memberStats['total'],
@@ -110,4 +118,5 @@ jsonResponse([
     'gender_distribution' => $genderDist,
     'birthdays_this_month' => $birthdays,
     'total_users' => (int)$totalUsers,
+    'pending_changes_count' => $pendingCount,
 ]);
