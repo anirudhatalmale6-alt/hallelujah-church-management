@@ -18,6 +18,15 @@ RewriteRule ^api/attendance$ api/attendance.php [L,QSA]
 RewriteRule ^api/attendance/([0-9]+)$ api/attendance.php?id=$1 [L,QSA]
 RewriteRule ^api/dashboard$ api/dashboard.php [L,QSA]
 RewriteRule ^api/settings$ api/settings.php [L,QSA]
+RewriteRule ^api/groups$ api/groups.php [L,QSA]
+RewriteRule ^api/groups/([0-9]+)$ api/groups.php?id=$1 [L,QSA]
+RewriteRule ^api/households$ api/households.php [L,QSA]
+RewriteRule ^api/households/([0-9]+)$ api/households.php?id=$1 [L,QSA]
+RewriteRule ^api/reports$ api/reports.php [L,QSA]
+RewriteRule ^api/periods$ api/periods.php [L,QSA]
+RewriteRule ^api/periods/([0-9]+)$ api/periods.php?id=$1 [L,QSA]
+RewriteRule ^api/pending$ api/pending.php [L,QSA]
+RewriteRule ^api/pending/([0-9]+)$ api/pending.php?id=$1 [L,QSA]
 
 # Don't rewrite existing files or directories
 RewriteCond %{REQUEST_FILENAME} !-f

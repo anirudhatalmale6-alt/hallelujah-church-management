@@ -124,7 +124,7 @@ function validateRequired(array $data, array $fields): ?string {
 
 function isClosedPeriod(PDO $db, string $date): bool {
     $yearMonth = substr($date, 0, 7);
-    $stmt = $db->prepare("SELECT id FROM closed_periods WHERE year_month = ?");
+    $stmt = $db->prepare("SELECT id FROM closed_periods WHERE `year_month` = ?");
     $stmt->execute([$yearMonth]);
     return (bool)$stmt->fetch();
 }
