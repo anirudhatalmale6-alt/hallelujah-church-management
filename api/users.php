@@ -13,6 +13,32 @@ $action = $_GET['action'] ?? 'list';
 $id = isset($_GET['id']) ? (int)$_GET['id'] : null;
 $db = getDB();
 
+if ($method === 'GET' && $action === 'permissions' && $id) {
+    requireRole($currentUser, ['pastor', 'admin']);
+    $stmt = $db->prepare("SELECT permission FROM user_permissions WHERE user_id = ?");
+    $stmt->execute([$id]);
+    $perms = array_column($stmt->fetchAll(), 'permission');
+    jsonResponse(['user_id' => $id, 'permissions' => $perms]);
+}
+
+if ($method === 'PUT' && $action === 'permissions') {
+    requireRole($currentUser, ['pastor', 'admin']);
+    $data = getRequestBody();
+    $targetId = (int)($data['user_id'] ?? 0);
+    $permissions = $data['permissions'] ?? [];
+    if (!$targetId) jsonResponse(['error' => 'user_id required'], 400);
+
+    $validPerms = ['dashboard', 'members', 'households', 'groups', 'attendance', 'services', 'reports', 'checklist'];
+    $permissions = array_filter($permissions, fn($p) => in_array($p, $validPerms));
+
+    $db->prepare("DELETE FROM user_permissions WHERE user_id = ?")->execute([$targetId]);
+    $stmt = $db->prepare("INSERT INTO user_permissions (user_id, permission) VALUES (?, ?)");
+    foreach ($permissions as $perm) {
+        $stmt->execute([$targetId, $perm]);
+    }
+    jsonResponse(['message' => 'Permissions updated', 'permissions' => array_values($permissions)]);
+}
+
 if ($method === 'POST' && $action === 'reset_password') {
     requireRole($currentUser, ['pastor', 'admin']);
     $data = getRequestBody();

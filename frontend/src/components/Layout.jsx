@@ -4,17 +4,18 @@ import { useAuth } from '../contexts/AuthContext';
 import {
   LayoutDashboard, Users, UserCheck, Calendar, Church, Home,
   Settings, LogOut, Menu, X, ChevronDown, FileText, FolderOpen,
-  Lock, ClipboardCheck
+  Lock, ClipboardCheck, ClipboardList
 } from 'lucide-react';
 
 const navItems = [
-  { path: '/system/public/', icon: LayoutDashboard, label: 'Dashboard' },
-  { path: '/system/public/members', icon: Users, label: 'Members' },
-  { path: '/system/public/households', icon: Home, label: 'Households' },
-  { path: '/system/public/groups', icon: FolderOpen, label: 'Groups' },
-  { path: '/system/public/attendance', icon: UserCheck, label: 'Attendance' },
-  { path: '/system/public/services', icon: Calendar, label: 'Services' },
-  { path: '/system/public/reports', icon: FileText, label: 'Reports' },
+  { path: '/system/public/', icon: LayoutDashboard, label: 'Dashboard', perm: 'dashboard' },
+  { path: '/system/public/members', icon: Users, label: 'Members', perm: 'members' },
+  { path: '/system/public/households', icon: Home, label: 'Households', perm: 'households' },
+  { path: '/system/public/groups', icon: FolderOpen, label: 'Groups', perm: 'groups' },
+  { path: '/system/public/attendance', icon: UserCheck, label: 'Attendance', perm: 'attendance' },
+  { path: '/system/public/services', icon: Calendar, label: 'Services', perm: 'services' },
+  { path: '/system/public/checklist', icon: ClipboardList, label: 'Checklist', perm: 'checklist' },
+  { path: '/system/public/reports', icon: FileText, label: 'Reports', perm: 'reports' },
 ];
 
 const adminItems = [
@@ -25,7 +26,7 @@ const adminItems = [
 ];
 
 export default function Layout({ children }) {
-  const { user, logout, isAdmin } = useAuth();
+  const { user, logout, isAdmin, hasPermission } = useAuth();
   const location = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
@@ -82,7 +83,7 @@ export default function Layout({ children }) {
           <div className="px-3 py-2 text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
             Main
           </div>
-          {navItems.map(item => (
+          {navItems.filter(item => hasPermission(item.perm)).map(item => (
             <NavLink key={item.path} item={item} mobile />
           ))}
 

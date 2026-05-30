@@ -181,6 +181,24 @@ export const pending = {
   reject: (id, notes) => request('pending.php', { method: 'PUT', body: { action: 'reject', notes }, params: { id } }),
 };
 
+// Checklist (PCC)
+export const checklist = {
+  getTemplates: () => request('checklist.php', { params: { action: 'templates' } }),
+  addTemplate: (name, category) => request('checklist.php', { method: 'POST', body: { name, category }, params: { action: 'template' } }),
+  updateTemplate: (id, data) => request('checklist.php', { method: 'PUT', body: data, params: { action: 'template', id } }),
+  deleteTemplate: (id) => request('checklist.php', { method: 'DELETE', params: { action: 'template', id } }),
+  getForService: (serviceId) => request('checklist.php', { params: { service_id: serviceId } }),
+  toggleItem: (id, isChecked, notes) => request('checklist.php', { method: 'PUT', body: { is_checked: isChecked ? 1 : 0, notes }, params: { id } }),
+  addItem: (serviceId, name) => request('checklist.php', { method: 'POST', body: { service_id: serviceId, name }, params: { action: 'add_item' } }),
+  deleteItem: (id) => request('checklist.php', { method: 'DELETE', params: { id } }),
+};
+
+// User Permissions
+export const permissions = {
+  get: (userId) => request('users.php', { params: { action: 'permissions', id: userId } }),
+  update: (userId, perms) => request('users.php', { method: 'PUT', body: { user_id: userId, permissions: perms }, params: { action: 'permissions' } }),
+};
+
 // Settings
 export const settings = {
   get: () => request('settings.php'),

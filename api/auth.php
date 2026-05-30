@@ -135,6 +135,15 @@ function handleLogin(): void {
         'role' => $user['role'],
     ]);
 
+    $permissions = [];
+    if (in_array($user['role'], ['leader', 'volunteer'])) {
+        try {
+            $permStmt = $db->prepare("SELECT permission FROM user_permissions WHERE user_id = ?");
+            $permStmt->execute([$user['id']]);
+            $permissions = array_column($permStmt->fetchAll(), 'permission');
+        } catch (Exception $e) {}
+    }
+
     jsonResponse([
         'token' => $token,
         'user' => [
@@ -142,6 +151,7 @@ function handleLogin(): void {
             'email' => $user['email'],
             'name' => $user['name'],
             'role' => $user['role'],
+            'permissions' => $permissions,
         ]
     ]);
 }

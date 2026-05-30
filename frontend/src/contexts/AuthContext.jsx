@@ -45,8 +45,15 @@ export function AuthProvider({ children }) {
   const isAdmin = user && (user.role === 'admin' || user.role === 'pastor');
   const isLeader = user && (user.role === 'admin' || user.role === 'pastor' || user.role === 'leader');
 
+  const hasPermission = (section) => {
+    if (!user) return false;
+    if (isAdmin) return true;
+    if (!user.permissions || user.permissions.length === 0) return true;
+    return user.permissions.includes(section);
+  };
+
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout, isAdmin, isLeader, checkAuth }}>
+    <AuthContext.Provider value={{ user, loading, login, logout, isAdmin, isLeader, checkAuth, hasPermission }}>
       {children}
     </AuthContext.Provider>
   );

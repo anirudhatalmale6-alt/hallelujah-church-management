@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { users as usersApi } from '../utils/api';
+import { users as usersApi, permissions as permissionsApi } from '../utils/api';
 import { useAuth } from '../contexts/AuthContext';
 import Modal from '../components/Modal';
 import {
@@ -35,6 +35,20 @@ export default function UsersPage() {
   const [resetPassword, setResetPassword] = useState('');
   const [resetDone, setResetDone] = useState(false);
   const [resetting, setResetting] = useState(false);
+  const [permUser, setPermUser] = useState(null);
+  const [permList, setPermList] = useState([]);
+  const [permSaving, setPermSaving] = useState(false);
+
+  const allPermissions = [
+    { key: 'dashboard', label: 'Dashboard' },
+    { key: 'members', label: 'Members' },
+    { key: 'households', label: 'Households' },
+    { key: 'groups', label: 'Groups' },
+    { key: 'attendance', label: 'Attendance' },
+    { key: 'services', label: 'Services' },
+    { key: 'checklist', label: 'Checklist' },
+    { key: 'reports', label: 'Reports' },
+  ];
 
   const loadUsers = useCallback(async () => {
     setLoading(true);
@@ -138,6 +152,32 @@ export default function UsersPage() {
     navigator.clipboard.writeText(text);
   };
 
+  const openPermissions = async (user) => {
+    setPermUser(user);
+    try {
+      const data = await permissionsApi.get(user.id);
+      setPermList(data.permissions || []);
+    } catch {
+      setPermList([]);
+    }
+  };
+
+  const togglePerm = (key) => {
+    setPermList(prev => prev.includes(key) ? prev.filter(p => p !== key) : [...prev, key]);
+  };
+
+  const savePermissions = async () => {
+    if (!permUser) return;
+    setPermSaving(true);
+    try {
+      await permissionsApi.update(permUser.id, permList);
+      setPermUser(null);
+    } catch (err) {
+      setError(err.message);
+    }
+    setPermSaving(false);
+  };
+
   const updateField = (field, value) => setForm(f => ({ ...f, [field]: value }));
 
   return (
@@ -209,6 +249,15 @@ export default function UsersPage() {
                         >
                           <Edit2 size={16} />
                         </button>
+                        {(u.role === 'leader' || u.role === 'volunteer') && (
+                          <button
+                            onClick={() => openPermissions(u)}
+                            className="p-2 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg"
+                            title="Manage Permissions"
+                          >
+                            <Shield size={16} />
+                          </button>
+                        )}
                         {u.id !== currentUser?.id && (
                           <button
                             onClick={() => openResetPassword(u)}
@@ -317,6 +366,33 @@ export default function UsersPage() {
           <button onClick={() => setDeleteId(null)} className="btn-secondary">Cancel</button>
           <button onClick={handleDelete} className="btn-danger">
             <Trash2 size={16} /> Delete
+          </button>
+        </div>
+      </Modal>
+
+      {/* Permissions Modal */}
+      <Modal isOpen={!!permUser} onClose={() => setPermUser(null)} title={`Permissions: ${permUser?.name}`} size="sm">
+        <p className="text-sm text-gray-600 mb-4">
+          Select which sections this user can access. If none are selected, they can access everything.
+        </p>
+        <div className="space-y-2 mb-6">
+          {allPermissions.map(p => (
+            <label key={p.key} className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-50 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={permList.includes(p.key)}
+                onChange={() => togglePerm(p.key)}
+                className="w-4 h-4 text-primary-700 rounded border-gray-300 focus:ring-primary-500"
+              />
+              <span className="text-sm font-medium text-gray-700">{p.label}</span>
+            </label>
+          ))}
+        </div>
+        <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-100">
+          <button onClick={() => setPermUser(null)} className="btn-secondary">Cancel</button>
+          <button onClick={savePermissions} disabled={permSaving} className="btn-primary">
+            {permSaving ? <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" /> : <Shield size={16} />}
+            Save Permissions
           </button>
         </div>
       </Modal>
