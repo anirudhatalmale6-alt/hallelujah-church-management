@@ -16,7 +16,113 @@ $isAdmin = in_array($currentUser['role'], ['pastor', 'admin']);
 
 switch ($method) {
     case 'GET':
-        if ($action === 'report' && $id) {
+        if ($action === 'members' && $id) {
+            // Get members of a department
+            $stmt = $db->prepare("
+                SELECT dm.*, u.name as user_name, u.email as user_email, u.role as user_role
+                FROM department_members dm
+                JOIN users u ON dm.user_id = u.id
+                WHERE dm.department_id = ?
+                ORDER BY dm.role ASC, u.name ASC
+            ");
+            $stmt->execute([$id]);
+            jsonResponse(['members' => $stmt->fetchAll()]);
+
+        } elseif ($action === 'health_report') {
+            // Department health analytics over time
+            $deptId = isset($_GET['department_id']) ? (int)$_GET['department_id'] : null;
+            $months = max(1, min(12, (int)($_GET['months'] ?? 3)));
+            $startDate = date('Y-m-d', strtotime("-{$months} months"));
+
+            if ($deptId) {
+                // Single department health
+                $stmt = $db->prepare("
+                    SELECT dr.id, dr.status, dr.reporter_name, dr.remarks,
+                        s.name as service_name, s.date as service_date, s.type as service_type,
+                        u.name as submitted_by_name,
+                        (SELECT COUNT(*) FROM department_report_items ri WHERE ri.report_id = dr.id) as total_items,
+                        (SELECT COUNT(*) FROM department_report_items ri WHERE ri.report_id = dr.id AND ri.is_checked = 1) as checked_items
+                    FROM department_reports dr
+                    JOIN services s ON dr.service_id = s.id
+                    LEFT JOIN users u ON dr.submitted_by = u.id
+                    WHERE dr.department_id = ? AND s.date >= ?
+                    ORDER BY s.date DESC
+                ");
+                $stmt->execute([$deptId, $startDate]);
+                $reports = $stmt->fetchAll();
+
+                $dept = $db->prepare("SELECT name FROM departments WHERE id = ?");
+                $dept->execute([$deptId]);
+                $deptName = $dept->fetchColumn();
+
+                $totalServices = $db->prepare("SELECT COUNT(*) FROM services WHERE date >= ?");
+                $totalServices->execute([$startDate]);
+                $svcCount = (int)$totalServices->fetchColumn();
+
+                $totalChecked = 0;
+                $totalItems = 0;
+                foreach ($reports as $r) {
+                    $totalChecked += (int)$r['checked_items'];
+                    $totalItems += (int)$r['total_items'];
+                }
+
+                jsonResponse([
+                    'department_name' => $deptName,
+                    'reports' => $reports,
+                    'total_services' => $svcCount,
+                    'reports_submitted' => count($reports),
+                    'submission_rate' => $svcCount > 0 ? round((count($reports) / $svcCount) * 100, 1) : 0,
+                    'total_items' => $totalItems,
+                    'total_checked' => $totalChecked,
+                    'completion_rate' => $totalItems > 0 ? round(($totalChecked / $totalItems) * 100, 1) : 0,
+                    'months' => $months,
+                ]);
+
+            } else {
+                // All departments overview
+                $depts = $db->query("SELECT id, name FROM departments WHERE is_active = 1 ORDER BY sort_order ASC")->fetchAll();
+
+                $totalServices = $db->prepare("SELECT COUNT(*) FROM services WHERE date >= ?");
+                $totalServices->execute([$startDate]);
+                $svcCount = (int)$totalServices->fetchColumn();
+
+                $result = [];
+                foreach ($depts as $dept) {
+                    $stmt = $db->prepare("
+                        SELECT
+                            COUNT(dr.id) as reports_submitted,
+                            SUM((SELECT COUNT(*) FROM department_report_items ri WHERE ri.report_id = dr.id)) as total_items,
+                            SUM((SELECT COUNT(*) FROM department_report_items ri WHERE ri.report_id = dr.id AND ri.is_checked = 1)) as checked_items
+                        FROM department_reports dr
+                        JOIN services s ON dr.service_id = s.id
+                        WHERE dr.department_id = ? AND s.date >= ?
+                    ");
+                    $stmt->execute([$dept['id'], $startDate]);
+                    $stats = $stmt->fetch();
+
+                    $submitted = (int)($stats['reports_submitted'] ?? 0);
+                    $totalItems = (int)($stats['total_items'] ?? 0);
+                    $checkedItems = (int)($stats['checked_items'] ?? 0);
+
+                    $result[] = [
+                        'department_id' => (int)$dept['id'],
+                        'department_name' => $dept['name'],
+                        'reports_submitted' => $submitted,
+                        'submission_rate' => $svcCount > 0 ? round(($submitted / $svcCount) * 100, 1) : 0,
+                        'total_items' => $totalItems,
+                        'checked_items' => $checkedItems,
+                        'completion_rate' => $totalItems > 0 ? round(($checkedItems / $totalItems) * 100, 1) : 0,
+                    ];
+                }
+
+                jsonResponse([
+                    'departments' => $result,
+                    'total_services' => $svcCount,
+                    'months' => $months,
+                ]);
+            }
+
+        } elseif ($action === 'report' && $id) {
             // Get a specific department report with items
             $stmt = $db->prepare("
                 SELECT dr.*, d.name as department_name,
@@ -150,6 +256,23 @@ switch ($method) {
             $stmt->execute([(int)$data['department_id'], trim($data['item_name']), $nextOrder]);
             jsonResponse(['message' => 'Template item added', 'id' => (int)$db->lastInsertId()], 201);
 
+        } elseif ($action === 'assign_member') {
+            requireRole($currentUser, ['pastor', 'admin']);
+            $data = getRequestBody();
+            if (empty($data['department_id']) || empty($data['user_id'])) {
+                jsonResponse(['error' => 'department_id and user_id required'], 400);
+            }
+            $role = $data['role'] ?? 'member';
+            if (!in_array($role, ['member', 'leader', 'reporter'])) $role = 'member';
+
+            try {
+                $stmt = $db->prepare("INSERT INTO department_members (department_id, user_id, role) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE role = ?");
+                $stmt->execute([(int)$data['department_id'], (int)$data['user_id'], $role, $role]);
+                jsonResponse(['message' => 'Member assigned to department']);
+            } catch (Exception $e) {
+                jsonResponse(['error' => 'Failed to assign: ' . $e->getMessage()], 500);
+            }
+
         } elseif ($action === 'submit_report') {
             $data = getRequestBody();
             if (empty($data['department_id']) || empty($data['service_id'])) {
@@ -164,16 +287,18 @@ switch ($method) {
             $existingStmt->execute([$deptId, $serviceId]);
             $existingId = $existingStmt->fetchColumn();
 
+            $reporterName = $data['reporter_name'] ?? null;
+
             $db->beginTransaction();
             try {
                 if ($existingId) {
                     $reportId = $existingId;
-                    $db->prepare("UPDATE department_reports SET submitted_by = ?, status = 'submitted', remarks = ?, updated_at = NOW() WHERE id = ?")
-                       ->execute([$currentUser['user_id'], $data['remarks'] ?? null, $reportId]);
+                    $db->prepare("UPDATE department_reports SET submitted_by = ?, reporter_name = ?, status = 'submitted', remarks = ?, updated_at = NOW() WHERE id = ?")
+                       ->execute([$currentUser['user_id'], $reporterName, $data['remarks'] ?? null, $reportId]);
                     $db->prepare("DELETE FROM department_report_items WHERE report_id = ?")->execute([$reportId]);
                 } else {
-                    $db->prepare("INSERT INTO department_reports (department_id, service_id, submitted_by, status, remarks) VALUES (?, ?, ?, 'submitted', ?)")
-                       ->execute([$deptId, $serviceId, $currentUser['user_id'], $data['remarks'] ?? null]);
+                    $db->prepare("INSERT INTO department_reports (department_id, service_id, submitted_by, reporter_name, status, remarks) VALUES (?, ?, ?, ?, 'submitted', ?)")
+                       ->execute([$deptId, $serviceId, $currentUser['user_id'], $reporterName, $data['remarks'] ?? null]);
                     $reportId = (int)$db->lastInsertId();
                 }
 
@@ -261,6 +386,9 @@ switch ($method) {
         if ($action === 'department' && $id) {
             $db->prepare("DELETE FROM departments WHERE id = ?")->execute([$id]);
             jsonResponse(['message' => 'Department deleted']);
+        } elseif ($action === 'remove_member' && $id) {
+            $db->prepare("DELETE FROM department_members WHERE id = ?")->execute([$id]);
+            jsonResponse(['message' => 'Member removed from department']);
         } elseif ($action === 'template' && $id) {
             $db->prepare("DELETE FROM department_report_templates WHERE id = ?")->execute([$id]);
             jsonResponse(['message' => 'Template deleted']);

@@ -39,10 +39,10 @@ switch ($method) {
         $backups = [];
         foreach ($files as $f) {
             $backups[] = [
-                'filename' => basename($f),
+                'file' => basename($f),
                 'size' => filesize($f),
                 'size_formatted' => round(filesize($f) / 1024, 1) . ' KB',
-                'created_at' => date('Y-m-d H:i:s', filemtime($f)),
+                'date' => date('Y-m-d H:i:s', filemtime($f)),
             ];
         }
         usort($backups, fn($a, $b) => strcmp($b['filename'], $a['filename']));

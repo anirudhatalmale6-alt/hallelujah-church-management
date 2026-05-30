@@ -285,6 +285,22 @@ export default function SettingsPage() {
             ))}
           </div>
         )}
+
+        <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+          <h3 className="text-sm font-semibold text-blue-800 mb-2">How to Restore a Backup</h3>
+          <ol className="text-sm text-blue-700 space-y-1 list-decimal list-inside">
+            <li>Download the backup file (.sql) to your computer</li>
+            <li>Log in to your Hostinger panel (hpanel.hostinger.com)</li>
+            <li>Go to Databases &gt; phpMyAdmin</li>
+            <li>Select the church database from the left sidebar</li>
+            <li>Click the "Import" tab at the top</li>
+            <li>Choose the downloaded .sql backup file</li>
+            <li>Click "Import" to restore the database</li>
+          </ol>
+          <p className="text-xs text-blue-600 mt-2">
+            Note: Restoring will replace current data with the backup data. Make sure to create a fresh backup before restoring an older one.
+          </p>
+        </div>
       </div>
     </div>
   );

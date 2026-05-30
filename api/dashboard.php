@@ -65,7 +65,9 @@ if ($hasPerm('attendance')) {
     $attendanceTrend = $db->query("
         SELECT s.id, s.name, s.date, s.type,
             COUNT(CASE WHEN a.status = 'present' OR a.status = 'late' THEN 1 END) as attended,
-            COUNT(a.id) as total_marked
+            COUNT(a.id) as total_marked,
+            COALESCE(s.visitor_count, 0) as visitor_count,
+            COALESCE(s.head_count, 0) as head_count
         FROM services s
         LEFT JOIN attendance a ON a.service_id = s.id
         GROUP BY s.id

@@ -28,7 +28,7 @@ if ($method === 'PUT' && $action === 'permissions') {
     $permissions = $data['permissions'] ?? [];
     if (!$targetId) jsonResponse(['error' => 'user_id required'], 400);
 
-    $validPerms = ['dashboard', 'members', 'households', 'groups', 'attendance', 'services', 'reports', 'checklist'];
+    $validPerms = ['dashboard', 'members', 'households', 'groups', 'attendance', 'services', 'reports', 'checklist', 'department_reports'];
     $permissions = array_filter($permissions, fn($p) => in_array($p, $validPerms));
 
     $db->prepare("DELETE FROM user_permissions WHERE user_id = ?")->execute([$targetId]);

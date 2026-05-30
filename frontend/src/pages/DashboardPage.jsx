@@ -192,8 +192,11 @@ export default function DashboardPage() {
             {data.attendance.trend.length > 0 ? (
               <div className="space-y-3">
                 {data.attendance.trend.map((s) => {
-                  const maxAttendance = Math.max(...data.attendance.trend.map(t => Number(t.attended) || 1), 1);
-                  const pct = ((Number(s.attended) || 0) / maxAttendance) * 100;
+                  const attended = Number(s.attended) || 0;
+                  const visitors = Number(s.visitor_count) || 0;
+                  const totalPeople = attended + visitors;
+                  const maxAttendance = Math.max(...data.attendance.trend.map(t => (Number(t.attended) || 0) + (Number(t.visitor_count) || 0)), 1);
+                  const pct = (totalPeople / maxAttendance) * 100;
                   return (
                     <div
                       key={s.id}
@@ -210,7 +213,9 @@ export default function DashboardPage() {
                             className="h-full bg-gradient-to-r from-primary-700 to-gold-400 rounded-full flex items-center justify-end pr-2 transition-all duration-500"
                             style={{ width: `${Math.max(pct, 8)}%` }}
                           >
-                            <span className="text-xs font-medium text-white">{s.attended}</span>
+                            <span className="text-xs font-medium text-white">
+                              {totalPeople}{visitors > 0 ? ` (${visitors}v)` : ''}
+                            </span>
                           </div>
                         </div>
                       </div>

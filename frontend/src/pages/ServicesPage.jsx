@@ -47,9 +47,9 @@ const emptyService = {
 };
 
 const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-const frequencyLabels = { weekly: 'Weekly', biweekly: 'Bi-Weekly', monthly: 'Monthly' };
+const frequencyLabels = { weekly: 'Weekly', biweekly: 'Bi-Weekly', monthly: 'Monthly', once: 'One-Time' };
 const emptySchedule = {
-  name: '', type: 'sunday_1st', day_of_week: 0, time: '10:00', frequency: 'weekly',
+  name: '', type: 'sunday_1st', day_of_week: 0, time: '10:00', frequency: 'weekly', specific_date: '',
 };
 
 export default function ServicesPage() {
@@ -217,6 +217,7 @@ export default function ServicesPage() {
       day_of_week: Number(schedule.day_of_week),
       time: schedule.time?.substring(0, 5) || '10:00',
       frequency: schedule.frequency || 'weekly',
+      specific_date: schedule.specific_date || '',
     });
     setScheduleError('');
     setShowScheduleModal(true);
@@ -230,6 +231,7 @@ export default function ServicesPage() {
       const submitData = {
         ...scheduleForm,
         day_of_week: Number(scheduleForm.day_of_week),
+        specific_date: scheduleForm.specific_date || null,
         is_active: editSchedule ? editSchedule.is_active : 1,
       };
       if (editSchedule) {
@@ -494,7 +496,9 @@ export default function ServicesPage() {
                     <div className="space-y-1.5 text-sm text-gray-600 mb-4">
                       <div className="flex items-center gap-2">
                         <Calendar size={14} className="text-gray-400 shrink-0" />
-                        <span>{dayNames[sch.day_of_week]}</span>
+                        <span>{sch.frequency === 'once' && sch.specific_date
+                          ? new Date(sch.specific_date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
+                          : dayNames[sch.day_of_week]}</span>
                       </div>
                       <div className="flex items-center gap-2">
                         <Clock size={14} className="text-gray-400 shrink-0" />
@@ -756,31 +760,6 @@ export default function ServicesPage() {
                 ))}
               </select>
             </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="label">Day of Week *</label>
-                <select
-                  className="input"
-                  value={scheduleForm.day_of_week}
-                  onChange={e => updateScheduleField('day_of_week', Number(e.target.value))}
-                  required
-                >
-                  {dayNames.map((day, idx) => (
-                    <option key={idx} value={idx}>{day}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="label">Time *</label>
-                <input
-                  type="time"
-                  className="input"
-                  value={scheduleForm.time}
-                  onChange={e => updateScheduleField('time', e.target.value)}
-                  required
-                />
-              </div>
-            </div>
             <div>
               <label className="label">Frequency *</label>
               <select
@@ -792,7 +771,46 @@ export default function ServicesPage() {
                 <option value="weekly">Weekly</option>
                 <option value="biweekly">Bi-Weekly</option>
                 <option value="monthly">Monthly</option>
+                <option value="once">One-Time</option>
               </select>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              {scheduleForm.frequency === 'once' ? (
+                <div>
+                  <label className="label">Date *</label>
+                  <input
+                    type="date"
+                    className="input"
+                    value={scheduleForm.specific_date}
+                    onChange={e => updateScheduleField('specific_date', e.target.value)}
+                    required
+                  />
+                </div>
+              ) : (
+                <div>
+                  <label className="label">Day of Week *</label>
+                  <select
+                    className="input"
+                    value={scheduleForm.day_of_week}
+                    onChange={e => updateScheduleField('day_of_week', Number(e.target.value))}
+                    required
+                  >
+                    {dayNames.map((day, idx) => (
+                      <option key={idx} value={idx}>{day}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              <div>
+                <label className="label">Time *</label>
+                <input
+                  type="time"
+                  className="input"
+                  value={scheduleForm.time}
+                  onChange={e => updateScheduleField('time', e.target.value)}
+                  required
+                />
+              </div>
             </div>
           </div>
 

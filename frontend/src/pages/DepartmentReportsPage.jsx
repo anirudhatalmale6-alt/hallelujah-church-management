@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { departments as deptApi, services as servicesApi } from '../utils/api';
+import { departments as deptApi, services as servicesApi, users as usersApi } from '../utils/api';
 import { useAuth } from '../contexts/AuthContext';
 import { formatTime12h } from '../utils/format';
 import Modal from '../components/Modal';
 import {
   ClipboardList, FileText, Settings, Plus, Trash2, Edit2,
   Check, X, AlertCircle, ChevronDown, ChevronUp, Eye,
-  CheckSquare, Square, Send, Calendar, MessageSquare, Star
+  CheckSquare, Square, Send, Calendar, MessageSquare, Star,
+  Printer, Users, UserPlus
 } from 'lucide-react';
 
 const serviceTypeLabels = {
@@ -61,7 +62,10 @@ export default function DepartmentReportsPage() {
   const tabs = [
     { key: 'submit', label: 'Submit Report', icon: Send },
     { key: 'view', label: 'View Reports', icon: FileText },
-    ...(isAdmin ? [{ key: 'manage', label: 'Manage Departments', icon: Settings }] : []),
+    ...(isAdmin ? [
+      { key: 'members', label: 'Dept. Members', icon: Users },
+      { key: 'manage', label: 'Manage Departments', icon: Settings },
+    ] : []),
   ];
 
   return (
@@ -124,6 +128,14 @@ export default function DepartmentReportsPage() {
         />
       )}
 
+      {tab === 'members' && isAdmin && (
+        <DeptMembersTab
+          departments={departmentsList}
+          setError={setError}
+          setMessage={setMessage}
+        />
+      )}
+
       {tab === 'manage' && isAdmin && (
         <ManageDepartmentsTab
           departments={departmentsList}
@@ -143,6 +155,7 @@ function SubmitReportTab({ departments, services, setError, setMessage }) {
   const [selectedServiceId, setSelectedServiceId] = useState('');
   const [selectedDeptId, setSelectedDeptId] = useState('');
   const [templateItems, setTemplateItems] = useState([]);
+  const [reporterName, setReporterName] = useState('');
   const [remarks, setRemarks] = useState('');
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -190,12 +203,17 @@ function SubmitReportTab({ departments, services, setError, setMessage }) {
       setError('Please select both a service and a department');
       return;
     }
+    if (!reporterName.trim()) {
+      setError('Please enter the reporter name');
+      return;
+    }
     setSubmitting(true);
     setError('');
     try {
       await deptApi.submitReport({
         service_id: parseInt(selectedServiceId),
         department_id: parseInt(selectedDeptId),
+        reporter_name: reporterName.trim(),
         items: templateItems.map(item => ({
           template_id: item.template_id,
           item_name: item.item_name,
@@ -207,6 +225,7 @@ function SubmitReportTab({ departments, services, setError, setMessage }) {
       setMessage('Report submitted successfully');
       setSelectedServiceId('');
       setSelectedDeptId('');
+      setReporterName('');
       setTemplateItems([]);
       setRemarks('');
     } catch (err) {
@@ -251,6 +270,20 @@ function SubmitReportTab({ departments, services, setError, setMessage }) {
           </div>
         </div>
       </div>
+
+      {/* Reporter Name */}
+      {selectedDeptId && selectedServiceId && (
+        <div className="card mb-6">
+          <label className="label">Reporter Name *</label>
+          <input
+            type="text"
+            className="input"
+            value={reporterName}
+            onChange={e => setReporterName(e.target.value)}
+            placeholder="Enter the name of the person preparing this report..."
+          />
+        </div>
+      )}
 
       {/* Loading */}
       {loading && (
@@ -410,7 +443,9 @@ function ViewReportsTab({ departments, services, isAdmin, setError, setMessage }
     setExpandLoading(true);
     try {
       const data = await deptApi.getReport(reportId);
-      setExpandedReport(data.report || data);
+      const report = data.report || data;
+      report.items = data.items || [];
+      setExpandedReport(report);
     } catch (err) {
       setError(err.message);
     }
@@ -433,12 +468,110 @@ function ViewReportsTab({ departments, services, isAdmin, setError, setMessage }
       loadReports();
       if (expandedId === reviewReportId) {
         const data = await deptApi.getReport(reviewReportId);
-        setExpandedReport(data.report || data);
+        const report = data.report || data;
+        report.items = data.items || [];
+        setExpandedReport(report);
       }
     } catch (err) {
       setError(err.message);
     }
     setReviewSaving(false);
+  };
+
+  const handlePrintReport = (report, deptsList, servicesList) => {
+    if (!report) return;
+
+    const dept = deptsList.find(d => d.id === report.department_id);
+    const svc = servicesList.find(s => s.id === report.service_id);
+
+    const deptName = dept?.name || report.department_name || 'N/A';
+    const svcLabel = svc ? getServiceLabel(svc) : (report.service_name || 'N/A');
+    const serviceDate = report.service_date
+      ? new Date(report.service_date + 'T00:00:00').toLocaleDateString('en-US', {
+          month: 'long', day: 'numeric', year: 'numeric',
+        })
+      : '';
+    const reporterName = report.reporter_name || '';
+    const submittedBy = report.submitted_by_name || '';
+    const reviewedBy = report.reviewed_by_name || '';
+    const reviewedAt = report.reviewed_at
+      ? new Date(report.reviewed_at).toLocaleDateString('en-US', {
+          month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
+        })
+      : '';
+    const items = report.items || [];
+
+    const itemsHtml = items.map(item => {
+      const checked = Number(item.is_checked);
+      const icon = checked ? '&#9745;' : '&#9744;';
+      const style = checked ? 'text-decoration: line-through; color: #166534;' : '';
+      const notesHtml = item.notes ? `<div style="margin-left: 28px; font-size: 12px; color: #6b7280;">${item.notes}</div>` : '';
+      return `<div style="padding: 6px 0; border-bottom: 1px solid #f3f4f6;">
+        <span style="font-size: 16px; margin-right: 8px;">${icon}</span>
+        <span style="${style}">${item.item_name}</span>
+        ${notesHtml}
+      </div>`;
+    }).join('');
+
+    const html = `<!DOCTYPE html>
+<html>
+<head>
+  <title>Department Report - ${deptName}</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 40px; color: #1f2937; max-width: 800px; margin: 0 auto; }
+    h1 { font-size: 22px; margin-bottom: 4px; }
+    .meta { color: #6b7280; font-size: 14px; margin-bottom: 20px; }
+    .meta div { margin-bottom: 4px; }
+    .section { margin-bottom: 20px; }
+    .section-title { font-size: 14px; font-weight: 600; color: #374151; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .remarks { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px; font-size: 14px; }
+    .review-box { background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 12px; font-size: 14px; color: #166534; }
+    .status { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; }
+    .status-reviewed { background: #dcfce7; color: #166534; }
+    .status-pending { background: #fef9c3; color: #854d0e; }
+    @media print { body { padding: 20px; } }
+  </style>
+</head>
+<body>
+  <h1>Department Report: ${deptName}</h1>
+  <div class="meta">
+    <div><strong>Service:</strong> ${svcLabel}</div>
+    ${serviceDate ? `<div><strong>Date:</strong> ${serviceDate}</div>` : ''}
+    ${reporterName ? `<div><strong>Prepared by:</strong> ${reporterName}</div>` : ''}
+    ${submittedBy ? `<div><strong>Submitted by:</strong> ${submittedBy}</div>` : ''}
+    <div><strong>Status:</strong> <span class="status ${report.status === 'reviewed' ? 'status-reviewed' : 'status-pending'}">${report.status === 'reviewed' ? 'Reviewed' : 'Pending'}</span></div>
+  </div>
+
+  ${items.length > 0 ? `
+  <div class="section">
+    <div class="section-title">Checklist Items</div>
+    ${itemsHtml}
+  </div>` : ''}
+
+  ${report.remarks ? `
+  <div class="section">
+    <div class="section-title">Remarks</div>
+    <div class="remarks">${report.remarks}</div>
+  </div>` : ''}
+
+  ${report.status === 'reviewed' ? `
+  <div class="section">
+    <div class="section-title">Review</div>
+    <div class="review-box">
+      Reviewed${reviewedBy ? ` by ${reviewedBy}` : ''}${reviewedAt ? ` on ${reviewedAt}` : ''}
+      ${report.review_notes ? `<div style="margin-top: 6px;">${report.review_notes}</div>` : ''}
+    </div>
+  </div>` : ''}
+</body>
+</html>`;
+
+    const printWindow = window.open('', '_blank');
+    if (printWindow) {
+      printWindow.document.write(html);
+      printWindow.document.close();
+      printWindow.focus();
+      setTimeout(() => printWindow.print(), 300);
+    }
   };
 
   return (
@@ -512,8 +645,11 @@ function ViewReportsTab({ departments, services, isAdmin, setError, setMessage }
                           month: 'short', day: 'numeric', year: 'numeric',
                         }) : 'N/A'}
                       </span>
+                      {report.reporter_name && (
+                        <span>Prepared by: {report.reporter_name}</span>
+                      )}
                       {report.submitted_by_name && (
-                        <span>by {report.submitted_by_name}</span>
+                        <span>Submitted by: {report.submitted_by_name}</span>
                       )}
                       {report.created_at && (
                         <span>{new Date(report.created_at).toLocaleDateString('en-US', {
@@ -551,6 +687,25 @@ function ViewReportsTab({ departments, services, isAdmin, setError, setMessage }
                       </div>
                     ) : expandedReport ? (
                       <div>
+                        {/* Reporter name & Print button */}
+                        <div className="flex items-center justify-between mb-4">
+                          <div>
+                            {expandedReport.reporter_name && (
+                              <p className="text-sm text-gray-700">
+                                <span className="font-semibold">Prepared by:</span> {expandedReport.reporter_name}
+                              </p>
+                            )}
+                          </div>
+                          <button
+                            onClick={e => { e.stopPropagation(); handlePrintReport(expandedReport, departments, services); }}
+                            className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                            title="Print Report"
+                          >
+                            <Printer size={14} />
+                            Print Report
+                          </button>
+                        </div>
+
                         {/* Checklist items */}
                         {expandedReport.items && expandedReport.items.length > 0 && (
                           <div className="mb-4">
@@ -652,7 +807,217 @@ function ViewReportsTab({ departments, services, isAdmin, setError, setMessage }
 }
 
 /* ───────────────────────────────────────────────────────────
-   TAB 3 — Manage Departments (Admin Only)
+   TAB 3 — Department Members (Admin Only)
+   ─────────────────────────────────────────────────────────── */
+function DeptMembersTab({ departments, setError, setMessage }) {
+  const [selectedDeptId, setSelectedDeptId] = useState('');
+  const [members, setMembers] = useState([]);
+  const [allUsers, setAllUsers] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [showAssignModal, setShowAssignModal] = useState(false);
+  const [assignForm, setAssignForm] = useState({ user_id: '', role: 'member' });
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    loadUsers();
+  }, []);
+
+  useEffect(() => {
+    if (selectedDeptId) loadMembers();
+    else setMembers([]);
+  }, [selectedDeptId]);
+
+  const loadUsers = async () => {
+    try {
+      const data = await usersApi.list();
+      setAllUsers(data.users || []);
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const loadMembers = async () => {
+    setLoading(true);
+    try {
+      const data = await deptApi.getMembers(selectedDeptId);
+      setMembers(data.members || []);
+    } catch (err) {
+      setError(err.message);
+    }
+    setLoading(false);
+  };
+
+  const handleAssign = async () => {
+    if (!assignForm.user_id || !selectedDeptId) return;
+    setSaving(true);
+    try {
+      await deptApi.assignMember({
+        department_id: parseInt(selectedDeptId),
+        user_id: parseInt(assignForm.user_id),
+        role: assignForm.role,
+      });
+      setMessage('Member assigned to department');
+      setShowAssignModal(false);
+      setAssignForm({ user_id: '', role: 'member' });
+      loadMembers();
+    } catch (err) {
+      setError(err.message);
+    }
+    setSaving(false);
+  };
+
+  const handleRemove = async (memberId) => {
+    if (!confirm('Remove this member from the department?')) return;
+    try {
+      await deptApi.removeMember(memberId);
+      loadMembers();
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const roleLabels = { member: 'Member', leader: 'Leader', reporter: 'Reporter' };
+  const roleColors = {
+    leader: 'bg-purple-100 text-purple-700',
+    reporter: 'bg-blue-100 text-blue-700',
+    member: 'bg-gray-100 text-gray-700',
+  };
+
+  const assignedUserIds = members.map(m => m.user_id);
+  const availableUsers = allUsers.filter(u => !assignedUserIds.includes(u.id));
+
+  return (
+    <>
+      <div className="card mb-6">
+        <label className="label">Select Department</label>
+        <select
+          className="input"
+          value={selectedDeptId}
+          onChange={e => setSelectedDeptId(e.target.value)}
+        >
+          <option value="">-- Choose a department --</option>
+          {departments.map(d => (
+            <option key={d.id} value={d.id}>{d.name}</option>
+          ))}
+        </select>
+      </div>
+
+      {selectedDeptId && (
+        <>
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-semibold text-gray-900">
+              {departments.find(d => String(d.id) === String(selectedDeptId))?.name} - Members
+            </h2>
+            <button
+              onClick={() => { setAssignForm({ user_id: '', role: 'member' }); setShowAssignModal(true); }}
+              className="btn-primary"
+            >
+              <UserPlus size={16} /> Assign Member
+            </button>
+          </div>
+
+          {loading ? (
+            <div className="flex items-center justify-center py-16">
+              <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary-700"></div>
+            </div>
+          ) : members.length === 0 ? (
+            <div className="card text-center py-12">
+              <Users size={48} className="text-gray-300 mx-auto mb-3" />
+              <p className="text-gray-500">No members assigned to this department yet</p>
+              <button
+                onClick={() => { setAssignForm({ user_id: '', role: 'member' }); setShowAssignModal(true); }}
+                className="btn-gold mt-4"
+              >
+                <UserPlus size={16} /> Assign First Member
+              </button>
+            </div>
+          ) : (
+            <div className="card p-0 overflow-hidden">
+              <table className="w-full">
+                <thead className="bg-gray-50 border-b border-gray-200">
+                  <tr>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Name</th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Email</th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">System Role</th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Dept. Role</th>
+                    <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {members.map(m => (
+                    <tr key={m.id} className="hover:bg-gray-50">
+                      <td className="px-4 py-3 text-sm font-medium text-gray-900">{m.user_name}</td>
+                      <td className="px-4 py-3 text-sm text-gray-600">{m.user_email}</td>
+                      <td className="px-4 py-3 text-sm text-gray-500 capitalize">{m.user_role}</td>
+                      <td className="px-4 py-3">
+                        <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${roleColors[m.role] || roleColors.member}`}>
+                          {roleLabels[m.role] || m.role}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <button
+                          onClick={() => handleRemove(m.id)}
+                          className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg"
+                          title="Remove"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <Modal isOpen={showAssignModal} onClose={() => setShowAssignModal(false)} title="Assign Member to Department" size="sm">
+            <div className="space-y-4">
+              <div>
+                <label className="label">Select User</label>
+                <select
+                  className="input"
+                  value={assignForm.user_id}
+                  onChange={e => setAssignForm(f => ({ ...f, user_id: e.target.value }))}
+                >
+                  <option value="">-- Choose a user --</option>
+                  {availableUsers.map(u => (
+                    <option key={u.id} value={u.id}>{u.name} ({u.email})</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="label">Department Role</label>
+                <select
+                  className="input"
+                  value={assignForm.role}
+                  onChange={e => setAssignForm(f => ({ ...f, role: e.target.value }))}
+                >
+                  <option value="member">Member - General department member</option>
+                  <option value="leader">Leader - Manages the department</option>
+                  <option value="reporter">Reporter - Submits reports</option>
+                </select>
+              </div>
+              <div className="flex justify-end gap-3 pt-2">
+                <button onClick={() => setShowAssignModal(false)} className="btn-secondary">Cancel</button>
+                <button onClick={handleAssign} disabled={saving || !assignForm.user_id} className="btn-primary">
+                  {saving ? (
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" />
+                  ) : (
+                    <UserPlus size={16} />
+                  )}
+                  Assign
+                </button>
+              </div>
+            </div>
+          </Modal>
+        </>
+      )}
+    </>
+  );
+}
+
+/* ───────────────────────────────────────────────────────────
+   TAB 4 — Manage Departments (Admin Only)
    ─────────────────────────────────────────────────────────── */
 function ManageDepartmentsTab({ departments, reloadDepartments, setError, setMessage }) {
   // Department CRUD

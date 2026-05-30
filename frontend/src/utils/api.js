@@ -165,6 +165,7 @@ export const reports = {
   inactive: (days) => request('reports.php', { params: { action: 'inactive', days } }),
   directory: () => request('reports.php', { params: { action: 'directory' } }),
   attendanceSummary: (params) => request('reports.php', { params: { action: 'attendance_summary', ...params } }),
+  departmentHealth: (params) => request('reports.php', { params: { action: 'department_health', ...params } }),
 };
 
 // Periods (closed months)
@@ -239,6 +240,10 @@ export const departments = {
   getForService: (serviceId) => request('departments.php', { params: { action: 'for_service', service_id: serviceId } }),
   submitReport: (data) => request('departments.php', { method: 'POST', body: data, params: { action: 'submit_report' } }),
   reviewReport: (id, data) => request('departments.php', { method: 'PUT', body: data, params: { action: 'review_report', id } }),
+  getMembers: (deptId) => request('departments.php', { params: { action: 'members', id: deptId } }),
+  assignMember: (data) => request('departments.php', { method: 'POST', body: data, params: { action: 'assign_member' } }),
+  removeMember: (id) => request('departments.php', { method: 'DELETE', params: { action: 'remove_member', id } }),
+  healthReport: (params) => request('departments.php', { params: { action: 'health_report', ...params } }),
 };
 
 export { getToken, setToken, removeToken, getUser, setUser, ApiError };

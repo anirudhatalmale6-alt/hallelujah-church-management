@@ -160,6 +160,66 @@ switch ($action) {
         ]);
         break;
 
+    case 'department_health':
+        $months = max(1, min(12, (int)($_GET['months'] ?? 3)));
+        $deptId = isset($_GET['department_id']) ? (int)$_GET['department_id'] : null;
+        $startDate = date('Y-m-d', strtotime("-{$months} months"));
+
+        $depts = $db->query("SELECT id, name FROM departments WHERE is_active = 1 ORDER BY sort_order ASC")->fetchAll();
+        $svcStmt = $db->prepare("SELECT COUNT(*) FROM services WHERE date >= ?");
+        $svcStmt->execute([$startDate]);
+        $totalSvc = (int)$svcStmt->fetchColumn();
+
+        $deptStats = [];
+        foreach ($depts as $dept) {
+            if ($deptId && $dept['id'] != $deptId) continue;
+            $stmt = $db->prepare("
+                SELECT dr.id, dr.status, s.date as service_date, s.name as service_name,
+                    (SELECT COUNT(*) FROM department_report_items ri WHERE ri.report_id = dr.id) as total_items,
+                    (SELECT COUNT(*) FROM department_report_items ri WHERE ri.report_id = dr.id AND ri.is_checked = 1) as checked_items
+                FROM department_reports dr
+                JOIN services s ON dr.service_id = s.id
+                WHERE dr.department_id = ? AND s.date >= ?
+                ORDER BY s.date ASC
+            ");
+            $stmt->execute([$dept['id'], $startDate]);
+            $deptReports = $stmt->fetchAll();
+
+            $submitted = count($deptReports);
+            $reviewed = count(array_filter($deptReports, fn($r) => $r['status'] === 'reviewed'));
+            $ti = array_sum(array_column($deptReports, 'total_items'));
+            $ci = array_sum(array_column($deptReports, 'checked_items'));
+
+            $monthly = [];
+            foreach ($deptReports as $r) {
+                $m = substr($r['service_date'], 0, 7);
+                if (!isset($monthly[$m])) $monthly[$m] = ['reports' => 0, 'checked' => 0, 'total' => 0];
+                $monthly[$m]['reports']++;
+                $monthly[$m]['checked'] += (int)$r['checked_items'];
+                $monthly[$m]['total'] += (int)$r['total_items'];
+            }
+
+            $deptStats[] = [
+                'department_id' => (int)$dept['id'],
+                'department_name' => $dept['name'],
+                'reports_submitted' => $submitted,
+                'reports_reviewed' => $reviewed,
+                'submission_rate' => $totalSvc > 0 ? round(($submitted / $totalSvc) * 100, 1) : 0,
+                'total_items' => $ti,
+                'checked_items' => $ci,
+                'completion_rate' => $ti > 0 ? round(($ci / $ti) * 100, 1) : 0,
+                'monthly_breakdown' => $monthly,
+            ];
+        }
+
+        jsonResponse([
+            'departments' => $deptStats,
+            'total_services' => (int)$totalSvc,
+            'months' => $months,
+            'start_date' => $startDate,
+        ]);
+        break;
+
     default:
-        jsonResponse(['error' => 'Invalid action. Use: member_growth, engagement, inactive, directory, attendance_summary'], 400);
+        jsonResponse(['error' => 'Invalid action. Use: member_growth, engagement, inactive, directory, attendance_summary, department_health'], 400);
 }

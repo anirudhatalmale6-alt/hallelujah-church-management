@@ -102,13 +102,14 @@ switch ($method) {
             $error = validateRequired($data, ['name', 'type', 'day_of_week', 'time']);
             if ($error) jsonResponse(['error' => $error], 400);
 
-            $stmt = $db->prepare("INSERT INTO service_schedules (name, type, day_of_week, time, frequency) VALUES (?, ?, ?, ?, ?)");
+            $stmt = $db->prepare("INSERT INTO service_schedules (name, type, day_of_week, time, frequency, specific_date) VALUES (?, ?, ?, ?, ?, ?)");
             $stmt->execute([
                 trim($data['name']),
                 $data['type'],
-                (int)$data['day_of_week'],
+                (int)($data['day_of_week'] ?? 0),
                 $data['time'],
                 $data['frequency'] ?? 'weekly',
+                !empty($data['specific_date']) ? $data['specific_date'] : null,
             ]);
 
             jsonResponse(['message' => 'Schedule created', 'id' => (int)$db->lastInsertId()], 201);
@@ -122,7 +123,7 @@ switch ($method) {
         $data = getRequestBody();
         $fields = [];
         $params = [];
-        $allowed = ['name', 'type', 'day_of_week', 'time', 'frequency', 'is_active', 'auto_create_weeks_ahead'];
+        $allowed = ['name', 'type', 'day_of_week', 'time', 'frequency', 'is_active', 'auto_create_weeks_ahead', 'specific_date'];
 
         foreach ($allowed as $field) {
             if (array_key_exists($field, $data)) {
@@ -174,6 +175,13 @@ function getScheduleDates($schedule, $today, $weekOffset) {
             $target->modify("+{$weekOffset} weeks");
             if ($target >= $today) $dates[] = $target;
         }
+
+    } elseif ($freq === 'once') {
+        if ($weekOffset === 0 && !empty($schedule['specific_date'])) {
+            $target = new DateTime($schedule['specific_date']);
+            if ($target >= $today) $dates[] = $target;
+        }
+        return $dates;
 
     } elseif ($freq === 'monthly') {
         if ($weekOffset === 0) {

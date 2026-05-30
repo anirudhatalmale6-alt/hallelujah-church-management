@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { reports } from '../utils/api';
+import { reports, departments as deptApi } from '../utils/api';
 import { downloadCSV } from '../utils/format';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import {
   FileText, Download, Users, TrendingUp, AlertTriangle,
-  BarChart3, Calendar, UserX, FileSpreadsheet
+  BarChart3, Calendar, UserX, FileSpreadsheet, ClipboardCheck
 } from 'lucide-react';
 
 function formatMonth(monthStr) {
@@ -51,6 +51,13 @@ export default function ReportsPage() {
   const [inactiveThreshold, setInactiveThreshold] = useState(30);
   const [inactiveData, setInactiveData] = useState(null);
 
+  // Department Health state
+  const [deptHealthMonths, setDeptHealthMonths] = useState(3);
+  const [deptHealthData, setDeptHealthData] = useState(null);
+  const [departmentsList, setDepartmentsList] = useState([]);
+  const [selectedDeptId, setSelectedDeptId] = useState('');
+  const [deptDetailData, setDeptDetailData] = useState(null);
+
   const loadGrowth = useCallback(async () => {
     setLoading(true);
     setError('');
@@ -87,11 +94,45 @@ export default function ReportsPage() {
     setLoading(false);
   }, [inactiveThreshold]);
 
+  const loadDeptHealth = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const [healthData, deptsData] = await Promise.all([
+        reports.departmentHealth({ months: deptHealthMonths }),
+        deptApi.list(),
+      ]);
+      setDeptHealthData(healthData);
+      setDepartmentsList(deptsData.departments || []);
+    } catch (err) {
+      setError(err.message);
+    }
+    setLoading(false);
+  }, [deptHealthMonths]);
+
+  const loadDeptDetail = useCallback(async () => {
+    if (!selectedDeptId) { setDeptDetailData(null); return; }
+    setLoading(true);
+    setError('');
+    try {
+      const data = await deptApi.healthReport({ department_id: selectedDeptId, months: deptHealthMonths });
+      setDeptDetailData(data);
+    } catch (err) {
+      setError(err.message);
+    }
+    setLoading(false);
+  }, [selectedDeptId, deptHealthMonths]);
+
   useEffect(() => {
     if (tab === 'growth') loadGrowth();
     else if (tab === 'engagement') loadEngagement();
     else if (tab === 'inactive') loadInactive();
-  }, [tab, loadGrowth, loadEngagement, loadInactive]);
+    else if (tab === 'dept_health') loadDeptHealth();
+  }, [tab, loadGrowth, loadEngagement, loadInactive, loadDeptHealth]);
+
+  useEffect(() => {
+    if (tab === 'dept_health' && selectedDeptId) loadDeptDetail();
+  }, [selectedDeptId, tab, loadDeptDetail]);
 
   // PDF Generators
   const downloadGrowthPDF = () => {
@@ -206,10 +247,50 @@ export default function ReportsPage() {
     );
   };
 
+  const downloadDeptHealthPDF = () => {
+    if (!deptHealthData) return;
+    const doc = new jsPDF('landscape');
+    doc.setFontSize(18);
+    doc.text('Department Health Report', 14, 20);
+    doc.setFontSize(10);
+    doc.text(`Generated: ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`, 14, 28);
+    doc.text(`Period: Last ${deptHealthData.months} month(s)  |  Total Services: ${deptHealthData.total_services}`, 14, 34);
+
+    autoTable(doc, {
+      startY: 42,
+      head: [['Department', 'Reports Submitted', 'Submission Rate', 'Items Checked', 'Total Items', 'Completion Rate']],
+      body: deptHealthData.departments.map(d => [
+        d.department_name,
+        d.reports_submitted,
+        `${d.submission_rate}%`,
+        d.checked_items,
+        d.total_items,
+        `${d.completion_rate}%`,
+      ]),
+      styles: { fontSize: 10 },
+      headStyles: { fillColor: [59, 80, 120] },
+    });
+
+    doc.save('department-health-report.pdf');
+  };
+
+  const downloadDeptHealthCSV = () => {
+    if (!deptHealthData) return;
+    downloadCSV(
+      ['Department', 'Reports Submitted', 'Submission Rate (%)', 'Items Checked', 'Total Items', 'Completion Rate (%)'],
+      deptHealthData.departments.map(d => [
+        d.department_name, d.reports_submitted, d.submission_rate,
+        d.checked_items, d.total_items, d.completion_rate,
+      ]),
+      'department-health.csv'
+    );
+  };
+
   const tabs = [
     { key: 'growth', label: 'Member Growth', icon: TrendingUp },
     { key: 'engagement', label: 'Engagement', icon: BarChart3 },
     { key: 'inactive', label: 'Inactive Members', icon: UserX },
+    { key: 'dept_health', label: 'Dept. Health', icon: ClipboardCheck },
   ];
 
   return (
@@ -217,7 +298,7 @@ export default function ReportsPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Reports</h1>
-          <p className="text-gray-500 mt-1">Church membership and attendance analytics</p>
+          <p className="text-gray-500 mt-1">Church membership, attendance, and department analytics</p>
         </div>
       </div>
 
@@ -446,6 +527,205 @@ export default function ReportsPage() {
                   </table>
                 </div>
               </div>
+            </>
+          )}
+        </>
+      )}
+
+      {/* ============ DEPARTMENT HEALTH TAB ============ */}
+      {tab === 'dept_health' && !loading && (
+        <>
+          <div className="card mb-6">
+            <div className="flex flex-col sm:flex-row gap-3 items-end">
+              <div>
+                <label className="label">Period</label>
+                <select
+                  className="input"
+                  value={deptHealthMonths}
+                  onChange={e => setDeptHealthMonths(parseInt(e.target.value))}
+                >
+                  <option value={1}>Last 1 month</option>
+                  <option value={3}>Last 3 months</option>
+                  <option value={6}>Last 6 months</option>
+                  <option value={12}>Last 12 months</option>
+                </select>
+              </div>
+              <div>
+                <label className="label">Department Detail</label>
+                <select
+                  className="input"
+                  value={selectedDeptId}
+                  onChange={e => setSelectedDeptId(e.target.value)}
+                >
+                  <option value="">All Departments (Overview)</option>
+                  {departmentsList.map(d => (
+                    <option key={d.id} value={d.id}>{d.name}</option>
+                  ))}
+                </select>
+              </div>
+              <button onClick={downloadDeptHealthPDF} className="btn-primary" disabled={!deptHealthData}>
+                <Download size={16} /> PDF
+              </button>
+              <button onClick={downloadDeptHealthCSV} className="btn-secondary" disabled={!deptHealthData}>
+                <FileSpreadsheet size={16} /> CSV
+              </button>
+            </div>
+          </div>
+
+          {!selectedDeptId && deptHealthData && (
+            <>
+              <div className="card mb-4">
+                <div className="flex flex-wrap gap-6 text-sm text-gray-600">
+                  <span><strong className="text-gray-900">{deptHealthData.departments.length}</strong> departments</span>
+                  <span><strong className="text-gray-900">{deptHealthData.total_services}</strong> services in period</span>
+                  <span>Period: <strong className="text-gray-900">{deptHealthData.months} month(s)</strong></span>
+                </div>
+              </div>
+
+              <div className="card p-0 overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead className="bg-gray-50 border-b border-gray-200">
+                      <tr>
+                        <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Department</th>
+                        <th className="text-center px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Reports</th>
+                        <th className="text-center px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Submission Rate</th>
+                        <th className="text-center px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Items Checked</th>
+                        <th className="text-center px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Completion Rate</th>
+                        <th className="text-center px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Health</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {deptHealthData.departments.length === 0 ? (
+                        <tr>
+                          <td colSpan={6} className="text-center py-12 text-gray-400">
+                            <ClipboardCheck size={40} className="mx-auto mb-3" />
+                            No department data for this period
+                          </td>
+                        </tr>
+                      ) : (
+                        deptHealthData.departments.map(d => {
+                          const healthScore = (d.submission_rate * 0.5) + (d.completion_rate * 0.5);
+                          return (
+                            <tr
+                              key={d.department_id}
+                              className="hover:bg-gray-50 cursor-pointer"
+                              onClick={() => setSelectedDeptId(String(d.department_id))}
+                            >
+                              <td className="px-4 py-3 text-sm font-medium text-gray-900">{d.department_name}</td>
+                              <td className="px-4 py-3 text-sm text-center text-gray-700">
+                                {d.reports_submitted} / {deptHealthData.total_services}
+                              </td>
+                              <td className="px-4 py-3 text-center">
+                                <span className={`inline-block px-2.5 py-0.5 rounded-full text-xs font-semibold ${rateBgClass(d.submission_rate)}`}>
+                                  {d.submission_rate}%
+                                </span>
+                              </td>
+                              <td className="px-4 py-3 text-sm text-center text-gray-700">
+                                {d.checked_items} / {d.total_items}
+                              </td>
+                              <td className="px-4 py-3 text-center">
+                                <span className={`inline-block px-2.5 py-0.5 rounded-full text-xs font-semibold ${rateBgClass(d.completion_rate)}`}>
+                                  {d.completion_rate}%
+                                </span>
+                              </td>
+                              <td className="px-4 py-3 text-center">
+                                <div className="w-full h-3 bg-gray-100 rounded-full overflow-hidden max-w-[80px] mx-auto">
+                                  <div
+                                    className={`h-full rounded-full ${
+                                      healthScore >= 70 ? 'bg-green-500' : healthScore >= 40 ? 'bg-yellow-500' : 'bg-red-500'
+                                    }`}
+                                    style={{ width: `${healthScore}%` }}
+                                  />
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </>
+          )}
+
+          {selectedDeptId && deptDetailData && (
+            <>
+              <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 mb-6">
+                <div className="card text-center">
+                  <div className="text-2xl font-bold text-gray-900">{deptDetailData.reports_submitted}</div>
+                  <div className="text-xs text-gray-500">Reports Submitted</div>
+                </div>
+                <div className="card text-center">
+                  <div className={`text-2xl font-bold ${rateColorClass(deptDetailData.submission_rate)}`}>
+                    {deptDetailData.submission_rate}%
+                  </div>
+                  <div className="text-xs text-gray-500">Submission Rate</div>
+                </div>
+                <div className="card text-center">
+                  <div className="text-2xl font-bold text-gray-900">
+                    {deptDetailData.total_checked} / {deptDetailData.total_items}
+                  </div>
+                  <div className="text-xs text-gray-500">Items Checked</div>
+                </div>
+                <div className="card text-center">
+                  <div className={`text-2xl font-bold ${rateColorClass(deptDetailData.completion_rate)}`}>
+                    {deptDetailData.completion_rate}%
+                  </div>
+                  <div className="text-xs text-gray-500">Completion Rate</div>
+                </div>
+              </div>
+
+              {deptDetailData.reports && deptDetailData.reports.length > 0 && (
+                <div className="card p-0 overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="w-full">
+                      <thead className="bg-gray-50 border-b border-gray-200">
+                        <tr>
+                          <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Service</th>
+                          <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Date</th>
+                          <th className="text-center px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Checked</th>
+                          <th className="text-center px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Status</th>
+                          <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Reporter</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {deptDetailData.reports.map(r => (
+                          <tr key={r.id} className="hover:bg-gray-50">
+                            <td className="px-4 py-3 text-sm font-medium text-gray-900">{r.service_name}</td>
+                            <td className="px-4 py-3 text-sm text-gray-600">{formatDate(r.service_date)}</td>
+                            <td className="px-4 py-3 text-sm text-center">
+                              <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-semibold ${
+                                r.total_items > 0 && r.checked_items === r.total_items
+                                  ? 'bg-green-100 text-green-700'
+                                  : 'bg-gray-100 text-gray-700'
+                              }`}>
+                                {r.checked_items}/{r.total_items}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 text-center">
+                              <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${
+                                r.status === 'reviewed' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'
+                              }`}>
+                                {r.status === 'reviewed' ? 'Reviewed' : 'Pending'}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 text-sm text-gray-500">{r.reporter_name || r.submitted_by_name || '-'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {(!deptDetailData.reports || deptDetailData.reports.length === 0) && (
+                <div className="card text-center py-12">
+                  <ClipboardCheck size={40} className="text-gray-300 mx-auto mb-3" />
+                  <p className="text-gray-500">No reports found for {deptDetailData.department_name} in this period</p>
+                </div>
+              )}
             </>
           )}
         </>

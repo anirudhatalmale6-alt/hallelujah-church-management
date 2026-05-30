@@ -48,6 +48,7 @@ export default function UsersPage() {
     { key: 'services', label: 'Services' },
     { key: 'checklist', label: 'Checklist' },
     { key: 'reports', label: 'Reports' },
+    { key: 'department_reports', label: 'Dept. Reports' },
   ];
 
   const loadUsers = useCallback(async () => {
