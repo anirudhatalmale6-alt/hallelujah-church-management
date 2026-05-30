@@ -81,6 +81,7 @@ export default function MemberDetailPage() {
       case 'active': return <span className="badge-green">Active</span>;
       case 'inactive': return <span className="badge-red">Inactive</span>;
       case 'visitor': return <span className="badge-blue">Visitor</span>;
+      case 'non_member_attendee': return <span className="badge-yellow">Non-Member Attendee</span>;
       default: return <span className="badge-gray">{status}</span>;
     }
   };

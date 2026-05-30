@@ -149,6 +149,7 @@ export default function MembersPage() {
       case 'active': return <span className="badge-green">Active</span>;
       case 'inactive': return <span className="badge-red">Inactive</span>;
       case 'visitor': return <span className="badge-blue">Visitor</span>;
+      case 'non_member_attendee': return <span className="badge-yellow">Non-Member Attendee</span>;
       default: return <span className="badge-gray">{status}</span>;
     }
   };
@@ -198,6 +199,7 @@ export default function MembersPage() {
             <option value="active">Active</option>
             <option value="inactive">Inactive</option>
             <option value="visitor">Visitor</option>
+            <option value="non_member_attendee">Non-Member Attendee</option>
           </select>
           {familyGroups.length > 0 && (
             <select
@@ -356,7 +358,6 @@ export default function MembersPage() {
                 <option value="">-- Select --</option>
                 <option value="male">Male</option>
                 <option value="female">Female</option>
-                <option value="other">Other</option>
               </select>
             </div>
             <div>
@@ -382,6 +383,7 @@ export default function MembersPage() {
                 <option value="active">Active</option>
                 <option value="inactive">Inactive</option>
                 <option value="visitor">Visitor</option>
+                <option value="non_member_attendee">Non-Member Attendee</option>
               </select>
             </div>
 

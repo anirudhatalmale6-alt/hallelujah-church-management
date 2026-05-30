@@ -39,7 +39,7 @@ export default function ReportsPage() {
   const [error, setError] = useState('');
 
   // Member Growth state
-  const [growthPeriod, setGrowthPeriod] = useState(6);
+  const [growthPeriod, setGrowthPeriod] = useState(3);
   const [growthData, setGrowthData] = useState(null);
 
   // Engagement state
@@ -234,9 +234,10 @@ export default function ReportsPage() {
                   value={growthPeriod}
                   onChange={e => setGrowthPeriod(parseInt(e.target.value))}
                 >
+                  <option value={3}>Last 3 months</option>
                   <option value={6}>Last 6 months</option>
                   <option value={12}>Last 12 months</option>
-                  <option value={24}>Last 24 months</option>
+                  <option value={24}>Last 24+ months</option>
                 </select>
               </div>
               <button onClick={downloadGrowthPDF} className="btn-primary" disabled={!growthData}>

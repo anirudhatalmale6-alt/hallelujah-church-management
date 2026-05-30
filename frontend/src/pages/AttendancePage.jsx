@@ -4,7 +4,7 @@ import { attendance as attendanceApi, services as servicesApi, services as svcAp
 import { formatTime12h } from '../utils/format';
 import {
   UserCheck, Check, X, Clock, Search, AlertCircle,
-  ChevronDown, Save, Calendar, BarChart3, Users, TrendingUp
+  ChevronDown, Save, Calendar, BarChart3, Users, TrendingUp, MessageSquare
 } from 'lucide-react';
 
 const serviceTypeLabels = {
@@ -112,9 +112,23 @@ export default function AttendancePage() {
   }, [tab, loadHistory]);
 
   const toggleStatus = (memberId, status) => {
+    setRecords(prev => {
+      if (prev[memberId]?.status === status) {
+        const next = { ...prev };
+        delete next[memberId];
+        return next;
+      }
+      return {
+        ...prev,
+        [memberId]: { ...prev[memberId], status, notes: prev[memberId]?.notes || '' }
+      };
+    });
+  };
+
+  const updateNotes = (memberId, notes) => {
     setRecords(prev => ({
       ...prev,
-      [memberId]: { ...prev[memberId], status, notes: prev[memberId]?.notes || '' }
+      [memberId]: { ...prev[memberId], notes, status: prev[memberId]?.status || 'present' }
     }));
   };
 
@@ -141,13 +155,34 @@ export default function AttendancePage() {
         status: data.status,
         notes: data.notes,
       }));
-      if (recordsArray.length === 0) {
+
+      const unmarkedIds = attendanceData
+        ? attendanceData.attendance
+            .filter(a => !records[a.member_id])
+            .map(a => a.member_id)
+        : [];
+
+      for (const memberId of unmarkedIds) {
+        const existing = attendanceData.attendance.find(a => a.member_id === memberId);
+        if (existing) {
+          try {
+            await attendanceApi.delete(existing.id);
+          } catch {}
+        }
+      }
+
+      if (recordsArray.length > 0) {
+        const result = await attendanceApi.bulkMark(parseInt(selectedServiceId), recordsArray);
+        setMessage(unmarkedIds.length > 0
+          ? `${result.message} (${unmarkedIds.length} unmarked)`
+          : result.message);
+      } else if (unmarkedIds.length > 0) {
+        setMessage(`${unmarkedIds.length} attendance record(s) removed`);
+      } else {
         setError('No attendance records to save');
         setSaving(false);
         return;
       }
-      const result = await attendanceApi.bulkMark(parseInt(selectedServiceId), recordsArray);
-      setMessage(result.message);
       loadAttendance();
     } catch (err) {
       setError(err.message);
@@ -380,43 +415,56 @@ export default function AttendancePage() {
                     filteredMembers.map(m => {
                       const rec = records[m.id];
                       return (
-                        <div key={m.id} className="flex items-center gap-3 px-4 py-3 hover:bg-gray-50">
-                          <div className="w-9 h-9 bg-primary-700 rounded-full flex items-center justify-center text-white text-sm font-medium shrink-0">
-                            {m.first_name?.charAt(0)}{m.last_name?.charAt(0)}
+                        <div key={m.id} className="px-4 py-3 hover:bg-gray-50">
+                          <div className="flex items-center gap-3">
+                            <div className="w-9 h-9 bg-primary-700 rounded-full flex items-center justify-center text-white text-sm font-medium shrink-0">
+                              {m.first_name?.charAt(0)}{m.last_name?.charAt(0)}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="font-medium text-gray-900 text-sm">{m.first_name} {m.last_name}</div>
+                              <div className="text-xs text-gray-500 truncate">{m.phone || m.email || ''}</div>
+                            </div>
+                            <div className="flex gap-1.5 shrink-0">
+                              <button
+                                onClick={() => toggleStatus(m.id, 'present')}
+                                className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-medium transition-colors ${
+                                  rec?.status === 'present' ? statusColors.present : statusInactive
+                                }`}
+                                title="Present (click again to unmark)"
+                              >
+                                <Check size={16} />
+                              </button>
+                              <button
+                                onClick={() => toggleStatus(m.id, 'late')}
+                                className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-medium transition-colors ${
+                                  rec?.status === 'late' ? statusColors.late : statusInactive
+                                }`}
+                                title="Late (click again to unmark)"
+                              >
+                                <Clock size={16} />
+                              </button>
+                              <button
+                                onClick={() => toggleStatus(m.id, 'absent')}
+                                className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-medium transition-colors ${
+                                  rec?.status === 'absent' ? statusColors.absent : statusInactive
+                                }`}
+                                title="Absent (click again to unmark)"
+                              >
+                                <X size={16} />
+                              </button>
+                            </div>
                           </div>
-                          <div className="flex-1 min-w-0">
-                            <div className="font-medium text-gray-900 text-sm">{m.first_name} {m.last_name}</div>
-                            <div className="text-xs text-gray-500 truncate">{m.phone || m.email || ''}</div>
-                          </div>
-                          <div className="flex gap-1.5 shrink-0">
-                            <button
-                              onClick={() => toggleStatus(m.id, 'present')}
-                              className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-medium transition-colors ${
-                                rec?.status === 'present' ? statusColors.present : statusInactive
-                              }`}
-                              title="Present"
-                            >
-                              <Check size={16} />
-                            </button>
-                            <button
-                              onClick={() => toggleStatus(m.id, 'late')}
-                              className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-medium transition-colors ${
-                                rec?.status === 'late' ? statusColors.late : statusInactive
-                              }`}
-                              title="Late"
-                            >
-                              <Clock size={16} />
-                            </button>
-                            <button
-                              onClick={() => toggleStatus(m.id, 'absent')}
-                              className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-medium transition-colors ${
-                                rec?.status === 'absent' ? statusColors.absent : statusInactive
-                              }`}
-                              title="Absent"
-                            >
-                              <X size={16} />
-                            </button>
-                          </div>
+                          {rec && (
+                            <div className="ml-12 mt-1.5">
+                              <input
+                                type="text"
+                                placeholder="Add notes/remarks..."
+                                value={rec.notes || ''}
+                                onChange={e => updateNotes(m.id, e.target.value)}
+                                className="w-full text-xs px-2 py-1 border border-gray-200 rounded-md text-gray-600 placeholder-gray-400 focus:outline-none focus:border-primary-400"
+                              />
+                            </div>
+                          )}
                         </div>
                       );
                     })
