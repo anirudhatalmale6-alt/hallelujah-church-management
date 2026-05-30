@@ -374,45 +374,44 @@ export default function AttendancePage() {
 
               {/* Service Notes & Counts */}
               <div className="card mb-4">
-                <div className="mb-3">
-                  <label className="label">Service Notes / Remarks</label>
-                  <textarea
-                    className="input"
-                    rows={3}
-                    value={serviceNotes}
-                    onChange={e => setServiceNotes(e.target.value)}
-                    placeholder="Preacher's name, sermon title, scripture readings, general remarks..."
-                  />
-                </div>
                 <div className="flex flex-col sm:flex-row gap-3 items-end">
                   <div className="flex-1">
-                    <label className="label">Visitors (Guests)</label>
+                    <label className="label">Service Notes / Remarks</label>
+                    <textarea
+                      className="input"
+                      rows={2}
+                      value={serviceNotes}
+                      onChange={e => setServiceNotes(e.target.value)}
+                      placeholder="Preacher, sermon title, scriptures..."
+                    />
+                  </div>
+                  <div className="w-32">
+                    <label className="label">Visitors</label>
                     <input
                       type="number"
                       min="0"
                       className="input"
                       value={visitorCount}
                       onChange={e => setVisitorCount(e.target.value)}
-                      placeholder="Number of visitors"
+                      placeholder="0"
                     />
                   </div>
-                  <div className="flex-1">
-                    <label className="label">Total Head Count (Manual)</label>
+                  <div className="w-32">
+                    <label className="label">Head Count</label>
                     <input
                       type="number"
                       min="0"
                       className="input"
                       value={headCount}
                       onChange={e => setHeadCount(e.target.value)}
-                      placeholder="Total people present"
+                      placeholder="0"
                     />
                   </div>
                   <button onClick={saveCounts} disabled={savingCounts} className="btn-secondary whitespace-nowrap">
                     {savingCounts ? <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600" /> : <Save size={16} />}
-                    Save Service Info
+                    Save
                   </button>
                 </div>
-                <p className="text-xs text-gray-400 mt-2">Use head count for large events where marking each member individually is not necessary.</p>
               </div>
 
               <div className="card mb-4">
