@@ -36,6 +36,7 @@ export default function AttendancePage() {
   const [savingCounts, setSavingCounts] = useState(false);
   const [visitorCount, setVisitorCount] = useState(0);
   const [headCount, setHeadCount] = useState(0);
+  const [serviceNotes, setServiceNotes] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
@@ -81,6 +82,7 @@ export default function AttendancePage() {
       setAttendanceData(data);
       setVisitorCount(parseInt(data.service?.visitor_count) || 0);
       setHeadCount(parseInt(data.service?.head_count) || 0);
+      setServiceNotes(data.service?.notes || '');
       const rec = {};
       data.attendance.forEach(a => {
         rec[a.member_id] = { status: a.status, notes: a.notes || '' };
@@ -207,8 +209,9 @@ export default function AttendancePage() {
       await svcApi.update(parseInt(selectedServiceId), {
         visitor_count: parseInt(visitorCount) || 0,
         head_count: parseInt(headCount) || 0,
+        notes: serviceNotes,
       });
-      setMessage('Visitor & head count saved');
+      setMessage('Service info saved');
     } catch (err) {
       setError(err.message);
     }
@@ -369,8 +372,18 @@ export default function AttendancePage() {
                 </div>
               </div>
 
-              {/* Visitor & Head Count */}
+              {/* Service Notes & Counts */}
               <div className="card mb-4">
+                <div className="mb-3">
+                  <label className="label">Service Notes / Remarks</label>
+                  <textarea
+                    className="input"
+                    rows={3}
+                    value={serviceNotes}
+                    onChange={e => setServiceNotes(e.target.value)}
+                    placeholder="Preacher's name, sermon title, scripture readings, general remarks..."
+                  />
+                </div>
                 <div className="flex flex-col sm:flex-row gap-3 items-end">
                   <div className="flex-1">
                     <label className="label">Visitors (Guests)</label>
@@ -396,7 +409,7 @@ export default function AttendancePage() {
                   </div>
                   <button onClick={saveCounts} disabled={savingCounts} className="btn-secondary whitespace-nowrap">
                     {savingCounts ? <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600" /> : <Save size={16} />}
-                    Save Counts
+                    Save Service Info
                   </button>
                 </div>
                 <p className="text-xs text-gray-400 mt-2">Use head count for large events where marking each member individually is not necessary.</p>
