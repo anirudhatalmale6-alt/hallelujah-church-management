@@ -50,7 +50,7 @@ switch ($action) {
 
         $stmt = $db->prepare("
             SELECT
-                m.id, m.first_name, m.last_name, m.status, m.family_group,
+                m.id, m.first_name, m.last_name, m.status as member_status, m.family_group,
                 COUNT(DISTINCT s.id) as total_services,
                 COUNT(CASE WHEN a.status = 'present' OR a.status = 'late' THEN 1 END) as attended,
                 COUNT(CASE WHEN a.status = 'absent' THEN 1 END) as absent,
@@ -58,7 +58,7 @@ switch ($action) {
             FROM members m
             LEFT JOIN attendance a ON a.member_id = m.id
             LEFT JOIN services s ON a.service_id = s.id AND s.date >= DATE_SUB(CURDATE(), INTERVAL ? MONTH)
-            WHERE m.status = 'active'
+            WHERE m.status IN ('active', 'non_member_attendee')
             GROUP BY m.id
             ORDER BY attended DESC, m.last_name ASC
         ");
@@ -96,7 +96,7 @@ switch ($action) {
             FROM members m
             LEFT JOIN attendance a ON a.member_id = m.id
             LEFT JOIN services s ON a.service_id = s.id
-            WHERE m.status = 'active'
+            WHERE m.status IN ('active', 'non_member_attendee')
             GROUP BY m.id
             HAVING last_attended IS NULL OR days_absent >= ?
             ORDER BY days_absent DESC
@@ -125,9 +125,12 @@ switch ($action) {
             SELECT s.id, s.name, s.date, s.time, s.type, s.visitor_count, s.head_count,
                 COUNT(CASE WHEN a.status = 'present' OR a.status = 'late' THEN 1 END) as attended,
                 COUNT(CASE WHEN a.status = 'absent' THEN 1 END) as absent,
-                COUNT(a.id) as total_marked
+                COUNT(a.id) as total_marked,
+                COUNT(CASE WHEN (a.status = 'present' OR a.status = 'late') AND m.status = 'active' THEN 1 END) as members_attended,
+                COUNT(CASE WHEN (a.status = 'present' OR a.status = 'late') AND m.status = 'non_member_attendee' THEN 1 END) as non_members_attended
             FROM services s
             LEFT JOIN attendance a ON a.service_id = s.id
+            LEFT JOIN members m ON a.member_id = m.id
             WHERE s.date BETWEEN ? AND ?
             GROUP BY s.id
             ORDER BY s.date DESC, s.time DESC
@@ -138,6 +141,8 @@ switch ($action) {
         $totalAttended = array_sum(array_column($services, 'attended'));
         $totalAbsent = array_sum(array_column($services, 'absent'));
         $totalVisitors = array_sum(array_column($services, 'visitor_count'));
+        $totalMembersAttended = array_sum(array_column($services, 'members_attended'));
+        $totalNonMembersAttended = array_sum(array_column($services, 'non_members_attended'));
 
         jsonResponse([
             'services' => $services,
@@ -146,6 +151,8 @@ switch ($action) {
                 'total_attended' => $totalAttended,
                 'total_absent' => $totalAbsent,
                 'total_visitors' => (int)$totalVisitors,
+                'total_members_attended' => $totalMembersAttended,
+                'total_non_members_attended' => $totalNonMembersAttended,
                 'avg_attendance' => count($services) > 0 ? round($totalAttended / count($services), 1) : 0,
             ],
             'from' => $from,

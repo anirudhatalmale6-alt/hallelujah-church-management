@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { attendance as attendanceApi, services as servicesApi, services as svcApi } from '../utils/api';
-import { formatTime12h } from '../utils/format';
+import { formatTime12h, downloadCSV } from '../utils/format';
 import {
   UserCheck, Check, X, Clock, Search, AlertCircle,
   ChevronDown, Save, Calendar, BarChart3, Users, TrendingUp, MessageSquare,
-  ArrowDownAZ, ArrowDownZA
+  ArrowDownAZ, ArrowDownZA, Download
 } from 'lucide-react';
 
 const serviceTypeLabels = {
@@ -269,6 +269,30 @@ export default function AttendancePage() {
     const d = new Date(parseInt(y), parseInt(m) - 1, 1);
     return d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
   }
+
+  const exportHistoryCSV = () => {
+    if (!history.length) return;
+    if (groupBy === 'service') {
+      downloadCSV(
+        ['Service', 'Date', 'Type', 'Attended', 'Non-Members', 'Visitors', 'Absent', 'Rate (%)'],
+        history.map(h => {
+          const rate = h.total_marked > 0 ? Math.round((parseInt(h.attended) / parseInt(h.total_marked)) * 100) : 0;
+          return [h.name, h.date, getTypeLabel(h.type), h.attended, h.non_members_attended || 0, h.visitor_count || 0, h.absent, `${rate}%`];
+        }),
+        `attendance-history-${historyFrom}-to-${historyTo}.csv`
+      );
+    } else {
+      downloadCSV(
+        ['Period', 'Services', 'Avg Attendance', 'Total Attended', 'Total Absent', 'Rate (%)'],
+        history.map(h => {
+          const rate = parseInt(h.total_marked) > 0 ? Math.round((parseInt(h.total_attended) / parseInt(h.total_marked)) * 100) : 0;
+          const label = groupBy === 'week' ? formatWeekRange(h.period_start, h.period_end) : formatMonth(h.period_key);
+          return [label, h.service_count, h.avg_attended, h.total_attended, h.total_absent, `${rate}%`];
+        }),
+        `attendance-${groupBy}-${historyFrom}-to-${historyTo}.csv`
+      );
+    }
+  };
 
   return (
     <div>
@@ -552,6 +576,11 @@ export default function AttendancePage() {
               <button onClick={loadHistory} className="btn-primary">
                 <BarChart3 size={16} /> Load
               </button>
+              {history.length > 0 && (
+                <button onClick={exportHistoryCSV} className="btn-secondary">
+                  <Download size={16} /> CSV
+                </button>
+              )}
             </div>
           </div>
 
@@ -574,8 +603,9 @@ export default function AttendancePage() {
                       <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Date</th>
                       <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Type</th>
                       <th className="text-center px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Attended</th>
+                      <th className="text-center px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Non-Mbr</th>
+                      <th className="text-center px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Visitors</th>
                       <th className="text-center px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Absent</th>
-                      <th className="text-center px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Total</th>
                       <th className="text-center px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Rate</th>
                     </tr>
                   </thead>
@@ -596,8 +626,9 @@ export default function AttendancePage() {
                           </td>
                           <td className="px-4 py-3 text-sm text-gray-500">{getTypeLabel(h.type)}</td>
                           <td className="px-4 py-3 text-sm text-center font-medium text-green-600">{h.attended}</td>
+                          <td className="px-4 py-3 text-sm text-center font-medium text-yellow-600">{h.non_members_attended || 0}</td>
+                          <td className="px-4 py-3 text-sm text-center font-medium text-blue-600">{h.visitor_count || 0}</td>
                           <td className="px-4 py-3 text-sm text-center font-medium text-red-500">{h.absent}</td>
-                          <td className="px-4 py-3 text-sm text-center text-gray-600">{h.total_marked}</td>
                           <td className="px-4 py-3 text-center">
                             <span className={`text-sm font-medium ${rate >= 70 ? 'text-green-600' : rate >= 40 ? 'text-yellow-600' : 'text-red-500'}`}>
                               {rate}%

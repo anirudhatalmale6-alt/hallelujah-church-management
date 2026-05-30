@@ -18,6 +18,7 @@ import PendingChangesPage from './pages/PendingChangesPage';
 import SettingsPage from './pages/SettingsPage';
 import ReportsPage from './pages/ReportsPage';
 import ChecklistPage from './pages/ChecklistPage';
+import DepartmentReportsPage from './pages/DepartmentReportsPage';
 import InstallPage from './pages/InstallPage';
 
 function ProtectedRoute({ children, adminOnly = false }) {
@@ -68,6 +69,7 @@ function AppRoutes() {
       <Route path="/system/public/groups" element={<ProtectedRoute><GroupsPage /></ProtectedRoute>} />
       <Route path="/system/public/reports" element={<ProtectedRoute><ReportsPage /></ProtectedRoute>} />
       <Route path="/system/public/checklist" element={<ProtectedRoute><ChecklistPage /></ProtectedRoute>} />
+      <Route path="/system/public/department-reports" element={<ProtectedRoute><DepartmentReportsPage /></ProtectedRoute>} />
       <Route path="/system/public/users" element={<ProtectedRoute adminOnly><UsersPage /></ProtectedRoute>} />
       <Route path="/system/public/periods" element={<ProtectedRoute adminOnly><PeriodsPage /></ProtectedRoute>} />
       <Route path="/system/public/pending" element={<ProtectedRoute adminOnly><PendingChangesPage /></ProtectedRoute>} />

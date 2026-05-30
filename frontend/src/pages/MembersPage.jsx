@@ -2,11 +2,12 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { members as membersApi, groups as groupsApi, households as householdsApi } from '../utils/api';
 import { useAuth } from '../contexts/AuthContext';
+import { downloadCSV } from '../utils/format';
 import Modal from '../components/Modal';
 import Pagination from '../components/Pagination';
 import {
   Search, Plus, Edit2, Trash2, Eye, Filter, Users,
-  UserPlus, AlertCircle, Check, X, ArrowDownAZ
+  UserPlus, AlertCircle, Check, X, ArrowDownAZ, Download
 } from 'lucide-react';
 
 const emptyMember = {
@@ -156,6 +157,20 @@ export default function MembersPage() {
 
   const updateField = (field, value) => setForm(f => ({ ...f, [field]: value }));
 
+  const exportCSV = async () => {
+    try {
+      const data = await membersApi.list({ limit: 9999 });
+      const headers = ['First Name', 'Last Name', 'Email', 'Phone', 'Gender', 'Date of Birth', 'Address', 'City', 'Status', 'Group', 'Membership Date', 'Wedding Date'];
+      const rows = (data.members || []).map(m => [
+        m.first_name, m.last_name, m.email, m.phone, m.gender, m.date_of_birth,
+        m.address, m.city, m.status, m.family_group, m.membership_date, m.wedding_date,
+      ]);
+      downloadCSV(headers, rows, `members-${new Date().toISOString().split('T')[0]}.csv`);
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
   return (
     <div>
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
@@ -163,9 +178,14 @@ export default function MembersPage() {
           <h1 className="text-2xl font-bold text-gray-900">Members</h1>
           <p className="text-gray-500 mt-1">{total} church members</p>
         </div>
-        <button onClick={openNew} className="btn-primary">
-          <UserPlus size={18} /> Add Member
-        </button>
+        <div className="flex gap-2">
+          <button onClick={exportCSV} className="btn-secondary">
+            <Download size={18} /> Export CSV
+          </button>
+          <button onClick={openNew} className="btn-primary">
+            <UserPlus size={18} /> Add Member
+          </button>
+        </div>
       </div>
 
       {/* Filters */}

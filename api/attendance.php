@@ -161,12 +161,14 @@ switch ($method) {
 
             } else {
                 $stmt = $db->prepare("
-                    SELECT s.id, s.name, s.date, s.time, s.type,
+                    SELECT s.id, s.name, s.date, s.time, s.type, s.visitor_count,
                         COUNT(CASE WHEN a.status = 'present' OR a.status = 'late' THEN 1 END) as attended,
                         COUNT(CASE WHEN a.status = 'absent' THEN 1 END) as absent,
-                        COUNT(a.id) as total_marked
+                        COUNT(a.id) as total_marked,
+                        COUNT(CASE WHEN (a.status = 'present' OR a.status = 'late') AND m.status = 'non_member_attendee' THEN 1 END) as non_members_attended
                     FROM services s
                     LEFT JOIN attendance a ON a.service_id = s.id
+                    LEFT JOIN members m ON a.member_id = m.id
                     WHERE s.date BETWEEN ? AND ?
                     GROUP BY s.id
                     ORDER BY s.date DESC, s.time DESC

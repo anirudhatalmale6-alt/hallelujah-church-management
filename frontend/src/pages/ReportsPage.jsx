@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { reports } from '../utils/api';
+import { downloadCSV } from '../utils/format';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import {
   FileText, Download, Users, TrendingUp, AlertTriangle,
-  BarChart3, Calendar, UserX
+  BarChart3, Calendar, UserX, FileSpreadsheet
 } from 'lucide-react';
 
 function formatMonth(monthStr) {
@@ -172,6 +173,39 @@ export default function ReportsPage() {
     doc.save('inactive-members-report.pdf');
   };
 
+  const downloadGrowthCSV = () => {
+    if (!growthData) return;
+    downloadCSV(
+      ['Month', 'New Members', 'Active New', 'Visitor New'],
+      growthData.growth.map(g => [formatMonth(g.month), g.new_members, g.active_new, g.visitor_new]),
+      'member-growth.csv'
+    );
+  };
+
+  const downloadEngagementCSV = () => {
+    if (!engagementData) return;
+    downloadCSV(
+      ['Name', 'Status', 'Attended', 'Rate (%)', 'Last Attended', 'Group'],
+      engagementData.members.map(m => [
+        `${m.first_name} ${m.last_name}`, m.member_status || 'active',
+        m.attended, `${m.attendance_rate}%`, formatDate(m.last_attended), m.family_group || '',
+      ]),
+      'engagement-report.csv'
+    );
+  };
+
+  const downloadInactiveCSV = () => {
+    if (!inactiveData) return;
+    downloadCSV(
+      ['Name', 'Phone', 'Email', 'Group', 'Last Attended', 'Days Absent'],
+      inactiveData.inactive_members.map(m => [
+        `${m.first_name} ${m.last_name}`, m.phone || '', m.email || '',
+        m.family_group || '', formatDate(m.last_attended), m.days_absent,
+      ]),
+      'inactive-members.csv'
+    );
+  };
+
   const tabs = [
     { key: 'growth', label: 'Member Growth', icon: TrendingUp },
     { key: 'engagement', label: 'Engagement', icon: BarChart3 },
@@ -241,7 +275,10 @@ export default function ReportsPage() {
                 </select>
               </div>
               <button onClick={downloadGrowthPDF} className="btn-primary" disabled={!growthData}>
-                <Download size={16} /> Download PDF
+                <Download size={16} /> PDF
+              </button>
+              <button onClick={downloadGrowthCSV} className="btn-secondary" disabled={!growthData}>
+                <FileSpreadsheet size={16} /> CSV
               </button>
             </div>
           </div>
@@ -343,7 +380,10 @@ export default function ReportsPage() {
                 </select>
               </div>
               <button onClick={downloadEngagementPDF} className="btn-primary" disabled={!engagementData}>
-                <Download size={16} /> Download PDF
+                <Download size={16} /> PDF
+              </button>
+              <button onClick={downloadEngagementCSV} className="btn-secondary" disabled={!engagementData}>
+                <FileSpreadsheet size={16} /> CSV
               </button>
             </div>
           </div>
@@ -387,6 +427,9 @@ export default function ReportsPage() {
                             <td className="px-4 py-3 text-sm text-gray-400">{idx + 1}</td>
                             <td className="px-4 py-3 text-sm font-medium text-gray-900">
                               {m.first_name} {m.last_name}
+                              {m.member_status === 'non_member_attendee' && (
+                                <span className="ml-2 inline-block px-1.5 py-0.5 text-[10px] font-medium bg-yellow-100 text-yellow-700 rounded-full">Non-Member</span>
+                              )}
                             </td>
                             <td className="px-4 py-3 text-sm text-center text-gray-700">{m.attended}</td>
                             <td className="px-4 py-3 text-center">
@@ -427,7 +470,10 @@ export default function ReportsPage() {
                 </select>
               </div>
               <button onClick={downloadInactivePDF} className="btn-primary" disabled={!inactiveData}>
-                <Download size={16} /> Download PDF
+                <Download size={16} /> PDF
+              </button>
+              <button onClick={downloadInactiveCSV} className="btn-secondary" disabled={!inactiveData}>
+                <FileSpreadsheet size={16} /> CSV
               </button>
             </div>
           </div>

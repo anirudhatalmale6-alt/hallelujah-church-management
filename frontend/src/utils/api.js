@@ -205,4 +205,40 @@ export const settings = {
   update: (settingsData) => request('settings.php', { method: 'PUT', body: { settings: settingsData } }),
 };
 
+// Backups
+export const backups = {
+  list: () => request('backup.php'),
+  create: () => request('backup.php', { method: 'POST' }),
+  delete: (file) => request('backup.php', { method: 'DELETE', params: { file } }),
+  downloadUrl: (file) => `${API_BASE}/backup.php?action=download&file=${encodeURIComponent(file)}&token=${getToken()}`,
+};
+
+// Service Schedules
+export const schedules = {
+  list: () => request('schedules.php'),
+  create: (data) => request('schedules.php', { method: 'POST', body: data }),
+  update: (id, data) => request('schedules.php', { method: 'PUT', body: data, params: { id } }),
+  delete: (id) => request('schedules.php', { method: 'DELETE', params: { id } }),
+  generatePreview: (weeks) => request('schedules.php', { params: { action: 'generate_preview', weeks } }),
+  generate: (weeks) => request('schedules.php', { method: 'POST', params: { action: 'generate', weeks } }),
+};
+
+// Departments & Reports
+export const departments = {
+  list: () => request('departments.php'),
+  get: (id) => request('departments.php', { params: { id } }),
+  create: (data) => request('departments.php', { method: 'POST', body: data, params: { action: 'department' } }),
+  update: (id, data) => request('departments.php', { method: 'PUT', body: data, params: { action: 'department', id } }),
+  delete: (id) => request('departments.php', { method: 'DELETE', params: { action: 'department', id } }),
+  getTemplates: (deptId) => request('departments.php', { params: { action: 'templates', id: deptId } }),
+  addTemplate: (data) => request('departments.php', { method: 'POST', body: data, params: { action: 'template' } }),
+  updateTemplate: (id, data) => request('departments.php', { method: 'PUT', body: data, params: { action: 'template', id } }),
+  deleteTemplate: (id) => request('departments.php', { method: 'DELETE', params: { action: 'template', id } }),
+  getReports: (params) => request('departments.php', { params: { action: 'reports', ...params } }),
+  getReport: (id) => request('departments.php', { params: { action: 'report', id } }),
+  getForService: (serviceId) => request('departments.php', { params: { action: 'for_service', service_id: serviceId } }),
+  submitReport: (data) => request('departments.php', { method: 'POST', body: data, params: { action: 'submit_report' } }),
+  reviewReport: (id, data) => request('departments.php', { method: 'PUT', body: data, params: { action: 'review_report', id } }),
+};
+
 export { getToken, setToken, removeToken, getUser, setUser, ApiError };

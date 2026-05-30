@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { settings as settingsApi } from '../utils/api';
+import { settings as settingsApi, backups } from '../utils/api';
 import { useAuth } from '../contexts/AuthContext';
 import {
-  Settings, Save, AlertCircle, Check, X, RefreshCw
+  Settings, Save, AlertCircle, Check, X, RefreshCw,
+  Database, Download, Trash2, Plus, Clock
 } from 'lucide-react';
 
 const settingsFields = [
@@ -24,9 +25,13 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [backupsList, setBackupsList] = useState([]);
+  const [backupsLoading, setBackupsLoading] = useState(false);
+  const [backupCreating, setBackupCreating] = useState(false);
 
   useEffect(() => {
     loadSettings();
+    loadBackups();
   }, []);
 
   const loadSettings = async () => {
@@ -38,6 +43,53 @@ export default function SettingsPage() {
       setError(err.message);
     }
     setLoading(false);
+  };
+
+  const loadBackups = async () => {
+    setBackupsLoading(true);
+    try {
+      const data = await backups.list();
+      setBackupsList(data.backups || []);
+    } catch (err) {
+      // silently fail for backups list
+    }
+    setBackupsLoading(false);
+  };
+
+  const handleCreateBackup = async () => {
+    setBackupCreating(true);
+    try {
+      await backups.create();
+      await loadBackups();
+      setSuccess('Backup created successfully!');
+      setTimeout(() => setSuccess(''), 3000);
+    } catch (err) {
+      setError(err.message);
+    }
+    setBackupCreating(false);
+  };
+
+  const handleDeleteBackup = async (file) => {
+    if (!window.confirm(`Are you sure you want to delete backup "${file}"?`)) return;
+    try {
+      await backups.delete(file);
+      await loadBackups();
+      setSuccess('Backup deleted.');
+      setTimeout(() => setSuccess(''), 3000);
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const handleDownloadBackup = (file) => {
+    window.open(backups.downloadUrl(file));
+  };
+
+  const formatFileSize = (bytes) => {
+    if (!bytes || bytes === 0) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(1024));
+    return (bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1) + ' ' + units[i];
   };
 
   const handleSave = async (e) => {
@@ -154,6 +206,85 @@ export default function SettingsPage() {
             <span className="text-gray-900 font-medium">MySQL</span>
           </div>
         </div>
+      </div>
+
+      {/* Database Backups */}
+      <div className="card mt-6">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <Database size={20} className="text-primary-700" />
+            <h2 className="text-lg font-semibold text-gray-900">
+              Database Backups
+              {backupsList.length > 0 && (
+                <span className="ml-2 text-sm font-normal text-gray-500">({backupsList.length})</span>
+              )}
+            </h2>
+          </div>
+          <button
+            type="button"
+            onClick={handleCreateBackup}
+            disabled={backupCreating}
+            className="btn-primary"
+          >
+            {backupCreating ? (
+              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" />
+            ) : (
+              <Plus size={16} />
+            )}
+            Create Backup
+          </button>
+        </div>
+
+        {backupsLoading ? (
+          <div className="flex items-center justify-center py-8">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-700"></div>
+          </div>
+        ) : backupsList.length === 0 ? (
+          <div className="text-center py-8 text-gray-400">
+            <Database size={32} className="mx-auto mb-2 opacity-50" />
+            <p className="text-sm">No backups yet. Create one to get started.</p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {backupsList.map((backup) => (
+              <div
+                key={backup.file}
+                className="flex items-center justify-between py-3 px-4 bg-gray-50 rounded-lg"
+              >
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-gray-900 truncate">{backup.file}</p>
+                  <div className="flex items-center gap-3 mt-1 text-xs text-gray-500">
+                    <span>{formatFileSize(backup.size)}</span>
+                    {backup.date && (
+                      <span className="flex items-center gap-1">
+                        <Clock size={12} />
+                        {backup.date}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 ml-4">
+                  <button
+                    type="button"
+                    onClick={() => handleDownloadBackup(backup.file)}
+                    className="btn-secondary text-xs !py-1.5 !px-2.5"
+                    title="Download"
+                  >
+                    <Download size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteBackup(backup.file)}
+                    className="btn-secondary text-xs !py-1.5 !px-2.5 text-red-600 hover:text-red-700 hover:border-red-300"
+                    title="Delete"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

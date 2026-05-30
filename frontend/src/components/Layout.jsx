@@ -15,6 +15,7 @@ const navItems = [
   { path: '/system/public/attendance', icon: UserCheck, label: 'Attendance', perm: 'attendance' },
   { path: '/system/public/services', icon: Calendar, label: 'Services', perm: 'services' },
   { path: '/system/public/checklist', icon: ClipboardList, label: 'Checklist', perm: 'checklist' },
+  { path: '/system/public/department-reports', icon: ClipboardCheck, label: 'Dept. Reports', perm: 'department_reports' },
   { path: '/system/public/reports', icon: FileText, label: 'Reports', perm: 'reports' },
 ];
 

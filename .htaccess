@@ -29,6 +29,11 @@ RewriteRule ^api/pending$ api/pending.php [L,QSA]
 RewriteRule ^api/pending/([0-9]+)$ api/pending.php?id=$1 [L,QSA]
 RewriteRule ^api/checklist$ api/checklist.php [L,QSA]
 RewriteRule ^api/checklist/([0-9]+)$ api/checklist.php?id=$1 [L,QSA]
+RewriteRule ^api/backup$ api/backup.php [L,QSA]
+RewriteRule ^api/schedules$ api/schedules.php [L,QSA]
+RewriteRule ^api/schedules/([0-9]+)$ api/schedules.php?id=$1 [L,QSA]
+RewriteRule ^api/departments$ api/departments.php [L,QSA]
+RewriteRule ^api/departments/([0-9]+)$ api/departments.php?id=$1 [L,QSA]
 
 # Don't rewrite existing files or directories
 RewriteCond %{REQUEST_FILENAME} !-f
