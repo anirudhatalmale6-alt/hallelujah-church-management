@@ -20,7 +20,7 @@ switch ($method) {
         if ($action === 'by_service' && $serviceId) {
             // Get attendance for a specific service
             $stmt = $db->prepare("
-                SELECT a.*, m.first_name, m.last_name, m.email, m.phone, m.photo_url
+                SELECT a.*, m.first_name, m.last_name, m.email, m.phone, m.photo_url, m.status as member_status
                 FROM attendance a
                 JOIN members m ON a.member_id = m.id
                 WHERE a.service_id = ?
@@ -34,11 +34,11 @@ switch ($method) {
             $svcStmt->execute([$serviceId]);
             $service = $svcStmt->fetch();
 
-            // Get all active members for marking (those not yet marked)
+            // Get all active members and non-member attendees for marking (those not yet marked)
             $unmarkedStmt = $db->prepare("
-                SELECT m.id, m.first_name, m.last_name, m.email, m.phone, m.photo_url
+                SELECT m.id, m.first_name, m.last_name, m.email, m.phone, m.photo_url, m.status as member_status
                 FROM members m
-                WHERE m.status = 'active'
+                WHERE m.status IN ('active', 'non_member_attendee')
                 AND m.id NOT IN (SELECT member_id FROM attendance WHERE service_id = ?)
                 ORDER BY m.last_name ASC, m.first_name ASC
             ");

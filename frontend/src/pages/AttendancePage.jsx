@@ -4,7 +4,8 @@ import { attendance as attendanceApi, services as servicesApi, services as svcAp
 import { formatTime12h } from '../utils/format';
 import {
   UserCheck, Check, X, Clock, Search, AlertCircle,
-  ChevronDown, Save, Calendar, BarChart3, Users, TrendingUp, MessageSquare
+  ChevronDown, Save, Calendar, BarChart3, Users, TrendingUp, MessageSquare,
+  ArrowDownAZ, ArrowDownZA
 } from 'lucide-react';
 
 const serviceTypeLabels = {
@@ -126,10 +127,18 @@ export default function AttendancePage() {
   };
 
   const updateNotes = (memberId, notes) => {
-    setRecords(prev => ({
-      ...prev,
-      [memberId]: { ...prev[memberId], notes, status: prev[memberId]?.status || 'present' }
-    }));
+    setRecords(prev => {
+      const existing = prev[memberId];
+      if (!notes && !existing?.status) {
+        const next = { ...prev };
+        delete next[memberId];
+        return next;
+      }
+      return {
+        ...prev,
+        [memberId]: { ...existing, notes, status: existing?.status || '' }
+      };
+    });
   };
 
   const markAllPresent = () => {
@@ -150,11 +159,13 @@ export default function AttendancePage() {
     setError('');
     setMessage('');
     try {
-      const recordsArray = Object.entries(records).map(([memberId, data]) => ({
-        member_id: parseInt(memberId),
-        status: data.status,
-        notes: data.notes,
-      }));
+      const recordsArray = Object.entries(records)
+        .filter(([, data]) => data.status)
+        .map(([memberId, data]) => ({
+          member_id: parseInt(memberId),
+          status: data.status,
+          notes: data.notes,
+        }));
 
       const unmarkedIds = attendanceData
         ? attendanceData.attendance
@@ -204,6 +215,8 @@ export default function AttendancePage() {
     setSavingCounts(false);
   };
 
+  const [sortAZ, setSortAZ] = useState(true);
+
   const allMembers = attendanceData
     ? [
         ...attendanceData.attendance.map(a => ({
@@ -212,21 +225,28 @@ export default function AttendancePage() {
           last_name: a.last_name,
           email: a.email,
           phone: a.phone,
+          member_status: a.member_status,
         })),
         ...attendanceData.unmarked_members,
       ]
     : [];
 
-  const filteredMembers = allMembers.filter(m => {
-    if (!search) return true;
-    const s = search.toLowerCase();
-    return (
-      m.first_name?.toLowerCase().includes(s) ||
-      m.last_name?.toLowerCase().includes(s) ||
-      m.email?.toLowerCase().includes(s) ||
-      m.phone?.includes(s)
-    );
-  });
+  const filteredMembers = allMembers
+    .filter(m => {
+      if (!search) return true;
+      const s = search.toLowerCase();
+      return (
+        m.first_name?.toLowerCase().includes(s) ||
+        m.last_name?.toLowerCase().includes(s) ||
+        m.email?.toLowerCase().includes(s) ||
+        m.phone?.includes(s)
+      );
+    })
+    .sort((a, b) => {
+      const nameA = `${a.last_name || ''} ${a.first_name || ''}`.toLowerCase();
+      const nameB = `${b.last_name || ''} ${b.first_name || ''}`.toLowerCase();
+      return sortAZ ? nameA.localeCompare(nameB) : nameB.localeCompare(nameA);
+    });
 
   function getTypeLabel(type) {
     return serviceTypeLabels[type] || type;
@@ -394,6 +414,13 @@ export default function AttendancePage() {
                       className="input pl-10"
                     />
                   </div>
+                  <button
+                    onClick={() => setSortAZ(prev => !prev)}
+                    className="btn-secondary btn-sm"
+                    title={sortAZ ? 'Sorted A-Z (click to reverse)' : 'Sorted Z-A (click to reverse)'}
+                  >
+                    {sortAZ ? <ArrowDownAZ size={16} /> : <ArrowDownZA size={16} />}
+                  </button>
                   <button onClick={markAllPresent} className="btn-secondary btn-sm">
                     <Check size={16} /> Mark All Present
                   </button>
@@ -414,14 +441,20 @@ export default function AttendancePage() {
                   ) : (
                     filteredMembers.map(m => {
                       const rec = records[m.id];
+                      const isNonMember = m.member_status === 'non_member_attendee';
                       return (
                         <div key={m.id} className="px-4 py-3 hover:bg-gray-50">
                           <div className="flex items-center gap-3">
-                            <div className="w-9 h-9 bg-primary-700 rounded-full flex items-center justify-center text-white text-sm font-medium shrink-0">
+                            <div className={`w-9 h-9 rounded-full flex items-center justify-center text-white text-sm font-medium shrink-0 ${isNonMember ? 'bg-yellow-500' : 'bg-primary-700'}`}>
                               {m.first_name?.charAt(0)}{m.last_name?.charAt(0)}
                             </div>
                             <div className="flex-1 min-w-0">
-                              <div className="font-medium text-gray-900 text-sm">{m.first_name} {m.last_name}</div>
+                              <div className="font-medium text-gray-900 text-sm">
+                                {m.first_name} {m.last_name}
+                                {isNonMember && (
+                                  <span className="ml-2 inline-block px-1.5 py-0.5 text-[10px] font-medium bg-yellow-100 text-yellow-700 rounded-full">Non-Member</span>
+                                )}
+                              </div>
                               <div className="text-xs text-gray-500 truncate">{m.phone || m.email || ''}</div>
                             </div>
                             <div className="flex gap-1.5 shrink-0">
@@ -454,17 +487,18 @@ export default function AttendancePage() {
                               </button>
                             </div>
                           </div>
-                          {rec && (
-                            <div className="ml-12 mt-1.5">
+                          <div className="ml-12 mt-1.5">
+                            <div className="flex items-center gap-1.5">
+                              <MessageSquare size={12} className="text-gray-400 shrink-0" />
                               <input
                                 type="text"
                                 placeholder="Add notes/remarks..."
-                                value={rec.notes || ''}
+                                value={rec?.notes || records[m.id]?.notes || ''}
                                 onChange={e => updateNotes(m.id, e.target.value)}
                                 className="w-full text-xs px-2 py-1 border border-gray-200 rounded-md text-gray-600 placeholder-gray-400 focus:outline-none focus:border-primary-400"
                               />
                             </div>
-                          )}
+                          </div>
                         </div>
                       );
                     })
