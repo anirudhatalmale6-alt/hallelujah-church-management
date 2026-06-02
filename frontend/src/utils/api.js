@@ -192,6 +192,10 @@ export const checklist = {
   toggleItem: (id, isChecked, notes) => request('checklist.php', { method: 'PUT', body: { is_checked: isChecked ? 1 : 0, notes }, params: { id } }),
   addItem: (serviceId, name) => request('checklist.php', { method: 'POST', body: { service_id: serviceId, name }, params: { action: 'add_item' } }),
   deleteItem: (id) => request('checklist.php', { method: 'DELETE', params: { id } }),
+  getCategories: () => request('checklist.php', { params: { action: 'categories' } }),
+  addCategory: (name, color) => request('checklist.php', { method: 'POST', body: { name, color }, params: { action: 'category' } }),
+  updateCategory: (id, data) => request('checklist.php', { method: 'PUT', body: data, params: { action: 'category', id } }),
+  deleteCategory: (id) => request('checklist.php', { method: 'DELETE', params: { action: 'category', id } }),
 };
 
 // User Permissions
@@ -244,6 +248,8 @@ export const departments = {
   assignMember: (data) => request('departments.php', { method: 'POST', body: data, params: { action: 'assign_member' } }),
   removeMember: (id) => request('departments.php', { method: 'DELETE', params: { action: 'remove_member', id } }),
   healthReport: (params) => request('departments.php', { params: { action: 'health_report', ...params } }),
+  myDepartments: () => request('departments.php', { params: { action: 'my_departments' } }),
+  pendingAlerts: () => request('departments.php', { params: { action: 'pending_alerts' } }),
 };
 
 export { getToken, setToken, removeToken, getUser, setUser, ApiError };

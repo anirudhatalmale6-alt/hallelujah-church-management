@@ -13,6 +13,10 @@ switch ($method) {
             $stmt = $db->query("SELECT * FROM checklist_templates ORDER BY sort_order ASC");
             jsonResponse(['templates' => $stmt->fetchAll()]);
         }
+        if ($action === 'categories') {
+            $stmt = $db->query("SELECT * FROM checklist_categories ORDER BY sort_order ASC");
+            jsonResponse(['categories' => $stmt->fetchAll()]);
+        }
 
         $serviceId = (int)($_GET['service_id'] ?? 0);
         if (!$serviceId) jsonResponse(['error' => 'service_id required'], 400);
@@ -51,6 +55,24 @@ switch ($method) {
             jsonResponse(['message' => 'Template item added', 'id' => $db->lastInsertId()], 201);
         }
 
+        if ($action === 'category') {
+            requireRole($currentUser, ['pastor', 'admin']);
+            $data = getRequestBody();
+            $name = trim($data['name'] ?? '');
+            if (!$name) jsonResponse(['error' => 'Category name required'], 400);
+
+            $color = $data['color'] ?? 'bg-gray-100 text-gray-700';
+            $maxOrder = (int)$db->query("SELECT COALESCE(MAX(sort_order), 0) FROM checklist_categories")->fetchColumn() + 1;
+
+            try {
+                $stmt = $db->prepare("INSERT INTO checklist_categories (name, color, sort_order) VALUES (?, ?, ?)");
+                $stmt->execute([$name, $color, $maxOrder]);
+                jsonResponse(['message' => 'Category created', 'id' => (int)$db->lastInsertId()], 201);
+            } catch (Exception $e) {
+                jsonResponse(['error' => 'Category already exists or error: ' . $e->getMessage()], 400);
+            }
+        }
+
         if ($action === 'add_item') {
             $data = getRequestBody();
             $serviceId = (int)($data['service_id'] ?? 0);
@@ -70,6 +92,24 @@ switch ($method) {
         break;
 
     case 'PUT':
+        if ($action === 'category') {
+            requireRole($currentUser, ['pastor', 'admin']);
+            $id = (int)($_GET['id'] ?? 0);
+            if (!$id) jsonResponse(['error' => 'Category ID required'], 400);
+
+            $data = getRequestBody();
+            $fields = [];
+            $params = [];
+            if (isset($data['name'])) { $fields[] = 'name = ?'; $params[] = $data['name']; }
+            if (isset($data['color'])) { $fields[] = 'color = ?'; $params[] = $data['color']; }
+            if (isset($data['sort_order'])) { $fields[] = 'sort_order = ?'; $params[] = (int)$data['sort_order']; }
+            if (empty($fields)) jsonResponse(['error' => 'Nothing to update'], 400);
+
+            $params[] = $id;
+            $db->prepare("UPDATE checklist_categories SET " . implode(', ', $fields) . " WHERE id = ?")->execute($params);
+            jsonResponse(['message' => 'Category updated']);
+        }
+
         if ($action === 'template') {
             requireRole($currentUser, ['pastor', 'admin']);
             $id = (int)($_GET['id'] ?? 0);
@@ -116,6 +156,14 @@ switch ($method) {
         break;
 
     case 'DELETE':
+        if ($action === 'category') {
+            requireRole($currentUser, ['pastor', 'admin']);
+            $id = (int)($_GET['id'] ?? 0);
+            if (!$id) jsonResponse(['error' => 'Category ID required'], 400);
+            $db->prepare("DELETE FROM checklist_categories WHERE id = ?")->execute([$id]);
+            jsonResponse(['message' => 'Category deleted']);
+        }
+
         if ($action === 'template') {
             requireRole($currentUser, ['pastor', 'admin']);
             $id = (int)($_GET['id'] ?? 0);

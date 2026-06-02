@@ -35,18 +35,31 @@ export default function DepartmentReportsPage() {
   // Shared data
   const [departmentsList, setDepartmentsList] = useState([]);
   const [servicesList, setServicesList] = useState([]);
+  const [pendingAlerts, setPendingAlerts] = useState([]);
 
   useEffect(() => {
     loadDepartments();
     loadServices();
+    if (!isAdmin) {
+      loadPendingAlerts();
+    }
   }, []);
 
   const loadDepartments = async () => {
     try {
-      const data = await deptApi.list();
+      const data = isAdmin ? await deptApi.list() : await deptApi.myDepartments();
       setDepartmentsList(data.departments || []);
     } catch (err) {
       setError(err.message);
+    }
+  };
+
+  const loadPendingAlerts = async () => {
+    try {
+      const data = await deptApi.pendingAlerts();
+      setPendingAlerts(data.alerts || []);
+    } catch (err) {
+      // Silently ignore — alerts are non-critical
     }
   };
 
@@ -106,6 +119,22 @@ export default function DepartmentReportsPage() {
           <Check size={16} />
           {message}
           <button onClick={() => setMessage('')} className="ml-auto"><X size={14} /></button>
+        </div>
+      )}
+
+      {!isAdmin && pendingAlerts.length > 0 && (
+        <div className="mb-4 p-4 bg-amber-50 border border-amber-200 rounded-xl">
+          <div className="flex items-center gap-2 mb-2">
+            <AlertCircle size={20} className="text-amber-600" />
+            <p className="font-medium text-amber-800">You have {pendingAlerts.length} pending department report(s)</p>
+          </div>
+          <div className="space-y-1">
+            {pendingAlerts.map((a, i) => (
+              <div key={i} className="text-sm text-amber-700">
+                {a.department_name} - {a.service_name} ({new Date(a.service_date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })})
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

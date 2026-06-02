@@ -16,7 +16,36 @@ $isAdmin = in_array($currentUser['role'], ['pastor', 'admin']);
 
 switch ($method) {
     case 'GET':
-        if ($action === 'members' && $id) {
+        if ($action === 'my_departments') {
+            // Get departments assigned to the current user
+            $stmt = $db->prepare("
+                SELECT d.*, dm.role as my_role
+                FROM department_members dm
+                JOIN departments d ON dm.department_id = d.id
+                WHERE dm.user_id = ? AND d.is_active = 1
+                ORDER BY d.sort_order ASC
+            ");
+            $stmt->execute([$currentUser['user_id']]);
+            jsonResponse(['departments' => $stmt->fetchAll()]);
+
+        } elseif ($action === 'pending_alerts') {
+            // Get services from 2+ days ago that are missing department reports for the user's departments
+            $userId = $currentUser['user_id'];
+            $stmt = $db->prepare("
+                SELECT d.id as department_id, d.name as department_name, dm.role as my_role,
+                    s.id as service_id, s.name as service_name, s.date as service_date, s.type as service_type
+                FROM department_members dm
+                JOIN departments d ON dm.department_id = d.id
+                JOIN services s ON s.date <= DATE_SUB(CURDATE(), INTERVAL 2 DAY) AND s.date >= DATE_SUB(CURDATE(), INTERVAL 14 DAY)
+                LEFT JOIN department_reports dr ON dr.department_id = d.id AND dr.service_id = s.id
+                WHERE dm.user_id = ? AND d.is_active = 1 AND dr.id IS NULL
+                ORDER BY s.date DESC, d.sort_order ASC
+                LIMIT 20
+            ");
+            $stmt->execute([$userId]);
+            jsonResponse(['alerts' => $stmt->fetchAll()]);
+
+        } elseif ($action === 'members' && $id) {
             // Get members of a department
             $stmt = $db->prepare("
                 SELECT dm.*, u.name as user_name, u.email as user_email, u.role as user_role

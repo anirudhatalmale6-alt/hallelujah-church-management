@@ -17,7 +17,7 @@ const roles = [
 const roleColorMap = Object.fromEntries(roles.map(r => [r.value, r.color]));
 
 const emptyUser = {
-  email: '', password: '', name: '', role: 'volunteer', status: 'active',
+  email: '', password: '', name: '', role: 'volunteer', status: 'active', display_title: '',
 };
 
 export default function UsersPage() {
@@ -82,6 +82,7 @@ export default function UsersPage() {
       name: user.name || '',
       role: user.role || 'volunteer',
       status: user.status || 'active',
+      display_title: user.display_title || '',
     });
     setShowPassword(false);
     setError('');
@@ -231,9 +232,14 @@ export default function UsersPage() {
                     </td>
                     <td className="px-4 py-3 text-sm text-gray-600 hidden md:table-cell">{u.email}</td>
                     <td className="px-4 py-3">
-                      <span className={`badge ${roleColorMap[u.role] || 'badge-gray'}`}>
-                        {u.role}
-                      </span>
+                      <div>
+                        <span className={`badge ${roleColorMap[u.role] || 'badge-gray'}`}>
+                          {u.display_title || u.role}
+                        </span>
+                        {u.display_title && (
+                          <div className="text-xs text-gray-400 mt-1">{u.role}</div>
+                        )}
+                      </div>
                     </td>
                     <td className="px-4 py-3">
                       {u.status === 'active'
@@ -347,6 +353,16 @@ export default function UsersPage() {
                   <option value="inactive">Inactive</option>
                 </select>
               </div>
+            </div>
+            <div>
+              <label className="label">Display Title</label>
+              <input
+                className="input"
+                value={form.display_title}
+                onChange={e => setForm(f => ({ ...f, display_title: e.target.value }))}
+                placeholder="e.g. Worship Director, Head Usher"
+              />
+              <p className="text-xs text-gray-400 mt-1">Custom title shown instead of the system role</p>
             </div>
           </div>
 

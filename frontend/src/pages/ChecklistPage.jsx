@@ -5,25 +5,16 @@ import { formatTime12h } from '../utils/format';
 import Modal from '../components/Modal';
 import {
   ClipboardList, Check, Square, CheckSquare, Plus, Trash2,
-  Calendar, Settings, AlertCircle, X, Save
+  Calendar, Settings, AlertCircle, X, Save, Edit2, Tag
 } from 'lucide-react';
 
-const categoryLabels = {
-  technical: 'Technical',
-  facility: 'Facility',
-  worship: 'Worship',
-  ministry: 'Ministry',
-  safety: 'Safety',
-  general: 'General',
-};
-
-const categoryColors = {
-  technical: 'bg-blue-100 text-blue-700',
-  facility: 'bg-green-100 text-green-700',
-  worship: 'bg-purple-100 text-purple-700',
-  ministry: 'bg-yellow-100 text-yellow-700',
-  safety: 'bg-red-100 text-red-700',
-  general: 'bg-gray-100 text-gray-700',
+const defaultCategoryColors = {
+  Technical: 'bg-blue-100 text-blue-700',
+  Facility: 'bg-green-100 text-green-700',
+  Worship: 'bg-purple-100 text-purple-700',
+  Ministry: 'bg-yellow-100 text-yellow-700',
+  Safety: 'bg-red-100 text-red-700',
+  General: 'bg-gray-100 text-gray-700',
 };
 
 const serviceTypeLabels = {
@@ -46,11 +37,56 @@ export default function ChecklistPage() {
   const [message, setMessage] = useState('');
   const [newItemName, setNewItemName] = useState('');
   const [showAddTemplate, setShowAddTemplate] = useState(false);
-  const [templateForm, setTemplateForm] = useState({ name: '', category: 'general' });
+  const [templateForm, setTemplateForm] = useState({ name: '', category: 'General' });
+  const [categories, setCategories] = useState([]);
+  const [showCategoryModal, setShowCategoryModal] = useState(false);
+  const [categoryForm, setCategoryForm] = useState({ name: '' });
+  const [editCategoryId, setEditCategoryId] = useState(null);
 
   useEffect(() => {
     loadServices();
+    loadCategories();
   }, []);
+
+  const loadCategories = async () => {
+    try {
+      const data = await checklistApi.getCategories();
+      setCategories(data.categories || []);
+    } catch (err) {}
+  };
+
+  const getCategoryColor = (cat) => {
+    const found = categories.find(c => c.name === cat);
+    return found?.color || defaultCategoryColors[cat] || 'bg-gray-100 text-gray-700';
+  };
+
+  const handleSaveCategory = async () => {
+    if (!categoryForm.name.trim()) return;
+    try {
+      if (editCategoryId) {
+        await checklistApi.updateCategory(editCategoryId, { name: categoryForm.name.trim() });
+      } else {
+        await checklistApi.addCategory(categoryForm.name.trim());
+      }
+      setCategoryForm({ name: '' });
+      setEditCategoryId(null);
+      setShowCategoryModal(false);
+      setMessage(editCategoryId ? 'Category updated' : 'Category created');
+      loadCategories();
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const handleDeleteCategory = async (id) => {
+    if (!confirm('Delete this category?')) return;
+    try {
+      await checklistApi.deleteCategory(id);
+      loadCategories();
+    } catch (err) {
+      setError(err.message);
+    }
+  };
 
   const loadServices = async () => {
     try {
@@ -368,8 +404,8 @@ export default function ChecklistPage() {
                     <tr key={t.id} className="hover:bg-gray-50">
                       <td className="px-4 py-3 text-sm font-medium text-gray-900">{t.name}</td>
                       <td className="px-4 py-3">
-                        <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${categoryColors[t.category] || categoryColors.general}`}>
-                          {categoryLabels[t.category] || t.category}
+                        <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${getCategoryColor(t.category)}`}>
+                          {t.category}
                         </span>
                       </td>
                       <td className="px-4 py-3 text-center">
@@ -398,6 +434,68 @@ export default function ChecklistPage() {
             </div>
           )}
 
+          {/* Category Management */}
+          <div className="card mt-6">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <Tag size={18} className="text-primary-700" />
+                <h3 className="text-base font-semibold text-gray-900">Categories</h3>
+              </div>
+              <button
+                onClick={() => { setCategoryForm({ name: '' }); setEditCategoryId(null); setShowCategoryModal(true); }}
+                className="btn-primary text-sm"
+              >
+                <Plus size={14} /> Add Category
+              </button>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {categories.map(c => (
+                <div key={c.id} className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-50 rounded-lg border border-gray-200">
+                  <span className={`inline-block w-3 h-3 rounded-full ${(c.color || 'bg-gray-100').split(' ')[0]}`}></span>
+                  <span className="text-sm font-medium text-gray-700">{c.name}</span>
+                  <button
+                    onClick={() => { setCategoryForm({ name: c.name }); setEditCategoryId(c.id); setShowCategoryModal(true); }}
+                    className="p-0.5 text-gray-400 hover:text-primary-700"
+                  >
+                    <Edit2 size={12} />
+                  </button>
+                  <button
+                    onClick={() => handleDeleteCategory(c.id)}
+                    className="p-0.5 text-gray-400 hover:text-red-600"
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </div>
+              ))}
+              {categories.length === 0 && (
+                <p className="text-sm text-gray-400">No categories yet</p>
+              )}
+            </div>
+          </div>
+
+          {/* Category Modal */}
+          <Modal isOpen={showCategoryModal} onClose={() => setShowCategoryModal(false)} title={editCategoryId ? 'Edit Category' : 'Add Category'} size="sm">
+            <div className="space-y-4">
+              <div>
+                <label className="label">Category Name</label>
+                <input
+                  className="input"
+                  value={categoryForm.name}
+                  onChange={e => setCategoryForm(f => ({ ...f, name: e.target.value }))}
+                  placeholder="e.g., Audio/Visual"
+                  onKeyDown={e => e.key === 'Enter' && handleSaveCategory()}
+                />
+              </div>
+              <div className="flex justify-end gap-3 pt-2">
+                <button onClick={() => setShowCategoryModal(false)} className="btn-secondary">Cancel</button>
+                <button onClick={handleSaveCategory} className="btn-primary">
+                  {editCategoryId ? <Check size={16} /> : <Plus size={16} />}
+                  {editCategoryId ? 'Save' : 'Add'}
+                </button>
+              </div>
+            </div>
+          </Modal>
+
           {/* Add Template Modal */}
           <Modal isOpen={showAddTemplate} onClose={() => setShowAddTemplate(false)} title="Add Template Item" size="sm">
             <div className="space-y-4">
@@ -417,8 +515,8 @@ export default function ChecklistPage() {
                   value={templateForm.category}
                   onChange={e => setTemplateForm(f => ({ ...f, category: e.target.value }))}
                 >
-                  {Object.entries(categoryLabels).map(([k, v]) => (
-                    <option key={k} value={k}>{v}</option>
+                  {categories.map(c => (
+                    <option key={c.id} value={c.name}>{c.name}</option>
                   ))}
                 </select>
               </div>

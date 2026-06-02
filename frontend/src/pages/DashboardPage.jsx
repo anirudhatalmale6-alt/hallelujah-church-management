@@ -194,8 +194,14 @@ export default function DashboardPage() {
                 {data.attendance.trend.map((s) => {
                   const attended = Number(s.attended) || 0;
                   const visitors = Number(s.visitor_count) || 0;
-                  const totalPeople = attended + visitors;
-                  const maxAttendance = Math.max(...data.attendance.trend.map(t => (Number(t.attended) || 0) + (Number(t.visitor_count) || 0)), 1);
+                  const headCount = Number(s.head_count) || 0;
+                  const totalPeople = Math.max(headCount, attended + visitors);
+                  const maxAttendance = Math.max(...data.attendance.trend.map(t => {
+                    const a = Number(t.attended) || 0;
+                    const v = Number(t.visitor_count) || 0;
+                    const h = Number(t.head_count) || 0;
+                    return Math.max(h, a + v);
+                  }), 1);
                   const pct = (totalPeople / maxAttendance) * 100;
                   return (
                     <div

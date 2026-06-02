@@ -51,10 +51,13 @@ $avgAttendance = 0;
 $attendanceTrend = [];
 if ($hasPerm('attendance')) {
     $avgAttendance = $db->query("
-        SELECT AVG(attended) as avg_attendance
+        SELECT AVG(total_people) as avg_attendance
         FROM (
             SELECT s.id,
-                COUNT(CASE WHEN a.status = 'present' OR a.status = 'late' THEN 1 END) as attended
+                GREATEST(
+                    COALESCE(s.head_count, 0),
+                    COUNT(CASE WHEN a.status = 'present' OR a.status = 'late' THEN 1 END) + COALESCE(s.visitor_count, 0)
+                ) as total_people
             FROM services s
             LEFT JOIN attendance a ON a.service_id = s.id
             WHERE s.date >= DATE_SUB(CURDATE(), INTERVAL 4 WEEK)
@@ -70,6 +73,7 @@ if ($hasPerm('attendance')) {
             COALESCE(s.head_count, 0) as head_count
         FROM services s
         LEFT JOIN attendance a ON a.service_id = s.id
+        WHERE s.date <= CURDATE()
         GROUP BY s.id
         ORDER BY s.date DESC, s.time DESC
         LIMIT 8

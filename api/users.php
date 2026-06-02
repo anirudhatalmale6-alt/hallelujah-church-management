@@ -65,7 +65,7 @@ switch ($method) {
     case 'GET':
         if ($id) {
             // Get single user
-            $stmt = $db->prepare("SELECT id, email, name, role, status, created_at, updated_at FROM users WHERE id = ?");
+            $stmt = $db->prepare("SELECT id, email, name, role, display_title, status, created_at, updated_at FROM users WHERE id = ?");
             $stmt->execute([$id]);
             $user = $stmt->fetch();
             if (!$user) {
@@ -75,7 +75,7 @@ switch ($method) {
         } else {
             // List all users
             requireRole($currentUser, ['pastor', 'admin']);
-            $stmt = $db->query("SELECT id, email, name, role, status, created_at, updated_at FROM users ORDER BY name ASC");
+            $stmt = $db->query("SELECT id, email, name, role, display_title, status, created_at, updated_at FROM users ORDER BY name ASC");
             $users = $stmt->fetchAll();
             jsonResponse(['users' => $users]);
         }
@@ -165,6 +165,10 @@ switch ($method) {
             $fields[] = "status = ?";
             $params[] = $data['status'];
         }
+        if (array_key_exists('display_title', $data) && in_array($currentUser['role'], ['pastor', 'admin'])) {
+            $fields[] = "display_title = ?";
+            $params[] = $data['display_title'] ?: null;
+        }
 
         if (empty($fields)) {
             jsonResponse(['error' => 'No fields to update'], 400);
@@ -175,7 +179,7 @@ switch ($method) {
         $stmt = $db->prepare($sql);
         $stmt->execute($params);
 
-        $stmt = $db->prepare("SELECT id, email, name, role, status, created_at, updated_at FROM users WHERE id = ?");
+        $stmt = $db->prepare("SELECT id, email, name, role, display_title, status, created_at, updated_at FROM users WHERE id = ?");
         $stmt->execute([$id]);
         $user = $stmt->fetch();
 
