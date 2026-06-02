@@ -252,4 +252,20 @@ export const departments = {
   pendingAlerts: () => request('departments.php', { params: { action: 'pending_alerts' } }),
 };
 
+// Finance
+export const finance = {
+  categories: () => request('finance.php', { params: { action: 'categories' } }),
+  addCategory: (data) => request('finance.php', { method: 'POST', body: data, params: { action: 'category' } }),
+  updateCategory: (id, data) => request('finance.php', { method: 'PUT', body: data, params: { action: 'category', id } }),
+  deleteCategory: (id) => request('finance.php', { method: 'DELETE', params: { action: 'category', id } }),
+  list: (params) => request('finance.php', { params }),
+  record: (data) => request('finance.php', { method: 'POST', body: data }),
+  bulkRecord: (records) => request('finance.php', { method: 'POST', body: { records }, params: { action: 'bulk' } }),
+  update: (id, data) => request('finance.php', { method: 'PUT', body: data, params: { id } }),
+  delete: (id) => request('finance.php', { method: 'DELETE', params: { id } }),
+  summary: (params) => request('finance.php', { params: { action: 'summary', ...params } }),
+  memberStatement: (memberId, dateFrom, dateTo) =>
+    request('finance.php', { params: { action: 'member_statement', member_id: memberId, date_from: dateFrom, date_to: dateTo } }),
+};
+
 export { getToken, setToken, removeToken, getUser, setUser, ApiError };

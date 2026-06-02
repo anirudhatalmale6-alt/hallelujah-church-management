@@ -127,6 +127,16 @@ if ($hasPerm('members')) {
     ")->fetchAll();
 }
 
+// Giving stats (this month)
+$givingStats = ['this_month' => 0, 'last_month' => 0, 'this_year' => 0];
+if ($hasPerm('finance')) {
+    try {
+        $givingStats['this_month'] = (float)$db->query("SELECT COALESCE(SUM(amount), 0) FROM donations WHERE donation_date >= DATE_FORMAT(CURDATE(), '%Y-%m-01')")->fetchColumn();
+        $givingStats['last_month'] = (float)$db->query("SELECT COALESCE(SUM(amount), 0) FROM donations WHERE donation_date >= DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 MONTH), '%Y-%m-01') AND donation_date < DATE_FORMAT(CURDATE(), '%Y-%m-01')")->fetchColumn();
+        $givingStats['this_year'] = (float)$db->query("SELECT COALESCE(SUM(amount), 0) FROM donations WHERE donation_date >= DATE_FORMAT(CURDATE(), '%Y-01-01')")->fetchColumn();
+    } catch (Exception $e) {}
+}
+
 // Pending changes count (for admin notification)
 $pendingCount = 0;
 if ($isAdmin) {
@@ -179,5 +189,6 @@ jsonResponse([
     'pending_changes_count' => $pendingCount,
     'pending_reports_count' => $pendingReports,
     'services_without_attendance' => $servicesWithoutAttendance,
+    'giving' => $givingStats,
     'user_permissions' => $isAdmin ? ['all'] : $userPerms,
 ]);

@@ -6,7 +6,7 @@ import { formatTime12h } from '../utils/format';
 import {
   Users, UserCheck, Calendar, TrendingUp, UserPlus,
   ChevronRight, Cake, Clock, AlertCircle, ClipboardCheck,
-  Heart, AlertTriangle, FileText
+  Heart, AlertTriangle, FileText, DollarSign
 } from 'lucide-react';
 
 function StatCard({ icon: Icon, label, value, sub, color, to }) {
@@ -120,6 +120,16 @@ export default function DashboardPage() {
             value={data.upcoming_services.length}
             color="bg-purple-100 text-purple-600"
             to="/system/public/services"
+          />
+        )}
+        {hasPermission('finance') && data.giving && (
+          <StatCard
+            icon={DollarSign}
+            label="Giving This Month"
+            value={`$${Number(data.giving.this_month || 0).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`}
+            sub={`$${Number(data.giving.this_year || 0).toLocaleString()} YTD`}
+            color="bg-emerald-100 text-emerald-600"
+            to="/system/public/finance"
           />
         )}
       </div>

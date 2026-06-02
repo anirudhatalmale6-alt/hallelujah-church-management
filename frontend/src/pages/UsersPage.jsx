@@ -50,6 +50,7 @@ export default function UsersPage() {
     { key: 'checklist', label: 'Checklist' },
     { key: 'reports', label: 'Reports' },
     { key: 'department_reports', label: 'Dept. Reports' },
+    { key: 'finance', label: 'Finance' },
   ];
 
   const loadUsers = useCallback(async () => {
