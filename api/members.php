@@ -88,7 +88,7 @@ switch ($method) {
                 $params[] = $status;
             }
             if ($family_group) {
-                $where[] = "family_group = ?";
+                $where[] = "FIND_IN_SET(?, REPLACE(family_group, ', ', ',')) > 0";
                 $params[] = $family_group;
             }
 
@@ -113,8 +113,8 @@ switch ($method) {
             $stmt->execute($params);
             $members = $stmt->fetchAll();
 
-            // Get family groups for filter dropdown
-            $groupStmt = $db->query("SELECT DISTINCT family_group FROM members WHERE family_group IS NOT NULL AND family_group != '' ORDER BY family_group");
+            // Get groups for filter dropdown (from groups table)
+            $groupStmt = $db->query("SELECT DISTINCT name FROM `groups` ORDER BY name");
             $familyGroups = $groupStmt->fetchAll(PDO::FETCH_COLUMN);
 
             jsonResponse([

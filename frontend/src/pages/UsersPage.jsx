@@ -15,6 +15,7 @@ const roles = [
 ];
 
 const roleColorMap = Object.fromEntries(roles.map(r => [r.value, r.color]));
+const roleLabelMap = Object.fromEntries(roles.map(r => [r.value, r.label]));
 
 const emptyUser = {
   email: '', password: '', name: '', role: 'volunteer', status: 'active', display_title: '',
@@ -234,10 +235,10 @@ export default function UsersPage() {
                     <td className="px-4 py-3">
                       <div>
                         <span className={`badge ${roleColorMap[u.role] || 'badge-gray'}`}>
-                          {u.display_title || u.role}
+                          {u.display_title || roleLabelMap[u.role] || u.role}
                         </span>
                         {u.display_title && (
-                          <div className="text-xs text-gray-400 mt-1">{u.role}</div>
+                          <div className="text-xs text-gray-400 mt-1">{roleLabelMap[u.role] || u.role}</div>
                         )}
                       </div>
                     </td>

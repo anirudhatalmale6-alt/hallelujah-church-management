@@ -157,6 +157,16 @@ export default function MembersPage() {
 
   const updateField = (field, value) => setForm(f => ({ ...f, [field]: value }));
 
+  const toggleGroup = (groupName) => {
+    setForm(f => {
+      const current = (f.family_group || '').split(', ').filter(Boolean);
+      const updated = current.includes(groupName)
+        ? current.filter(g => g !== groupName)
+        : [...current, groupName];
+      return { ...f, family_group: updated.join(', ') };
+    });
+  };
+
   const exportCSV = async () => {
     try {
       const data = await membersApi.list({ limit: 9999 });
@@ -384,14 +394,28 @@ export default function MembersPage() {
               <label className="label">Date of Birth</label>
               <input type="date" className="input" value={form.date_of_birth} onChange={e => updateField('date_of_birth', e.target.value)} />
             </div>
-            <div>
-              <label className="label">Group</label>
-              <select className="input" value={form.family_group} onChange={e => updateField('family_group', e.target.value)}>
-                <option value="">-- No Group --</option>
-                {availableGroups.map(g => (
-                  <option key={g.id} value={g.name}>{g.name}</option>
-                ))}
-              </select>
+            <div className="sm:col-span-2">
+              <label className="label">Groups</label>
+              {availableGroups.length > 0 ? (
+                <div className="border border-gray-200 rounded-lg p-2 grid grid-cols-2 sm:grid-cols-3 gap-1 max-h-40 overflow-y-auto">
+                  {availableGroups.map(g => {
+                    const selected = (form.family_group || '').split(', ').filter(Boolean).includes(g.name);
+                    return (
+                      <label key={g.id} className={`flex items-center gap-2 p-1.5 rounded cursor-pointer transition-colors ${selected ? 'bg-primary-50' : 'hover:bg-gray-50'}`}>
+                        <input
+                          type="checkbox"
+                          checked={selected}
+                          onChange={() => toggleGroup(g.name)}
+                          className="w-4 h-4 text-primary-700 rounded border-gray-300 focus:ring-primary-500"
+                        />
+                        <span className="text-sm text-gray-700">{g.name}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="text-xs text-gray-400 p-2 border border-gray-200 rounded-lg">No groups created yet. Create groups from the Groups page.</p>
+              )}
             </div>
             <div>
               <label className="label">Membership Date</label>

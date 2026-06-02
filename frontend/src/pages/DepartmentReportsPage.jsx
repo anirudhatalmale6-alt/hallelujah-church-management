@@ -1168,6 +1168,8 @@ function ManageDepartmentsTab({ departments, reloadDepartments, setError, setMes
         </button>
       </div>
 
+      <p className="text-sm text-gray-500 mb-4">Click a department below to manage its checklist items.</p>
+
       {departments.length === 0 ? (
         <div className="card text-center py-16 mb-6">
           <Settings size={48} className="text-gray-300 mx-auto mb-3" />
@@ -1190,10 +1192,14 @@ function ManageDepartmentsTab({ departments, reloadDepartments, setError, setMes
             >
               <div className="flex items-start justify-between">
                 <div className="flex-1 min-w-0">
-                  <h3 className="font-semibold text-gray-900">{dept.name}</h3>
+                  <div className="flex items-center gap-2">
+                    <ClipboardList size={16} className="text-primary-700 shrink-0" />
+                    <h3 className="font-semibold text-gray-900">{dept.name}</h3>
+                  </div>
                   {dept.description && (
                     <p className="text-sm text-gray-500 mt-1">{dept.description}</p>
                   )}
+                  <p className="text-xs text-primary-600 mt-2">Click to manage checklist</p>
                 </div>
                 <div className="flex gap-1 shrink-0 ml-2">
                   <button
