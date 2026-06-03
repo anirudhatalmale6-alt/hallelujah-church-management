@@ -134,13 +134,13 @@ switch ($method) {
             $totalLiabilities = 0;
             $totalEquity = 0;
             foreach ($assets as $a) {
-                if ($a['parent_id']) $totalAssets += $a['calculated_balance'];
+                if ($a['parent_id'] && (int)$a['child_count'] === 0) $totalAssets += $a['calculated_balance'];
             }
             foreach ($liabilities as $l) {
-                if ($l['parent_id']) $totalLiabilities += $l['calculated_balance'];
+                if ($l['parent_id'] && (int)$l['child_count'] === 0) $totalLiabilities += $l['calculated_balance'];
             }
             foreach ($equity as $e) {
-                if ($e['parent_id']) $totalEquity += $e['calculated_balance'];
+                if ($e['parent_id'] && (int)$e['child_count'] === 0) $totalEquity += $e['calculated_balance'];
             }
 
             $netAssets = $totalAssets - $totalLiabilities;

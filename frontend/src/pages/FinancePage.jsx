@@ -2697,11 +2697,10 @@ function ChartOfAccountsTab({ setError, setMessage, isAdmin }) {
   // Get all parent-level accounts for each type
   const getTopForType = (type) => accounts.filter(a => a.account_type === type && !a.parent_id);
 
-  // Calculate type totals (sum of top-level current_balance for asset/liability types)
   const getTypeTotal = (type) => {
-    if (type !== 'asset' && type !== 'liability') return null;
+    if (type !== 'asset' && type !== 'liability' && type !== 'equity') return null;
     return accounts
-      .filter(a => a.account_type === type && a.parent_id)
+      .filter(a => a.account_type === type && a.parent_id && parseInt(a.child_count) === 0)
       .reduce((sum, a) => sum + (parseFloat(a.current_balance) || 0), 0);
   };
 
