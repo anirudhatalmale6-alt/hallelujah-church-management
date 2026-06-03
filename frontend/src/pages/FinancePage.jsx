@@ -95,6 +95,7 @@ export default function FinancePage() {
     { key: 'reports', label: 'Reports', icon: TrendingUp, show: hasReports },
     { key: 'budgets', label: 'Budgets', icon: BarChart3, show: hasFullFinance },
     { key: 'financial_statements', label: 'Fin. Statements', icon: Wallet, show: hasReports },
+    { key: 'pledges', label: 'Pledges', icon: Calendar, show: hasGiving },
     { key: 'accounts', label: 'Chart of Accounts', icon: BookOpen, show: hasFullFinance },
     ...(isAdmin ? [{ key: 'categories', label: 'Categories', icon: Tag, show: true }] : []),
   ];
@@ -146,6 +147,7 @@ export default function FinancePage() {
       {tab === 'reports' && <ReportsTab setError={setError} setMessage={setMessage} />}
       {tab === 'budgets' && <BudgetsTab setError={setError} setMessage={setMessage} isAdmin={isAdmin} />}
       {tab === 'financial_statements' && <FinancialStatementsTab setError={setError} setMessage={setMessage} />}
+      {tab === 'pledges' && <PledgesTab setError={setError} setMessage={setMessage} isAdmin={isAdmin} />}
       {tab === 'accounts' && <ChartOfAccountsTab setError={setError} setMessage={setMessage} isAdmin={isAdmin} />}
       {tab === 'categories' && isAdmin && <CategoriesTab setError={setError} setMessage={setMessage} />}
     </div>
@@ -1498,7 +1500,7 @@ function BudgetsTab({ setError, setMessage, isAdmin }) {
 
 /* ─── Financial Statements Tab ─── */
 const fsYears = [];
-for (let y = 2010; y <= new Date().getFullYear() + 2; y++) fsYears.push(y);
+for (let y = 2015; y <= 2040; y++) fsYears.push(y);
 const fsMonths = [
   { val: '01', label: 'January' }, { val: '02', label: 'February' }, { val: '03', label: 'March' },
   { val: '04', label: 'April' }, { val: '05', label: 'May' }, { val: '06', label: 'June' },
@@ -2140,6 +2142,246 @@ function GeneralJournalView({ data, page, setPage }) {
         )}
       </div>
     </div>
+  );
+}
+
+/* ─── Pledges Tab ─── */
+function PledgesTab({ setError, setMessage, isAdmin }) {
+  const [pledges, setPledges] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [membersList, setMembersList] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [showModal, setShowModal] = useState(false);
+  const [editPledge, setEditPledge] = useState(null);
+  const [form, setForm] = useState({
+    member_id: '', category_id: '', amount: '', frequency: 'monthly',
+    start_date: new Date().toISOString().split('T')[0], end_date: '', notes: '',
+  });
+  const [saving, setSaving] = useState(false);
+  const [statusFilter, setStatusFilter] = useState('active');
+  const [alerts, setAlerts] = useState([]);
+
+  useEffect(() => {
+    membersApi.list({ limit: 9999, sort: 'last_name' }).then(d => setMembersList(d.members || []));
+    financeApi.categories().then(d => setCategories((d.categories || []).filter(c => Number(c.is_active) !== 0)));
+  }, []);
+
+  const loadPledges = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [pledgeData, alertData] = await Promise.all([
+        financeApi.pledges({ status: statusFilter }),
+        financeApi.pledgeAlerts(),
+      ]);
+      setPledges(pledgeData.pledges || []);
+      setAlerts(alertData.alerts || []);
+    } catch (err) {
+      setError(err.message);
+    }
+    setLoading(false);
+  }, [statusFilter, setError]);
+
+  useEffect(() => { loadPledges(); }, [loadPledges]);
+
+  const openNew = () => {
+    setEditPledge(null);
+    setForm({ member_id: '', category_id: '', amount: '', frequency: 'monthly', start_date: new Date().toISOString().split('T')[0], end_date: '', notes: '' });
+    setShowModal(true);
+  };
+
+  const openEdit = (p) => {
+    setEditPledge(p);
+    setForm({ member_id: p.member_id, category_id: p.category_id, amount: p.amount, frequency: p.frequency, start_date: p.start_date, end_date: p.end_date || '', notes: p.notes || '' });
+    setShowModal(true);
+  };
+
+  const handleSave = async () => {
+    if (!form.member_id || !form.category_id || !form.amount || !form.start_date) {
+      setError('Member, category, amount, and start date are required'); return;
+    }
+    setSaving(true);
+    try {
+      if (editPledge) {
+        await financeApi.updatePledge(editPledge.id, form);
+        setMessage('Pledge updated');
+      } else {
+        await financeApi.createPledge(form);
+        setMessage('Pledge created');
+      }
+      setShowModal(false);
+      loadPledges();
+    } catch (err) { setError(err.message); }
+    setSaving(false);
+  };
+
+  const handleDelete = async (id) => {
+    if (!confirm('Delete this pledge?')) return;
+    try { await financeApi.deletePledge(id); setMessage('Pledge deleted'); loadPledges(); }
+    catch (err) { setError(err.message); }
+  };
+
+  const handleCancel = async (id) => {
+    try { await financeApi.updatePledge(id, { status: 'cancelled' }); setMessage('Pledge cancelled'); loadPledges(); }
+    catch (err) { setError(err.message); }
+  };
+
+  const freqLabel = { weekly: 'Weekly', monthly: 'Monthly', quarterly: 'Quarterly', annually: 'Annually' };
+  const behindAlerts = alerts.filter(a => a.behind_by > 0);
+
+  if (loading) {
+    return <div className="flex items-center justify-center py-16"><div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary-700"></div></div>;
+  }
+
+  return (
+    <>
+      {/* Alerts */}
+      {behindAlerts.length > 0 && (
+        <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-xl">
+          <div className="flex items-center gap-2 mb-2">
+            <AlertCircle size={20} className="text-amber-600" />
+            <p className="font-medium text-amber-800">{behindAlerts.length} pledge{behindAlerts.length !== 1 ? 's' : ''} behind schedule</p>
+          </div>
+          <div className="space-y-1">
+            {behindAlerts.map((a, i) => (
+              <div key={i} className="flex items-center justify-between text-sm px-2 py-1 rounded hover:bg-amber-100">
+                <span className="text-amber-700">{a.member_name} - {a.category} ({freqLabel[a.frequency]} {formatCurrency(a.pledge_amount)})</span>
+                <span className="text-amber-800 font-medium">Behind by {formatCurrency(a.behind_by)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-3">
+          <h2 className="text-lg font-semibold text-gray-900">Member Pledges</h2>
+          <select className="input w-auto text-sm" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
+            <option value="active">Active</option>
+            <option value="completed">Completed</option>
+            <option value="cancelled">Cancelled</option>
+          </select>
+        </div>
+        <button onClick={openNew} className="btn-primary"><Plus size={16} /> Add Pledge</button>
+      </div>
+
+      <div className="card p-0 overflow-hidden">
+        {pledges.length === 0 ? (
+          <div className="text-center py-16">
+            <Calendar size={48} className="text-gray-300 mx-auto mb-3" />
+            <p className="text-gray-500">No {statusFilter} pledges</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="bg-gray-50 border-b border-gray-200">
+                <tr>
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Member</th>
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Category</th>
+                  <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Amount</th>
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Frequency</th>
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase hidden md:table-cell">Period</th>
+                  <th className="text-center px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Progress</th>
+                  <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {pledges.map(p => {
+                  const pct = p.fulfillment_pct || 0;
+                  const barColor = pct >= 100 ? 'bg-green-500' : pct >= 50 ? 'bg-amber-500' : 'bg-red-500';
+                  return (
+                    <tr key={p.id} className="hover:bg-gray-50">
+                      <td className="px-4 py-3 text-sm font-medium text-gray-900">{p.first_name} {p.last_name}</td>
+                      <td className="px-4 py-3 text-sm text-gray-600">{p.category_name}</td>
+                      <td className="px-4 py-3 text-sm text-right font-semibold text-gray-900">{formatCurrency(p.amount)}</td>
+                      <td className="px-4 py-3 text-sm text-gray-600">{freqLabel[p.frequency]}</td>
+                      <td className="px-4 py-3 text-sm text-gray-500 hidden md:table-cell">
+                        {p.start_date}{p.end_date ? ` to ${p.end_date}` : ' (ongoing)'}
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2">
+                          <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
+                            <div className={`h-full ${barColor} rounded-full`} style={{ width: `${Math.min(pct, 100)}%` }} />
+                          </div>
+                          <span className="text-xs text-gray-500 w-16 text-right">
+                            {formatCurrency(p.total_paid)} / {formatCurrency(p.expected_total)}
+                          </span>
+                        </div>
+                        {p.is_behind && <div className="text-xs text-red-600 mt-0.5">Behind by {formatCurrency(p.expected_total - p.total_paid)}</div>}
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center justify-end gap-1">
+                          <button onClick={() => openEdit(p)} className="p-2 text-gray-400 hover:text-primary-700 hover:bg-primary-50 rounded-lg" title="Edit"><Edit2 size={16} /></button>
+                          {p.status === 'active' && (
+                            <button onClick={() => handleCancel(p.id)} className="p-2 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg" title="Cancel pledge"><X size={16} /></button>
+                          )}
+                          {isAdmin && (
+                            <button onClick={() => handleDelete(p.id)} className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg" title="Delete"><Trash2 size={16} /></button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title={editPledge ? 'Edit Pledge' : 'Add Pledge'} size="md">
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="label">Member *</label>
+              <select className="input" value={form.member_id} onChange={e => setForm(f => ({ ...f, member_id: e.target.value }))} disabled={!!editPledge}>
+                <option value="">-- Select --</option>
+                {membersList.map(m => <option key={m.id} value={m.id}>{m.last_name}, {m.first_name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="label">Category *</label>
+              <select className="input" value={form.category_id} onChange={e => setForm(f => ({ ...f, category_id: e.target.value }))}>
+                <option value="">-- Select --</option>
+                {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="label">Pledge Amount ($) *</label>
+              <input type="number" step="0.01" min="0" className="input" value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} />
+            </div>
+            <div>
+              <label className="label">Frequency</label>
+              <select className="input" value={form.frequency} onChange={e => setForm(f => ({ ...f, frequency: e.target.value }))}>
+                <option value="weekly">Weekly</option>
+                <option value="monthly">Monthly</option>
+                <option value="quarterly">Quarterly</option>
+                <option value="annually">Annually</option>
+              </select>
+            </div>
+            <div>
+              <label className="label">Start Date *</label>
+              <input type="date" className="input" value={form.start_date} onChange={e => setForm(f => ({ ...f, start_date: e.target.value }))} />
+            </div>
+            <div>
+              <label className="label">End Date (optional)</label>
+              <input type="date" className="input" value={form.end_date} onChange={e => setForm(f => ({ ...f, end_date: e.target.value }))} />
+              <p className="text-xs text-gray-400 mt-1">Leave empty for ongoing pledge</p>
+            </div>
+          </div>
+          <div>
+            <label className="label">Notes</label>
+            <input className="input" placeholder="Optional notes" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} />
+          </div>
+          <div className="flex justify-end gap-3 pt-2">
+            <button onClick={() => setShowModal(false)} className="btn-secondary">Cancel</button>
+            <button onClick={handleSave} disabled={saving} className="btn-primary">
+              {saving ? <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" /> : <Check size={16} />}
+              {editPledge ? 'Save' : 'Add Pledge'}
+            </button>
+          </div>
+        </div>
+      </Modal>
+    </>
   );
 }
 

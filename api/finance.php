@@ -98,7 +98,7 @@ switch ($method) {
                 $dateFrom = substr($dateTo, 0, 4) . '-01-01';
             }
 
-            $countStmt = $db->prepare("SELECT COUNT(*) FROM account_ledger WHERE account_id = ?");
+            $isCurrentDate = ($dateTo >= date('Y-m-d'));
             $balanceStmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) FROM account_ledger WHERE account_id = ? AND entry_date <= ?");
 
             $fetchAccounts = function($type) use ($db) {
@@ -113,15 +113,14 @@ switch ($method) {
             $liabilities = $fetchAccounts('liability');
             $equity = $fetchAccounts('equity');
 
-            $calcBalance = function(&$accounts) use ($countStmt, $balanceStmt, $dateTo) {
+            $calcBalance = function(&$accounts) use ($balanceStmt, $dateTo, $isCurrentDate) {
                 foreach ($accounts as &$acc) {
-                    $countStmt->execute([$acc['id']]);
-                    $hasLedger = (int)$countStmt->fetchColumn() > 0;
-                    if ($hasLedger) {
-                        $balanceStmt->execute([$acc['id'], $dateTo]);
-                        $acc['calculated_balance'] = (float)$balanceStmt->fetchColumn();
-                    } else {
+                    if ($isCurrentDate) {
                         $acc['calculated_balance'] = (float)$acc['current_balance'];
+                    } else {
+                        $balanceStmt->execute([$acc['id'], $dateTo]);
+                        $ledgerBal = (float)$balanceStmt->fetchColumn();
+                        $acc['calculated_balance'] = $ledgerBal != 0 ? $ledgerBal : (float)$acc['current_balance'];
                     }
                 }
                 unset($acc);
@@ -294,6 +293,118 @@ switch ($method) {
                 'date_from' => $dateFrom,
                 'date_to' => $dateTo,
             ]);
+        }
+
+        // --- PLEDGES ---
+        if ($action === 'pledges') {
+            $status = $_GET['status'] ?? 'active';
+            $memberId = $_GET['member_id'] ?? '';
+
+            $where = ['p.status = ?'];
+            $params = [$status];
+            if ($memberId) { $where[] = 'p.member_id = ?'; $params[] = (int)$memberId; }
+
+            $whereClause = implode(' AND ', $where);
+            $stmt = $db->prepare("
+                SELECT p.*, m.first_name, m.last_name, dc.name as category_name,
+                    u.name as created_by_name
+                FROM pledges p
+                JOIN members m ON m.id = p.member_id
+                JOIN donation_categories dc ON dc.id = p.category_id
+                LEFT JOIN users u ON u.id = p.created_by
+                WHERE $whereClause
+                ORDER BY p.start_date DESC
+            ");
+            $stmt->execute($params);
+            $pledges = $stmt->fetchAll();
+
+            // Calculate fulfillment for each pledge
+            foreach ($pledges as &$pledge) {
+                $totalPaid = (float)$db->prepare("
+                    SELECT COALESCE(SUM(amount), 0) FROM donations
+                    WHERE member_id = ? AND category_id = ?
+                    AND donation_date >= ? AND donation_date <= COALESCE(?, CURDATE())
+                ")->execute([$pledge['member_id'], $pledge['category_id'], $pledge['start_date'], $pledge['end_date']]) ?
+                    (float)$db->query("SELECT COALESCE(SUM(amount), 0) FROM donations WHERE member_id = {$pledge['member_id']} AND category_id = {$pledge['category_id']} AND donation_date >= '{$pledge['start_date']}'" . ($pledge['end_date'] ? " AND donation_date <= '{$pledge['end_date']}'" : ""))->fetchColumn() : 0;
+
+                $startDate = new DateTime($pledge['start_date']);
+                $endDate = $pledge['end_date'] ? new DateTime($pledge['end_date']) : new DateTime();
+                $now = new DateTime();
+                $effectiveEnd = min($endDate, $now);
+
+                $expectedPayments = 0;
+                switch ($pledge['frequency']) {
+                    case 'weekly':
+                        $expectedPayments = max(1, floor($startDate->diff($effectiveEnd)->days / 7));
+                        break;
+                    case 'monthly':
+                        $expectedPayments = max(1, ($effectiveEnd->format('Y') - $startDate->format('Y')) * 12 + $effectiveEnd->format('n') - $startDate->format('n') + 1);
+                        break;
+                    case 'quarterly':
+                        $months = ($effectiveEnd->format('Y') - $startDate->format('Y')) * 12 + $effectiveEnd->format('n') - $startDate->format('n') + 1;
+                        $expectedPayments = max(1, ceil($months / 3));
+                        break;
+                    case 'annually':
+                        $expectedPayments = max(1, $effectiveEnd->format('Y') - $startDate->format('Y') + 1);
+                        break;
+                }
+
+                $expectedTotal = (float)$pledge['amount'] * $expectedPayments;
+                $pledge['total_paid'] = $totalPaid;
+                $pledge['expected_total'] = $expectedTotal;
+                $pledge['expected_payments'] = $expectedPayments;
+                $pledge['fulfillment_pct'] = $expectedTotal > 0 ? round(($totalPaid / $expectedTotal) * 100, 1) : 0;
+                $pledge['is_behind'] = $totalPaid < $expectedTotal;
+            }
+            unset($pledge);
+
+            jsonResponse(['pledges' => $pledges]);
+        }
+
+        // --- PLEDGE ALERTS (for dashboard) ---
+        if ($action === 'pledge_alerts') {
+            try {
+                $behindPledges = $db->query("
+                    SELECT p.id, p.member_id, p.amount, p.frequency, p.start_date,
+                        m.first_name, m.last_name, dc.name as category_name,
+                        COALESCE((SELECT SUM(d.amount) FROM donations d WHERE d.member_id = p.member_id AND d.category_id = p.category_id AND d.donation_date >= p.start_date), 0) as total_paid
+                    FROM pledges p
+                    JOIN members m ON m.id = p.member_id
+                    JOIN donation_categories dc ON dc.id = p.category_id
+                    WHERE p.status = 'active'
+                    ORDER BY m.last_name, m.first_name
+                ")->fetchAll();
+
+                $alerts = [];
+                foreach ($behindPledges as $p) {
+                    $startDate = new DateTime($p['start_date']);
+                    $now = new DateTime();
+                    $monthsElapsed = max(1, ($now->format('Y') - $startDate->format('Y')) * 12 + $now->format('n') - $startDate->format('n') + 1);
+
+                    $expectedPayments = $monthsElapsed;
+                    if ($p['frequency'] === 'weekly') $expectedPayments = max(1, floor($startDate->diff($now)->days / 7));
+                    if ($p['frequency'] === 'quarterly') $expectedPayments = max(1, ceil($monthsElapsed / 3));
+                    if ($p['frequency'] === 'annually') $expectedPayments = max(1, $now->format('Y') - $startDate->format('Y') + 1);
+
+                    $expectedTotal = (float)$p['amount'] * $expectedPayments;
+                    $totalPaid = (float)$p['total_paid'];
+
+                    if ($totalPaid < $expectedTotal) {
+                        $alerts[] = [
+                            'member_name' => $p['first_name'] . ' ' . $p['last_name'],
+                            'category' => $p['category_name'],
+                            'expected' => $expectedTotal,
+                            'paid' => $totalPaid,
+                            'behind_by' => $expectedTotal - $totalPaid,
+                            'frequency' => $p['frequency'],
+                            'pledge_amount' => (float)$p['amount'],
+                        ];
+                    }
+                }
+                jsonResponse(['alerts' => $alerts, 'count' => count($alerts)]);
+            } catch (Exception $e) {
+                jsonResponse(['alerts' => [], 'count' => 0]);
+            }
         }
 
         // --- ROUTING RULES ---
@@ -945,6 +1056,29 @@ switch ($method) {
         break;
 
     case 'POST':
+        // --- CREATE PLEDGE ---
+        if ($action === 'pledge') {
+            $data = getRequestBody();
+            if (empty($data['member_id']) || empty($data['category_id']) || empty($data['amount']) || empty($data['start_date'])) {
+                jsonResponse(['error' => 'member_id, category_id, amount, and start_date are required'], 400);
+            }
+            $stmt = $db->prepare("
+                INSERT INTO pledges (member_id, category_id, amount, frequency, start_date, end_date, notes, created_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ");
+            $stmt->execute([
+                (int)$data['member_id'],
+                (int)$data['category_id'],
+                (float)$data['amount'],
+                $data['frequency'] ?? 'monthly',
+                $data['start_date'],
+                $data['end_date'] ?? null,
+                $data['notes'] ?? null,
+                $currentUser['user_id'],
+            ]);
+            jsonResponse(['message' => 'Pledge created', 'id' => (int)$db->lastInsertId()], 201);
+        }
+
         // --- TRANSFER BETWEEN ACCOUNTS ---
         if ($action === 'transfer') {
             $data = getRequestBody();
@@ -1383,6 +1517,25 @@ switch ($method) {
         break;
 
     case 'PUT':
+        // --- PLEDGE UPDATE ---
+        if ($action === 'pledge') {
+            if (!$id) jsonResponse(['error' => 'Pledge ID required'], 400);
+            $data = getRequestBody();
+            $fields = [];
+            $params = [];
+            $allowed = ['amount', 'frequency', 'start_date', 'end_date', 'notes', 'status'];
+            foreach ($allowed as $f) {
+                if (array_key_exists($f, $data)) {
+                    $fields[] = "$f = ?";
+                    $params[] = $f === 'amount' ? (float)$data[$f] : $data[$f];
+                }
+            }
+            if (empty($fields)) jsonResponse(['error' => 'Nothing to update'], 400);
+            $params[] = $id;
+            $db->prepare("UPDATE pledges SET " . implode(', ', $fields) . " WHERE id = ?")->execute($params);
+            jsonResponse(['message' => 'Pledge updated']);
+        }
+
         // --- ACCOUNT UPDATE ---
         if ($action === 'account') {
             requireRole($currentUser, ['pastor', 'admin']);
@@ -1533,6 +1686,14 @@ switch ($method) {
         break;
 
     case 'DELETE':
+        // --- DELETE PLEDGE ---
+        if ($action === 'pledge') {
+            requireRole($currentUser, ['pastor', 'admin']);
+            if (!$id) jsonResponse(['error' => 'Pledge ID required'], 400);
+            $db->prepare("DELETE FROM pledges WHERE id = ?")->execute([$id]);
+            jsonResponse(['message' => 'Pledge deleted']);
+        }
+
         // --- DELETE ACCOUNT ---
         if ($action === 'account') {
             requireRole($currentUser, ['pastor', 'admin']);

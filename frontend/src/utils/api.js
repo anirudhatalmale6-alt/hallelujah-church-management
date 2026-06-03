@@ -310,6 +310,12 @@ export const finance = {
   loanTransaction: (data) => request('finance.php', { method: 'POST', body: data, params: { action: 'loan_transaction' } }),
   // Opening Balance
   setOpeningBalance: (data) => request('finance.php', { method: 'POST', body: data, params: { action: 'opening_balance' } }),
+  // Pledges
+  pledges: (params) => request('finance.php', { params: { action: 'pledges', ...params } }),
+  pledgeAlerts: () => request('finance.php', { params: { action: 'pledge_alerts' } }),
+  createPledge: (data) => request('finance.php', { method: 'POST', body: data, params: { action: 'pledge' } }),
+  updatePledge: (id, data) => request('finance.php', { method: 'PUT', body: data, params: { action: 'pledge', id } }),
+  deletePledge: (id) => request('finance.php', { method: 'DELETE', params: { action: 'pledge', id } }),
 };
 
 export { getToken, setToken, removeToken, getUser, setUser, ApiError };

@@ -174,6 +174,14 @@ if ($hasPerm('services') || $hasPerm('attendance')) {
     ")->fetchAll();
 }
 
+// Pledge alerts
+$pledgeAlerts = 0;
+if ($hasPerm('finance')) {
+    try {
+        $pledgeAlerts = (int)$db->query("SELECT COUNT(*) FROM pledges WHERE status = 'active'")->fetchColumn();
+    } catch (Exception $e) {}
+}
+
 jsonResponse([
     'members' => [
         'total' => (int)($memberStats['total'] ?? 0),
@@ -196,5 +204,6 @@ jsonResponse([
     'services_without_attendance' => $servicesWithoutAttendance,
     'giving' => $givingStats,
     'expenses' => $expenseStats,
+    'active_pledges' => $pledgeAlerts,
     'user_permissions' => $isAdmin ? ['all'] : $userPerms,
 ]);
