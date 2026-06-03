@@ -266,6 +266,27 @@ export const finance = {
   summary: (params) => request('finance.php', { params: { action: 'summary', ...params } }),
   memberStatement: (memberId, dateFrom, dateTo) =>
     request('finance.php', { params: { action: 'member_statement', member_id: memberId, date_from: dateFrom, date_to: dateTo } }),
+  // Expense categories
+  expenseCategories: () => request('finance.php', { params: { action: 'expense_categories' } }),
+  addExpenseCategory: (data) => request('finance.php', { method: 'POST', body: data, params: { action: 'expense_category' } }),
+  updateExpenseCategory: (id, data) => request('finance.php', { method: 'PUT', body: data, params: { action: 'expense_category', id } }),
+  deleteExpenseCategory: (id) => request('finance.php', { method: 'DELETE', params: { action: 'expense_category', id } }),
+  // Expenses
+  expenses: (params) => request('finance.php', { params: { action: 'expenses', ...params } }),
+  recordExpense: (data) => request('finance.php', { method: 'POST', body: data, params: { action: 'expense' } }),
+  updateExpense: (id, data) => request('finance.php', { method: 'PUT', body: data, params: { action: 'expense', id } }),
+  deleteExpense: (id) => request('finance.php', { method: 'DELETE', params: { action: 'expense', id } }),
+  approveExpense: (id) => request('finance.php', { method: 'PUT', params: { action: 'approve_expense', id } }),
+  expenseSummary: (params) => request('finance.php', { params: { action: 'expense_summary', ...params } }),
+  // Budgets
+  budgets: (year) => request('finance.php', { params: { action: 'budgets', year } }),
+  saveBudget: (data) => request('finance.php', { method: 'POST', body: data, params: { action: 'budget' } }),
+  saveBulkBudget: (items) => request('finance.php', { method: 'POST', body: { items }, params: { action: 'bulk_budget' } }),
+  updateBudget: (id, data) => request('finance.php', { method: 'PUT', body: data, params: { action: 'budget', id } }),
+  deleteBudget: (id) => request('finance.php', { method: 'DELETE', params: { action: 'budget', id } }),
+  // Financial Statements
+  incomeStatement: (dateFrom, dateTo) => request('finance.php', { params: { action: 'income_statement', date_from: dateFrom, date_to: dateTo } }),
+  budgetActual: (year) => request('finance.php', { params: { action: 'budget_actual', year } }),
 };
 
 export { getToken, setToken, removeToken, getUser, setUser, ApiError };
