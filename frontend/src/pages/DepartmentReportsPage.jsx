@@ -984,13 +984,22 @@ function DeptMembersTab({ departments, setError, setMessage }) {
                         </span>
                       </td>
                       <td className="px-4 py-3 text-right">
-                        <button
-                          onClick={() => handleRemove(m.id)}
-                          className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg"
-                          title="Remove"
-                        >
-                          <Trash2 size={16} />
-                        </button>
+                        <div className="flex items-center justify-end gap-1">
+                          <button
+                            onClick={() => { setAssignForm({ user_id: m.user_id, role: m.role }); setShowAssignModal(true); }}
+                            className="p-2 text-gray-400 hover:text-primary-700 hover:bg-primary-50 rounded-lg"
+                            title="Change Role"
+                          >
+                            <Edit2 size={16} />
+                          </button>
+                          <button
+                            onClick={() => handleRemove(m.id)}
+                            className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg"
+                            title="Remove"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -1009,9 +1018,12 @@ function DeptMembersTab({ departments, setError, setMessage }) {
                   onChange={e => setAssignForm(f => ({ ...f, user_id: e.target.value }))}
                 >
                   <option value="">-- Choose a user --</option>
-                  {availableUsers.map(u => (
-                    <option key={u.id} value={u.id}>{u.name} ({u.email})</option>
-                  ))}
+                  {allUsers.map(u => {
+                    const isAssigned = assignedUserIds.includes(u.id);
+                    return (
+                      <option key={u.id} value={u.id}>{u.name} ({u.email}){isAssigned ? ' - Already assigned' : ''}</option>
+                    );
+                  })}
                 </select>
               </div>
               <div>

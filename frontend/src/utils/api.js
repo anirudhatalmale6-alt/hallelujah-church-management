@@ -293,6 +293,13 @@ export const finance = {
   createAccount: (data) => request('finance.php', { method: 'POST', body: data, params: { action: 'account' } }),
   updateAccount: (id, data) => request('finance.php', { method: 'PUT', body: data, params: { action: 'account', id } }),
   deleteAccount: (id) => request('finance.php', { method: 'DELETE', params: { action: 'account', id } }),
+  accountTransactions: (id, params) => request('finance.php', { params: { action: 'account_transactions', id, ...params } }),
+  // Transfers
+  transfer: (data) => request('finance.php', { method: 'POST', body: data, params: { action: 'transfer' } }),
+  transfers: (params) => request('finance.php', { params: { action: 'transfers', ...params } }),
+  // Balance Sheet & Journal
+  balanceSheet: (asOf) => request('finance.php', { params: { action: 'balance_sheet', as_of: asOf } }),
+  journal: (params) => request('finance.php', { params: { action: 'journal', ...params } }),
 };
 
 export { getToken, setToken, removeToken, getUser, setUser, ApiError };

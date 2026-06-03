@@ -45,6 +45,279 @@ switch ($method) {
             jsonResponse(['account' => $account, 'children' => $children->fetchAll()]);
         }
 
+        // --- ACCOUNT TRANSACTIONS ---
+        if ($action === 'account_transactions') {
+            if (!$id) jsonResponse(['error' => 'Account ID required'], 400);
+            $dateFrom = $_GET['date_from'] ?? date('Y-01-01');
+            $dateTo = $_GET['date_to'] ?? date('Y-12-31');
+
+            $stmt = $db->prepare("SELECT * FROM accounts WHERE id = ?");
+            $stmt->execute([$id]);
+            $account = $stmt->fetch();
+            if (!$account) jsonResponse(['error' => 'Account not found'], 404);
+
+            $transactions = [];
+
+            // Get transfers involving this account
+            try {
+                $transfers = $db->prepare("
+                    SELECT t.*, u.name as created_by_name,
+                        fa.name as from_account_name, ta.name as to_account_name
+                    FROM account_transfers t
+                    LEFT JOIN users u ON u.id = t.created_by
+                    LEFT JOIN accounts fa ON fa.id = t.from_account_id
+                    LEFT JOIN accounts ta ON ta.id = t.to_account_id
+                    WHERE (t.from_account_id = ? OR t.to_account_id = ?)
+                    AND t.transfer_date BETWEEN ? AND ?
+                    ORDER BY t.transfer_date DESC
+                ");
+                $transfers->execute([$id, $id, $dateFrom, $dateTo]);
+                foreach ($transfers->fetchAll() as $t) {
+                    $isOutgoing = (int)$t['from_account_id'] === $id;
+                    $transactions[] = [
+                        'type' => 'transfer',
+                        'date' => $t['transfer_date'],
+                        'description' => $isOutgoing
+                            ? 'Transfer to ' . $t['to_account_name']
+                            : 'Transfer from ' . $t['from_account_name'],
+                        'amount' => $isOutgoing ? -1 * (float)$t['amount'] : (float)$t['amount'],
+                        'reference' => $t['reference_number'],
+                        'notes' => $t['notes'],
+                        'created_by' => $t['created_by_name'],
+                    ];
+                }
+            } catch (Exception $e) {}
+
+            // Get donations routed to this account
+            try {
+                $donations = $db->prepare("
+                    SELECT d.*, dc.name as category_name,
+                        COALESCE(m.first_name, '') as member_first_name,
+                        COALESCE(m.last_name, '') as member_last_name,
+                        d.donor_name
+                    FROM donations d
+                    JOIN donation_categories dc ON dc.id = d.category_id
+                    LEFT JOIN members m ON m.id = d.member_id
+                    WHERE d.routed_account_id = ?
+                    AND d.donation_date BETWEEN ? AND ?
+                    ORDER BY d.donation_date DESC
+                ");
+                $donations->execute([$id, $dateFrom, $dateTo]);
+                foreach ($donations->fetchAll() as $d) {
+                    $donor = $d['member_first_name'] ? $d['member_first_name'] . ' ' . $d['member_last_name'] : ($d['donor_name'] ?: 'Anonymous');
+                    $transactions[] = [
+                        'type' => 'donation',
+                        'date' => $d['donation_date'],
+                        'description' => $d['category_name'] . ' - ' . $donor,
+                        'amount' => (float)$d['amount'],
+                        'reference' => $d['reference_number'],
+                        'notes' => $d['notes'],
+                        'created_by' => '',
+                    ];
+                }
+            } catch (Exception $e) {}
+
+            usort($transactions, function($a, $b) { return strcmp($b['date'], $a['date']); });
+
+            jsonResponse([
+                'account' => $account,
+                'transactions' => $transactions,
+                'date_from' => $dateFrom,
+                'date_to' => $dateTo,
+            ]);
+        }
+
+        // --- BALANCE SHEET ---
+        if ($action === 'balance_sheet') {
+            $asOf = $_GET['as_of'] ?? date('Y-m-d');
+
+            $assets = $db->query("
+                SELECT a.*, (SELECT COUNT(*) FROM accounts c WHERE c.parent_id = a.id) as child_count
+                FROM accounts a WHERE a.account_type = 'asset' AND a.is_active = 1
+                ORDER BY a.sort_order ASC
+            ")->fetchAll();
+
+            $liabilities = $db->query("
+                SELECT a.*, (SELECT COUNT(*) FROM accounts c WHERE c.parent_id = a.id) as child_count
+                FROM accounts a WHERE a.account_type = 'liability' AND a.is_active = 1
+                ORDER BY a.sort_order ASC
+            ")->fetchAll();
+
+            $equity = $db->query("
+                SELECT a.*, (SELECT COUNT(*) FROM accounts c WHERE c.parent_id = a.id) as child_count
+                FROM accounts a WHERE a.account_type = 'equity' AND a.is_active = 1
+                ORDER BY a.sort_order ASC
+            ")->fetchAll();
+
+            $totalAssets = 0;
+            $totalLiabilities = 0;
+            $totalEquity = 0;
+            foreach ($assets as $a) {
+                if ($a['parent_id']) $totalAssets += (float)$a['current_balance'];
+            }
+            foreach ($liabilities as $l) {
+                if ($l['parent_id']) $totalLiabilities += (float)$l['current_balance'];
+            }
+            foreach ($equity as $e) {
+                if ($e['parent_id']) $totalEquity += (float)$e['current_balance'];
+            }
+
+            // Net assets = Assets - Liabilities
+            $netAssets = $totalAssets - $totalLiabilities;
+
+            // YTD income and expenses
+            $yearStart = date('Y') . '-01-01';
+            $ytdIncome = (float)$db->prepare("SELECT COALESCE(SUM(amount), 0) FROM donations WHERE donation_date BETWEEN ? AND ?")->execute([$yearStart, $asOf]) ?
+                (float)$db->query("SELECT COALESCE(SUM(amount), 0) FROM donations WHERE donation_date BETWEEN '$yearStart' AND '$asOf'")->fetchColumn() : 0;
+            $ytdExpenses = 0;
+            try {
+                $ytdExpenses = (float)$db->query("SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE expense_date BETWEEN '$yearStart' AND '$asOf'")->fetchColumn();
+            } catch (Exception $e) {}
+            $ytdNetIncome = $ytdIncome - $ytdExpenses;
+
+            jsonResponse([
+                'assets' => $assets,
+                'liabilities' => $liabilities,
+                'equity' => $equity,
+                'total_assets' => $totalAssets,
+                'total_liabilities' => $totalLiabilities,
+                'total_equity' => $totalEquity,
+                'net_assets' => $netAssets,
+                'ytd_income' => $ytdIncome,
+                'ytd_expenses' => $ytdExpenses,
+                'ytd_net_income' => $ytdNetIncome,
+                'as_of' => $asOf,
+            ]);
+        }
+
+        // --- GENERAL JOURNAL ---
+        if ($action === 'journal') {
+            $dateFrom = $_GET['date_from'] ?? date('Y-m-01');
+            $dateTo = $_GET['date_to'] ?? date('Y-m-d');
+            $page = max(1, (int)($_GET['page'] ?? 1));
+            $limit = 50;
+            $offset = ($page - 1) * $limit;
+
+            $entries = [];
+
+            // Donations
+            $stmt = $db->prepare("
+                SELECT d.id, d.donation_date as date, 'donation' as type,
+                    CONCAT(dc.name, ' - ', COALESCE(CONCAT(m.first_name,' ',m.last_name), d.donor_name, 'Anonymous')) as description,
+                    d.amount, d.payment_method, u.name as recorded_by
+                FROM donations d
+                JOIN donation_categories dc ON dc.id = d.category_id
+                LEFT JOIN members m ON m.id = d.member_id
+                LEFT JOIN users u ON u.id = d.recorded_by
+                WHERE d.donation_date BETWEEN ? AND ?
+                ORDER BY d.donation_date DESC, d.created_at DESC
+            ");
+            $stmt->execute([$dateFrom, $dateTo]);
+            foreach ($stmt->fetchAll() as $r) {
+                $entries[] = [
+                    'date' => $r['date'],
+                    'type' => 'Income',
+                    'description' => $r['description'],
+                    'debit' => (float)$r['amount'],
+                    'credit' => 0,
+                    'method' => $r['payment_method'],
+                    'recorded_by' => $r['recorded_by'],
+                ];
+            }
+
+            // Expenses
+            try {
+                $stmt = $db->prepare("
+                    SELECT e.id, e.expense_date as date, 'expense' as type,
+                        CONCAT(ec.name, COALESCE(CONCAT(' - ', e.vendor), '')) as description,
+                        e.amount, e.payment_method, u.name as recorded_by, e.status
+                    FROM expenses e
+                    JOIN expense_categories ec ON ec.id = e.category_id
+                    LEFT JOIN users u ON u.id = e.recorded_by
+                    WHERE e.expense_date BETWEEN ? AND ?
+                    ORDER BY e.expense_date DESC, e.created_at DESC
+                ");
+                $stmt->execute([$dateFrom, $dateTo]);
+                foreach ($stmt->fetchAll() as $r) {
+                    $entries[] = [
+                        'date' => $r['date'],
+                        'type' => 'Expense',
+                        'description' => $r['description'],
+                        'debit' => 0,
+                        'credit' => (float)$r['amount'],
+                        'method' => $r['payment_method'],
+                        'recorded_by' => $r['recorded_by'],
+                    ];
+                }
+            } catch (Exception $e) {}
+
+            // Transfers
+            try {
+                $stmt = $db->prepare("
+                    SELECT t.*, u.name as created_by_name,
+                        fa.name as from_name, ta.name as to_name
+                    FROM account_transfers t
+                    LEFT JOIN users u ON u.id = t.created_by
+                    LEFT JOIN accounts fa ON fa.id = t.from_account_id
+                    LEFT JOIN accounts ta ON ta.id = t.to_account_id
+                    WHERE t.transfer_date BETWEEN ? AND ?
+                    ORDER BY t.transfer_date DESC
+                ");
+                $stmt->execute([$dateFrom, $dateTo]);
+                foreach ($stmt->fetchAll() as $r) {
+                    $entries[] = [
+                        'date' => $r['transfer_date'],
+                        'type' => 'Transfer',
+                        'description' => 'Transfer: ' . $r['from_name'] . ' → ' . $r['to_name'],
+                        'debit' => (float)$r['amount'],
+                        'credit' => (float)$r['amount'],
+                        'method' => '',
+                        'recorded_by' => $r['created_by_name'],
+                    ];
+                }
+            } catch (Exception $e) {}
+
+            usort($entries, function($a, $b) { return strcmp($b['date'], $a['date']); });
+
+            $totalDebit = array_sum(array_column($entries, 'debit'));
+            $totalCredit = array_sum(array_column($entries, 'credit'));
+            $totalEntries = count($entries);
+            $pagedEntries = array_slice($entries, $offset, $limit);
+
+            jsonResponse([
+                'entries' => $pagedEntries,
+                'total' => $totalEntries,
+                'total_debit' => $totalDebit,
+                'total_credit' => $totalCredit,
+                'page' => $page,
+                'pages' => max(1, ceil($totalEntries / $limit)),
+                'date_from' => $dateFrom,
+                'date_to' => $dateTo,
+            ]);
+        }
+
+        // --- TRANSFERS LIST ---
+        if ($action === 'transfers') {
+            $dateFrom = $_GET['date_from'] ?? date('Y-01-01');
+            $dateTo = $_GET['date_to'] ?? date('Y-12-31');
+            try {
+                $stmt = $db->prepare("
+                    SELECT t.*, u.name as created_by_name,
+                        fa.name as from_account_name, ta.name as to_account_name
+                    FROM account_transfers t
+                    LEFT JOIN users u ON u.id = t.created_by
+                    LEFT JOIN accounts fa ON fa.id = t.from_account_id
+                    LEFT JOIN accounts ta ON ta.id = t.to_account_id
+                    WHERE t.transfer_date BETWEEN ? AND ?
+                    ORDER BY t.transfer_date DESC
+                ");
+                $stmt->execute([$dateFrom, $dateTo]);
+                jsonResponse(['transfers' => $stmt->fetchAll()]);
+            } catch (Exception $e) {
+                jsonResponse(['transfers' => [], 'note' => 'transfers table may not exist yet']);
+            }
+        }
+
         // --- DONATION CATEGORIES ---
         if ($action === 'categories') {
             $stmt = $db->query("SELECT * FROM donation_categories ORDER BY sort_order ASC");
@@ -549,6 +822,39 @@ switch ($method) {
         break;
 
     case 'POST':
+        // --- TRANSFER BETWEEN ACCOUNTS ---
+        if ($action === 'transfer') {
+            $data = getRequestBody();
+            if (empty($data['from_account_id']) || empty($data['to_account_id']) || empty($data['amount']) || empty($data['transfer_date'])) {
+                jsonResponse(['error' => 'from_account_id, to_account_id, amount, and transfer_date are required'], 400);
+            }
+            if ((float)$data['amount'] <= 0) jsonResponse(['error' => 'Amount must be positive'], 400);
+            if ($data['from_account_id'] == $data['to_account_id']) jsonResponse(['error' => 'Cannot transfer to the same account'], 400);
+
+            $amount = (float)$data['amount'];
+            $db->beginTransaction();
+            try {
+                $db->prepare("INSERT INTO account_transfers (from_account_id, to_account_id, amount, transfer_date, reference_number, notes, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)")
+                    ->execute([
+                        (int)$data['from_account_id'],
+                        (int)$data['to_account_id'],
+                        $amount,
+                        $data['transfer_date'],
+                        $data['reference_number'] ?? null,
+                        $data['notes'] ?? null,
+                        $currentUser['user_id'],
+                    ]);
+
+                $db->prepare("UPDATE accounts SET current_balance = current_balance - ? WHERE id = ?")->execute([$amount, (int)$data['from_account_id']]);
+                $db->prepare("UPDATE accounts SET current_balance = current_balance + ? WHERE id = ?")->execute([$amount, (int)$data['to_account_id']]);
+                $db->commit();
+                jsonResponse(['message' => 'Transfer completed'], 201);
+            } catch (Exception $e) {
+                $db->rollBack();
+                jsonResponse(['error' => 'Transfer failed: ' . $e->getMessage()], 500);
+            }
+        }
+
         // --- CREATE ACCOUNT ---
         if ($action === 'account') {
             requireRole($currentUser, ['pastor', 'admin']);
@@ -704,28 +1010,53 @@ switch ($method) {
             $records = $data['records'] ?? [];
             if (empty($records)) jsonResponse(['error' => 'No records provided'], 400);
 
+            // Load payment routing
+            $routing = [];
+            try {
+                $routingRows = $db->query("SELECT payment_method, account_id FROM payment_routing")->fetchAll();
+                foreach ($routingRows as $rr) $routing[$rr['payment_method']] = (int)$rr['account_id'];
+            } catch (Exception $e) {}
+
             $stmt = $db->prepare("
-                INSERT INTO donations (member_id, service_id, category_id, amount, payment_method, reference_number, donor_name, notes, donation_date, recorded_by)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO donations (member_id, service_id, category_id, amount, payment_method, reference_number, donor_name, notes, donation_date, recorded_by, routed_account_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ");
 
+            $accountUpdates = [];
             $count = 0;
             foreach ($records as $r) {
                 if (empty($r['amount']) || (float)$r['amount'] <= 0) continue;
+                $method = $r['payment_method'] ?? 'cash';
+                $routedAccountId = $routing[$method] ?? null;
+                $amount = (float)$r['amount'];
+
                 $stmt->execute([
                     !empty($r['member_id']) ? (int)$r['member_id'] : null,
                     !empty($r['service_id']) ? (int)$r['service_id'] : null,
                     (int)$r['category_id'],
-                    (float)$r['amount'],
-                    $r['payment_method'] ?? 'cash',
+                    $amount,
+                    $method,
                     $r['reference_number'] ?? null,
                     $r['donor_name'] ?? null,
                     $r['notes'] ?? null,
                     $r['donation_date'] ?? date('Y-m-d'),
                     $currentUser['user_id'],
+                    $routedAccountId,
                 ]);
+
+                if ($routedAccountId) {
+                    if (!isset($accountUpdates[$routedAccountId])) $accountUpdates[$routedAccountId] = 0;
+                    $accountUpdates[$routedAccountId] += $amount;
+                }
                 $count++;
             }
+
+            // Update account balances
+            $updateStmt = $db->prepare("UPDATE accounts SET current_balance = current_balance + ? WHERE id = ?");
+            foreach ($accountUpdates as $accId => $total) {
+                $updateStmt->execute([$total, $accId]);
+            }
+
             jsonResponse(['message' => "$count donation(s) recorded", 'count' => $count], 201);
         }
 

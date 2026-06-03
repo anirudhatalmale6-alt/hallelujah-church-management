@@ -18,6 +18,9 @@ const paymentMethods = [
   { value: 'cash', label: 'Cash' },
   { value: 'check', label: 'Check' },
   { value: 'card', label: 'Card' },
+  { value: 'zelle', label: 'Zelle' },
+  { value: 'cashapp', label: 'CashApp' },
+  { value: 'paypal', label: 'PayPal' },
   { value: 'online', label: 'Online Transfer' },
   { value: 'other', label: 'Other' },
 ];
@@ -164,10 +167,15 @@ function RecordGivingTab({ setError, setMessage }) {
   }, []);
 
   const updateEntry = (idx, field, value) => {
-    setEntries(prev => prev.map((e, i) => i === idx ? { ...e, [field]: value } : e));
+    setEntries(prev => {
+      const updated = prev.map((e, i) => i === idx ? { ...e, [field]: value } : e);
+      const last = updated[updated.length - 1];
+      if (idx === updated.length - 1 && (last.category_id || last.amount || last.member_id)) {
+        updated.push(createEmptyEntry());
+      }
+      return updated;
+    });
   };
-
-  const addEntry = () => setEntries(prev => [...prev, createEmptyEntry()]);
 
   const removeEntry = (idx) => {
     if (entries.length <= 1) return;
@@ -202,11 +210,12 @@ function RecordGivingTab({ setError, setMessage }) {
     setSaving(false);
   };
 
+  const filledEntries = entries.filter(e => e.category_id || e.amount || e.member_id);
   const totalAmount = entries.reduce((sum, e) => sum + (parseFloat(e.amount) || 0), 0);
 
   return (
     <>
-      <div className="card mb-6">
+      <div className="card mb-4">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
             <label className="label">Service (optional)</label>
@@ -224,74 +233,81 @@ function RecordGivingTab({ setError, setMessage }) {
         </div>
       </div>
 
-      <div className="space-y-3 mb-4">
-        {entries.map((entry, idx) => (
-          <div key={entry.key} className="card">
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-sm font-semibold text-gray-500">Entry #{idx + 1}</span>
-              {entries.length > 1 && (
-                <button onClick={() => removeEntry(idx)} className="p-1 text-gray-400 hover:text-red-500">
-                  <X size={16} />
-                </button>
-              )}
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              <div>
-                <label className="label">Member</label>
-                <select className="input" value={entry.member_id} onChange={e => updateEntry(idx, 'member_id', e.target.value)}>
-                  <option value="">-- Non-member / Anonymous --</option>
-                  {membersList.map(m => (
-                    <option key={m.id} value={m.id}>{m.last_name}, {m.first_name}</option>
-                  ))}
-                </select>
-              </div>
-              {!entry.member_id && (
-                <div>
-                  <label className="label">Donor Name</label>
-                  <input className="input" placeholder="Name of non-member donor" value={entry.donor_name} onChange={e => updateEntry(idx, 'donor_name', e.target.value)} />
-                </div>
-              )}
-              <div>
-                <label className="label">Category *</label>
-                <select className="input" value={entry.category_id} onChange={e => updateEntry(idx, 'category_id', e.target.value)}>
-                  <option value="">-- Select --</option>
-                  {categories.map(c => (
-                    <option key={c.id} value={c.id}>{c.name}{c.fund_type && c.fund_type !== 'general' ? ` (${fundTypeLabel[c.fund_type]})` : ''}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="label">Amount ($) *</label>
-                <input type="number" step="0.01" min="0" className="input" placeholder="0.00" value={entry.amount} onChange={e => updateEntry(idx, 'amount', e.target.value)} />
-              </div>
-              <div>
-                <label className="label">Payment Method</label>
-                <select className="input" value={entry.payment_method} onChange={e => updateEntry(idx, 'payment_method', e.target.value)}>
-                  {paymentMethods.map(p => (
-                    <option key={p.value} value={p.value}>{p.label}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="label">Notes</label>
-                <input className="input" placeholder="Optional notes" value={entry.notes} onChange={e => updateEntry(idx, 'notes', e.target.value)} />
-              </div>
-            </div>
-          </div>
-        ))}
+      <div className="card p-0 overflow-hidden mb-4">
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead className="bg-gray-50 border-b border-gray-200">
+              <tr>
+                <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase w-8">#</th>
+                <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Member / Donor</th>
+                <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Category</th>
+                <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase w-28">Amount</th>
+                <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Method</th>
+                <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase hidden lg:table-cell">Notes</th>
+                <th className="w-10"></th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {entries.map((entry, idx) => (
+                <tr key={entry.key} className="hover:bg-gray-50">
+                  <td className="px-3 py-2 text-xs text-gray-400 font-mono">{idx + 1}</td>
+                  <td className="px-3 py-2">
+                    <select className="input py-1.5 text-sm" value={entry.member_id} onChange={e => updateEntry(idx, 'member_id', e.target.value)}>
+                      <option value="">Anonymous</option>
+                      {membersList.map(m => (
+                        <option key={m.id} value={m.id}>{m.last_name}, {m.first_name}</option>
+                      ))}
+                    </select>
+                    {!entry.member_id && (
+                      <input className="input py-1 text-sm mt-1" placeholder="Donor name" value={entry.donor_name} onChange={e => updateEntry(idx, 'donor_name', e.target.value)} />
+                    )}
+                  </td>
+                  <td className="px-3 py-2">
+                    <select className="input py-1.5 text-sm" value={entry.category_id} onChange={e => updateEntry(idx, 'category_id', e.target.value)}>
+                      <option value="">Select</option>
+                      {categories.map(c => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                    </select>
+                  </td>
+                  <td className="px-3 py-2">
+                    <input type="number" step="0.01" min="0" className="input py-1.5 text-sm text-right" placeholder="0.00" value={entry.amount} onChange={e => updateEntry(idx, 'amount', e.target.value)} />
+                  </td>
+                  <td className="px-3 py-2">
+                    <select className="input py-1.5 text-sm" value={entry.payment_method} onChange={e => updateEntry(idx, 'payment_method', e.target.value)}>
+                      {paymentMethods.map(p => (
+                        <option key={p.value} value={p.value}>{p.label}</option>
+                      ))}
+                    </select>
+                  </td>
+                  <td className="px-3 py-2 hidden lg:table-cell">
+                    <input className="input py-1.5 text-sm" placeholder="Notes" value={entry.notes} onChange={e => updateEntry(idx, 'notes', e.target.value)} />
+                  </td>
+                  <td className="px-2 py-2">
+                    {entries.length > 1 && (entry.category_id || entry.amount || idx < entries.length - 1) && (
+                      <button onClick={() => removeEntry(idx)} className="p-1 text-gray-300 hover:text-red-500">
+                        <X size={14} />
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
 
-      <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
-        <button onClick={addEntry} className="btn-secondary">
-          <Plus size={16} /> Add Another Entry
-        </button>
+      <div className="flex items-center justify-between">
+        <div className="text-sm text-gray-500">
+          {filledEntries.length} entr{filledEntries.length === 1 ? 'y' : 'ies'} | New rows appear automatically as you type
+        </div>
         <div className="flex items-center gap-4">
           <div className="text-lg font-bold text-gray-900">
             Total: {formatCurrency(totalAmount)}
           </div>
           <button onClick={handleSave} disabled={saving} className="btn-primary">
             {saving ? <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" /> : <DollarSign size={16} />}
-            Save Donations
+            Save All ({filledEntries.length})
           </button>
         </div>
       </div>
@@ -1482,22 +1498,25 @@ function FinancialStatementsTab({ setError }) {
   const [year, setYear] = useState(new Date().getFullYear());
   const [dateFrom, setDateFrom] = useState(new Date().getFullYear() + '-01-01');
   const [dateTo, setDateTo] = useState(new Date().toISOString().split('T')[0]);
+  const [journalPage, setJournalPage] = useState(1);
 
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
       if (view === 'income_statement') {
-        const result = await financeApi.incomeStatement(dateFrom, dateTo);
-        setData(result);
-      } else {
-        const result = await financeApi.budgetActual(year);
-        setData(result);
+        setData(await financeApi.incomeStatement(dateFrom, dateTo));
+      } else if (view === 'budget_actual') {
+        setData(await financeApi.budgetActual(year));
+      } else if (view === 'balance_sheet') {
+        setData(await financeApi.balanceSheet(dateTo));
+      } else if (view === 'journal') {
+        setData(await financeApi.journal({ date_from: dateFrom, date_to: dateTo, page: journalPage }));
       }
     } catch (err) {
       setError(err.message);
     }
     setLoading(false);
-  }, [view, dateFrom, dateTo, year, setError]);
+  }, [view, dateFrom, dateTo, year, journalPage, setError]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
@@ -1606,6 +1625,47 @@ function FinancialStatementsTab({ setError }) {
     doc.save(`budget-vs-actual-${data.year}.pdf`);
   };
 
+  const exportBalanceSheetPDF = () => {
+    if (!data) return;
+    const doc = new jsPDF();
+    doc.setFontSize(16);
+    doc.text('Hallelujah In The City', 14, 15);
+    doc.setFontSize(13);
+    doc.text('Balance Sheet', 14, 23);
+    doc.setFontSize(9);
+    doc.setTextColor(100);
+    doc.text(`As of: ${data.as_of}`, 14, 29);
+    doc.setTextColor(0);
+
+    const assetRows = (data.assets || []).filter(a => a.parent_id).map(a => [
+      a.name, formatCurrency(a.current_balance),
+    ]);
+    assetRows.push([{ content: 'Total Assets', styles: { fontStyle: 'bold' } }, { content: formatCurrency(data.total_assets), styles: { fontStyle: 'bold' } }]);
+
+    doc.setFontSize(11);
+    doc.setFont(undefined, 'bold');
+    doc.text('ASSETS', 14, 38);
+    autoTable(doc, { body: assetRows, startY: 41, theme: 'plain', styles: { fontSize: 9 }, columnStyles: { 1: { halign: 'right' } } });
+
+    let y = doc.lastAutoTable.finalY + 8;
+    doc.setFont(undefined, 'bold');
+    doc.text('LIABILITIES', 14, y);
+    const liabRows = (data.liabilities || []).filter(a => a.parent_id).map(a => [a.name, formatCurrency(a.current_balance)]);
+    liabRows.push([{ content: 'Total Liabilities', styles: { fontStyle: 'bold' } }, { content: formatCurrency(data.total_liabilities), styles: { fontStyle: 'bold' } }]);
+    autoTable(doc, { body: liabRows, startY: y + 3, theme: 'plain', styles: { fontSize: 9 }, columnStyles: { 1: { halign: 'right' } } });
+
+    y = doc.lastAutoTable.finalY + 6;
+    doc.setDrawColor(0);
+    doc.line(14, y, 196, y);
+    y += 6;
+    doc.setFontSize(12);
+    doc.setFont(undefined, 'bold');
+    doc.text('NET ASSETS (Assets - Liabilities)', 14, y);
+    doc.text(formatCurrency(data.net_assets), 196, y, { align: 'right' });
+
+    doc.save(`balance-sheet-${data.as_of}.pdf`);
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-16">
@@ -1622,10 +1682,12 @@ function FinancialStatementsTab({ setError }) {
             <label className="label">Statement Type</label>
             <select className="input" value={view} onChange={e => setView(e.target.value)}>
               <option value="income_statement">Income Statement</option>
+              <option value="balance_sheet">Balance Sheet</option>
               <option value="budget_actual">Budget vs Actual</option>
+              <option value="journal">General Journal</option>
             </select>
           </div>
-          {view === 'income_statement' ? (
+          {(view === 'income_statement' || view === 'journal') ? (
             <>
               <div>
                 <label className="label">From</label>
@@ -1636,6 +1698,11 @@ function FinancialStatementsTab({ setError }) {
                 <input type="date" className="input" value={dateTo} onChange={e => setDateTo(e.target.value)} />
               </div>
             </>
+          ) : view === 'balance_sheet' ? (
+            <div>
+              <label className="label">As Of Date</label>
+              <input type="date" className="input" value={dateTo} onChange={e => setDateTo(e.target.value)} />
+            </div>
           ) : (
             <div>
               <label className="label">Year</label>
@@ -1647,18 +1714,22 @@ function FinancialStatementsTab({ setError }) {
             </div>
           )}
           <div className="flex items-end">
-            <button
-              onClick={view === 'income_statement' ? exportIncomeStatementPDF : exportBudgetActualPDF}
-              className="btn-secondary"
-            >
-              <Download size={16} /> PDF
-            </button>
+            {(view === 'income_statement' || view === 'budget_actual' || view === 'balance_sheet') && (
+              <button
+                onClick={view === 'income_statement' ? exportIncomeStatementPDF : view === 'balance_sheet' ? exportBalanceSheetPDF : exportBudgetActualPDF}
+                className="btn-secondary"
+              >
+                <Download size={16} /> PDF
+              </button>
+            )}
           </div>
         </div>
       </div>
 
       {view === 'income_statement' && data && <IncomeStatementView data={data} />}
+      {view === 'balance_sheet' && data && <BalanceSheetView data={data} />}
       {view === 'budget_actual' && data && <BudgetActualView data={data} />}
+      {view === 'journal' && data && <GeneralJournalView data={data} page={journalPage} setPage={setJournalPage} />}
     </>
   );
 }
@@ -1895,6 +1966,149 @@ function BudgetActualView({ data }) {
   );
 }
 
+function BalanceSheetView({ data }) {
+  const renderSection = (items, label, colorClass) => {
+    const subAccounts = items.filter(a => a.parent_id);
+    return (
+      <div className="mb-6">
+        <h3 className={`text-sm font-bold uppercase tracking-wider mb-3 border-b-2 pb-1 ${colorClass}`}>{label}</h3>
+        <div className="space-y-1">
+          {subAccounts.map(a => (
+            <div key={a.id} className="flex items-center justify-between py-1.5 px-2 hover:bg-gray-50 rounded">
+              <span className="text-sm text-gray-700">{a.account_number ? `${a.account_number} - ` : ''}{a.name}</span>
+              <span className="text-sm font-medium text-gray-900">{formatCurrency(a.current_balance)}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="card">
+      <div className="text-center mb-6">
+        <h2 className="text-xl font-bold text-gray-900">Balance Sheet</h2>
+        <p className="text-sm text-gray-500">As of {new Date(data.as_of + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</p>
+      </div>
+
+      {renderSection(data.assets || [], 'Assets', 'text-blue-700 border-blue-200')}
+
+      <div className="flex items-center justify-between py-2 px-2 bg-blue-50 rounded-lg mb-6 font-semibold">
+        <span className="text-sm text-blue-800">Total Assets</span>
+        <span className="text-sm text-blue-800">{formatCurrency(data.total_assets)}</span>
+      </div>
+
+      {renderSection(data.liabilities || [], 'Liabilities', 'text-red-700 border-red-200')}
+
+      <div className="flex items-center justify-between py-2 px-2 bg-red-50 rounded-lg mb-6 font-semibold">
+        <span className="text-sm text-red-800">Total Liabilities</span>
+        <span className="text-sm text-red-800">{formatCurrency(data.total_liabilities)}</span>
+      </div>
+
+      <div className={`flex items-center justify-between p-4 rounded-xl ${data.net_assets >= 0 ? 'bg-emerald-50 border-2 border-emerald-200' : 'bg-red-50 border-2 border-red-200'} mb-6`}>
+        <span className={`text-lg font-bold ${data.net_assets >= 0 ? 'text-emerald-800' : 'text-red-800'}`}>
+          Net Assets (Assets - Liabilities)
+        </span>
+        <span className={`text-2xl font-bold ${data.net_assets >= 0 ? 'text-emerald-800' : 'text-red-800'}`}>
+          {formatCurrency(data.net_assets)}
+        </span>
+      </div>
+
+      <div className="border-t border-gray-200 pt-4 mt-4">
+        <h3 className="text-sm font-bold text-gray-700 uppercase tracking-wider mb-3">Year-to-Date Activity</h3>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className="bg-green-50 rounded-lg p-3">
+            <div className="text-xs text-green-600 font-medium">YTD Income</div>
+            <div className="text-lg font-bold text-green-700">{formatCurrency(data.ytd_income)}</div>
+          </div>
+          <div className="bg-red-50 rounded-lg p-3">
+            <div className="text-xs text-red-600 font-medium">YTD Expenses</div>
+            <div className="text-lg font-bold text-red-700">{formatCurrency(data.ytd_expenses)}</div>
+          </div>
+          <div className={`rounded-lg p-3 ${data.ytd_net_income >= 0 ? 'bg-emerald-50' : 'bg-amber-50'}`}>
+            <div className={`text-xs font-medium ${data.ytd_net_income >= 0 ? 'text-emerald-600' : 'text-amber-600'}`}>YTD Net Income</div>
+            <div className={`text-lg font-bold ${data.ytd_net_income >= 0 ? 'text-emerald-700' : 'text-amber-700'}`}>{formatCurrency(data.ytd_net_income)}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function GeneralJournalView({ data, page, setPage }) {
+  const typeColors = {
+    Income: 'bg-green-100 text-green-700',
+    Expense: 'bg-red-100 text-red-700',
+    Transfer: 'bg-blue-100 text-blue-700',
+  };
+
+  return (
+    <div>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+        <div className="card bg-green-50">
+          <div className="text-xs text-green-600 font-medium">Total Debits (Income)</div>
+          <div className="text-xl font-bold text-green-700">{formatCurrency(data.total_debit)}</div>
+        </div>
+        <div className="card bg-red-50">
+          <div className="text-xs text-red-600 font-medium">Total Credits (Expense)</div>
+          <div className="text-xl font-bold text-red-700">{formatCurrency(data.total_credit)}</div>
+        </div>
+        <div className="card">
+          <div className="text-xs text-gray-500 font-medium">Total Entries</div>
+          <div className="text-xl font-bold text-gray-900">{data.total || 0}</div>
+        </div>
+        <div className="card">
+          <div className="text-xs text-gray-500 font-medium">Period</div>
+          <div className="text-sm font-medium text-gray-700">{data.date_from} to {data.date_to}</div>
+        </div>
+      </div>
+
+      <div className="card p-0 overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead className="bg-gray-50 border-b border-gray-200">
+              <tr>
+                <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase">Date</th>
+                <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase">Type</th>
+                <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase">Description</th>
+                <th className="text-right px-4 py-2 text-xs font-semibold text-gray-500 uppercase">Debit</th>
+                <th className="text-right px-4 py-2 text-xs font-semibold text-gray-500 uppercase">Credit</th>
+                <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase hidden lg:table-cell">Method</th>
+                <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase hidden lg:table-cell">By</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {(data.entries || []).map((e, i) => (
+                <tr key={i} className="hover:bg-gray-50">
+                  <td className="px-4 py-2 text-sm text-gray-600">{e.date}</td>
+                  <td className="px-4 py-2">
+                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${typeColors[e.type] || 'bg-gray-100 text-gray-700'}`}>
+                      {e.type}
+                    </span>
+                  </td>
+                  <td className="px-4 py-2 text-sm text-gray-700 max-w-[250px] truncate">{e.description}</td>
+                  <td className="px-4 py-2 text-sm text-right font-medium text-green-700">{e.debit > 0 ? formatCurrency(e.debit) : ''}</td>
+                  <td className="px-4 py-2 text-sm text-right font-medium text-red-700">{e.credit > 0 ? formatCurrency(e.credit) : ''}</td>
+                  <td className="px-4 py-2 text-sm text-gray-500 hidden lg:table-cell capitalize">{paymentMethodLabel[e.method] || e.method || '-'}</td>
+                  <td className="px-4 py-2 text-sm text-gray-500 hidden lg:table-cell">{e.recorded_by || '-'}</td>
+                </tr>
+              ))}
+              {(data.entries || []).length === 0 && (
+                <tr><td colSpan={7} className="px-4 py-12 text-center text-gray-400">No journal entries for this period</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        {data.pages > 1 && (
+          <div className="px-4 py-3 border-t border-gray-200">
+            <Pagination page={page} pages={data.pages} total={data.total} onPageChange={setPage} />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ─── Chart of Accounts Tab ─── */
 function ChartOfAccountsTab({ setError, setMessage, isAdmin }) {
   const [accounts, setAccounts] = useState([]);
@@ -1907,6 +2121,15 @@ function ChartOfAccountsTab({ setError, setMessage, isAdmin }) {
   });
   const [saving, setSaving] = useState(false);
   const [expandedTypes, setExpandedTypes] = useState({ asset: true, liability: true, equity: true, income: true, expense: true });
+  const [showTransfer, setShowTransfer] = useState(false);
+  const [transferForm, setTransferForm] = useState({
+    from_account_id: '', to_account_id: '', amount: '', transfer_date: new Date().toISOString().split('T')[0],
+    reference_number: '', notes: '',
+  });
+  const [transferSaving, setTransferSaving] = useState(false);
+  const [viewAccount, setViewAccount] = useState(null);
+  const [accountTxns, setAccountTxns] = useState(null);
+  const [txnLoading, setTxnLoading] = useState(false);
 
   const loadAccounts = async () => {
     setLoading(true);
@@ -2000,6 +2223,37 @@ function ChartOfAccountsTab({ setError, setMessage, isAdmin }) {
     }
   };
 
+  const handleTransfer = async () => {
+    if (!transferForm.from_account_id || !transferForm.to_account_id || !transferForm.amount) {
+      setError('From, To, and Amount are required'); return;
+    }
+    setTransferSaving(true);
+    try {
+      await financeApi.transfer(transferForm);
+      setMessage('Transfer completed');
+      setShowTransfer(false);
+      setTransferForm({ from_account_id: '', to_account_id: '', amount: '', transfer_date: new Date().toISOString().split('T')[0], reference_number: '', notes: '' });
+      loadAccounts();
+    } catch (err) {
+      setError(err.message);
+    }
+    setTransferSaving(false);
+  };
+
+  const viewAccountTransactions = async (account) => {
+    setViewAccount(account);
+    setTxnLoading(true);
+    try {
+      const data = await financeApi.accountTransactions(account.id, {});
+      setAccountTxns(data);
+    } catch (err) {
+      setAccountTxns({ transactions: [] });
+    }
+    setTxnLoading(false);
+  };
+
+  const assetAccounts = accounts.filter(a => a.account_type === 'asset' && a.parent_id);
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-16">
@@ -2019,7 +2273,10 @@ function ChartOfAccountsTab({ setError, setMessage, isAdmin }) {
           <td className="px-4 py-2.5 text-sm" style={{ paddingLeft: `${16 + level * 24}px` }}>
             <div className="flex items-center gap-2">
               {children.length > 0 && <ChevronRight size={14} className="text-gray-400" />}
-              <span className={level === 0 ? 'text-gray-900 font-semibold' : 'text-gray-700'}>{account.name}</span>
+              <span
+                className={`cursor-pointer hover:underline ${level === 0 ? 'text-gray-900 font-semibold' : 'text-gray-700 hover:text-primary-700'}`}
+                onClick={(e) => { e.stopPropagation(); viewAccountTransactions(account); }}
+              >{account.name}</span>
               {!Number(account.is_active) && (
                 <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-100 text-gray-500">Inactive</span>
               )}
@@ -2075,9 +2332,14 @@ function ChartOfAccountsTab({ setError, setMessage, isAdmin }) {
           <h2 className="text-lg font-semibold text-gray-900">Chart of Accounts</h2>
           <p className="text-sm text-gray-500">Assets, liabilities, equity, income, and expense accounts</p>
         </div>
-        {isAdmin && (
-          <button onClick={() => openNew('asset', '')} className="btn-primary"><Plus size={16} /> Add Account</button>
-        )}
+        <div className="flex gap-2">
+          {isAdmin && (
+            <button onClick={() => setShowTransfer(true)} className="btn-secondary"><CreditCard size={16} /> Transfer</button>
+          )}
+          {isAdmin && (
+            <button onClick={() => openNew('asset', '')} className="btn-primary"><Plus size={16} /> Add Account</button>
+          )}
+        </div>
       </div>
 
       {typeGroups.map(type => {
@@ -2184,6 +2446,101 @@ function ChartOfAccountsTab({ setError, setMessage, isAdmin }) {
             </button>
           </div>
         </div>
+      </Modal>
+
+      {/* Transfer Modal */}
+      <Modal isOpen={showTransfer} onClose={() => setShowTransfer(false)} title="Transfer Between Accounts" size="md">
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="label">From Account *</label>
+              <select className="input" value={transferForm.from_account_id} onChange={e => setTransferForm(f => ({ ...f, from_account_id: e.target.value }))}>
+                <option value="">-- Select --</option>
+                {assetAccounts.map(a => (
+                  <option key={a.id} value={a.id}>{a.name} ({formatCurrency(a.current_balance)})</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="label">To Account *</label>
+              <select className="input" value={transferForm.to_account_id} onChange={e => setTransferForm(f => ({ ...f, to_account_id: e.target.value }))}>
+                <option value="">-- Select --</option>
+                {assetAccounts.filter(a => String(a.id) !== String(transferForm.from_account_id)).map(a => (
+                  <option key={a.id} value={a.id}>{a.name} ({formatCurrency(a.current_balance)})</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="label">Amount ($) *</label>
+              <input type="number" step="0.01" min="0" className="input" value={transferForm.amount} onChange={e => setTransferForm(f => ({ ...f, amount: e.target.value }))} />
+            </div>
+            <div>
+              <label className="label">Date *</label>
+              <input type="date" className="input" value={transferForm.transfer_date} onChange={e => setTransferForm(f => ({ ...f, transfer_date: e.target.value }))} />
+            </div>
+          </div>
+          <div>
+            <label className="label">Notes</label>
+            <input className="input" placeholder="Transfer notes" value={transferForm.notes} onChange={e => setTransferForm(f => ({ ...f, notes: e.target.value }))} />
+          </div>
+          <div className="flex justify-end gap-3 pt-2">
+            <button onClick={() => setShowTransfer(false)} className="btn-secondary">Cancel</button>
+            <button onClick={handleTransfer} disabled={transferSaving} className="btn-primary">
+              {transferSaving ? <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" /> : <Check size={16} />}
+              Transfer
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Account Transactions Modal */}
+      <Modal isOpen={!!viewAccount} onClose={() => { setViewAccount(null); setAccountTxns(null); }} title={viewAccount ? `${viewAccount.name} - Transactions` : ''} size="lg">
+        {txnLoading ? (
+          <div className="flex items-center justify-center py-12">
+            <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary-700"></div>
+          </div>
+        ) : accountTxns ? (
+          <div>
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <div className="text-sm text-gray-500">Current Balance</div>
+                <div className="text-2xl font-bold text-gray-900">{formatCurrency(viewAccount?.current_balance)}</div>
+              </div>
+            </div>
+            {(accountTxns.transactions || []).length > 0 ? (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50 border-b border-gray-200">
+                    <tr>
+                      <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Date</th>
+                      <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Type</th>
+                      <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Description</th>
+                      <th className="text-right px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {accountTxns.transactions.map((t, i) => (
+                      <tr key={i} className="hover:bg-gray-50">
+                        <td className="px-3 py-2 text-gray-600">{t.date}</td>
+                        <td className="px-3 py-2">
+                          <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                            t.type === 'donation' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'
+                          }`}>{t.type === 'donation' ? 'Income' : 'Transfer'}</span>
+                        </td>
+                        <td className="px-3 py-2 text-gray-700">{t.description}</td>
+                        <td className={`px-3 py-2 text-right font-medium ${t.amount >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                          {t.amount >= 0 ? '+' : ''}{formatCurrency(t.amount)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="text-center py-8 text-gray-400">No transactions found for this account</div>
+            )}
+          </div>
+        ) : null}
       </Modal>
     </>
   );
