@@ -1661,7 +1661,7 @@ function FinancialStatementsTab({ setError }) {
     doc.setTextColor(0);
 
     const assetRows = (data.assets || []).filter(a => a.parent_id).map(a => [
-      a.name, formatCurrency(a.current_balance),
+      a.name, formatCurrency(a.calculated_balance ?? a.current_balance),
     ]);
     assetRows.push([{ content: 'Total Assets', styles: { fontStyle: 'bold' } }, { content: formatCurrency(data.total_assets), styles: { fontStyle: 'bold' } }]);
 
@@ -1673,7 +1673,7 @@ function FinancialStatementsTab({ setError }) {
     let y = doc.lastAutoTable.finalY + 8;
     doc.setFont(undefined, 'bold');
     doc.text('LIABILITIES', 14, y);
-    const liabRows = (data.liabilities || []).filter(a => a.parent_id).map(a => [a.name, formatCurrency(a.current_balance)]);
+    const liabRows = (data.liabilities || []).filter(a => a.parent_id).map(a => [a.name, formatCurrency(a.calculated_balance ?? a.current_balance)]);
     liabRows.push([{ content: 'Total Liabilities', styles: { fontStyle: 'bold' } }, { content: formatCurrency(data.total_liabilities), styles: { fontStyle: 'bold' } }]);
     autoTable(doc, { body: liabRows, startY: y + 3, theme: 'plain', styles: { fontSize: 9 }, columnStyles: { 1: { halign: 'right' } } });
 

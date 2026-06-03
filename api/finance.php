@@ -1369,39 +1369,27 @@ switch ($method) {
         if ($action === 'opening_balance') {
             requireRole($currentUser, ['pastor', 'admin']);
             $data = getRequestBody();
-            if (empty($data['account_id']) || !isset($data['amount']) || empty($data['as_of_date'])) {
-                jsonResponse(['error' => 'account_id, amount, and as_of_date are required'], 400);
+            if (empty($data['account_id']) || !isset($data['amount'])) {
+                jsonResponse(['error' => 'account_id and amount are required'], 400);
             }
 
             $accountId = (int)$data['account_id'];
             $amount = (float)$data['amount'];
-            $asOfDate = $data['as_of_date'];
+            $asOfDate = $data['as_of_date'] ?? date('Y-m-d');
 
-            $db->beginTransaction();
             try {
-                // Delete existing opening ledger entries for this account
+                // Directly set both opening_balance and current_balance
+                $db->prepare("UPDATE accounts SET opening_balance = ?, current_balance = ? WHERE id = ?")
+                    ->execute([$amount, $amount, $accountId]);
+
+                // Also update/create ledger entry for historical tracking
                 $db->prepare("DELETE FROM account_ledger WHERE account_id = ? AND entry_type = 'opening'")->execute([$accountId]);
+                $db->prepare("INSERT INTO account_ledger (account_id, entry_date, entry_type, amount, description, reference_type, created_by) VALUES (?, ?, 'opening', ?, 'Opening balance', 'opening', ?)")
+                    ->execute([$accountId, $asOfDate, $amount, $currentUser['user_id']]);
 
-                // Insert new opening balance ledger entry
-                $db->prepare("INSERT INTO account_ledger (account_id, entry_date, entry_type, amount, description, reference_type, reference_id, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-                    ->execute([$accountId, $asOfDate, 'opening', $amount, 'Opening balance', 'opening', null, $currentUser['user_id']]);
-
-                // Update accounts.opening_balance
-                $db->prepare("UPDATE accounts SET opening_balance = ? WHERE id = ?")->execute([$amount, $accountId]);
-
-                // Recalculate current_balance = opening_balance + sum of all non-opening ledger entries
-                $nonOpeningSum = $db->prepare("SELECT COALESCE(SUM(amount), 0) FROM account_ledger WHERE account_id = ? AND entry_type != 'opening'");
-                $nonOpeningSum->execute([$accountId]);
-                $sumNonOpening = (float)$nonOpeningSum->fetchColumn();
-
-                $newBalance = $amount + $sumNonOpening;
-                $db->prepare("UPDATE accounts SET current_balance = ? WHERE id = ?")->execute([$newBalance, $accountId]);
-
-                $db->commit();
-                jsonResponse(['message' => 'Opening balance set', 'current_balance' => $newBalance], 201);
+                jsonResponse(['message' => 'Balance set to ' . number_format($amount, 2), 'current_balance' => $amount], 201);
             } catch (Exception $e) {
-                $db->rollBack();
-                jsonResponse(['error' => 'Failed to set opening balance: ' . $e->getMessage()], 500);
+                jsonResponse(['error' => 'Failed: ' . $e->getMessage()], 500);
             }
         }
 
