@@ -10,104 +10,75 @@ $db = getDB();
 $results = [];
 
 try {
-    // Account transfers table
+    // Account ledger - tracks every balance change for historical reporting
     $db->exec("
-        CREATE TABLE IF NOT EXISTS account_transfers (
+        CREATE TABLE IF NOT EXISTS account_ledger (
             id INT AUTO_INCREMENT PRIMARY KEY,
-            from_account_id INT NOT NULL,
-            to_account_id INT NOT NULL,
-            amount DECIMAL(12,2) NOT NULL,
-            transfer_date DATE NOT NULL,
-            reference_number VARCHAR(100) DEFAULT NULL,
-            notes VARCHAR(500) DEFAULT NULL,
-            created_by INT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (from_account_id) REFERENCES accounts(id),
-            FOREIGN KEY (to_account_id) REFERENCES accounts(id),
-            FOREIGN KEY (created_by) REFERENCES users(id),
-            INDEX idx_transfer_date (transfer_date),
-            INDEX idx_from_account (from_account_id),
-            INDEX idx_to_account (to_account_id)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-    ");
-    $results[] = 'account_transfers table created';
-
-    // Add routed_account_id to donations
-    try {
-        $db->exec("ALTER TABLE donations ADD COLUMN routed_account_id INT DEFAULT NULL AFTER recorded_by");
-        $results[] = 'Added routed_account_id to donations';
-    } catch (Exception $e) {
-        if (strpos($e->getMessage(), 'Duplicate column') !== false) {
-            $results[] = 'routed_account_id already exists on donations';
-        } else {
-            $results[] = 'routed_account_id: ' . $e->getMessage();
-        }
-    }
-
-    // Add routed_account_id to expenses
-    try {
-        $db->exec("ALTER TABLE expenses ADD COLUMN routed_account_id INT DEFAULT NULL AFTER recorded_by");
-        $results[] = 'Added routed_account_id to expenses';
-    } catch (Exception $e) {
-        if (strpos($e->getMessage(), 'Duplicate column') !== false) {
-            $results[] = 'routed_account_id already exists on expenses';
-        } else {
-            $results[] = 'routed_account_id: ' . $e->getMessage();
-        }
-    }
-
-    // Payment method routing table
-    $db->exec("
-        CREATE TABLE IF NOT EXISTS payment_routing (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            payment_method VARCHAR(30) NOT NULL UNIQUE,
             account_id INT NOT NULL,
-            FOREIGN KEY (account_id) REFERENCES accounts(id)
+            entry_date DATE NOT NULL,
+            entry_type VARCHAR(30) NOT NULL,
+            amount DECIMAL(12,2) NOT NULL,
+            description VARCHAR(500) DEFAULT NULL,
+            reference_type VARCHAR(30) DEFAULT NULL,
+            reference_id INT DEFAULT NULL,
+            created_by INT DEFAULT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (account_id) REFERENCES accounts(id),
+            INDEX idx_account_date (account_id, entry_date),
+            INDEX idx_entry_date (entry_date),
+            INDEX idx_reference (reference_type, reference_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     ");
-    $results[] = 'payment_routing table created';
+    $results[] = 'account_ledger table created';
 
-    // Seed default routing (cash → Cash & Reserves, check/zelle/etc → Checking)
-    $routingCheck = (int)$db->query("SELECT COUNT(*) FROM payment_routing")->fetchColumn();
-    if ($routingCheck == 0) {
-        $cashAccount = $db->query("SELECT id FROM accounts WHERE account_number = '1100'")->fetchColumn();
-        $checkingAccount = $db->query("SELECT id FROM accounts WHERE account_number = '1200'")->fetchColumn();
-
-        if ($cashAccount && $checkingAccount) {
-            $stmt = $db->prepare("INSERT INTO payment_routing (payment_method, account_id) VALUES (?, ?)");
-            $stmt->execute(['cash', $cashAccount]);
-            $stmt->execute(['check', $checkingAccount]);
-            $stmt->execute(['card', $checkingAccount]);
-            $stmt->execute(['zelle', $checkingAccount]);
-            $stmt->execute(['cashapp', $checkingAccount]);
-            $stmt->execute(['paypal', $checkingAccount]);
-            $stmt->execute(['online', $checkingAccount]);
-            $stmt->execute(['other', $cashAccount]);
-            $results[] = 'Seeded payment routing (cash→Cash & Reserves, check/zelle/etc→Checking)';
-        } else {
-            $results[] = 'Warning: Could not find Cash & Reserves or Checking accounts for routing';
-        }
-    } else {
-        $results[] = 'Payment routing already seeded';
+    // Upgrade payment_routing to support category-specific routing
+    try {
+        $db->exec("ALTER TABLE payment_routing DROP INDEX payment_method");
+        $results[] = 'Dropped unique on payment_routing.payment_method';
+    } catch (Exception $e) {
+        $results[] = 'payment_routing unique already handled';
     }
 
-    // Add edit_locked_at to donations and expenses for 24h lock
     try {
-        $db->exec("ALTER TABLE donations ADD COLUMN edit_locked_at DATETIME DEFAULT NULL");
-        $results[] = 'Added edit_locked_at to donations';
+        $db->exec("ALTER TABLE payment_routing ADD COLUMN category_id INT DEFAULT NULL AFTER payment_method");
+        $results[] = 'Added category_id to payment_routing';
     } catch (Exception $e) {
         if (strpos($e->getMessage(), 'Duplicate column') !== false) {
-            $results[] = 'edit_locked_at already exists on donations';
+            $results[] = 'category_id already exists on payment_routing';
         }
     }
 
     try {
-        $db->exec("ALTER TABLE expenses ADD COLUMN edit_locked_at DATETIME DEFAULT NULL");
-        $results[] = 'Added edit_locked_at to expenses';
+        $db->exec("ALTER TABLE payment_routing ADD UNIQUE KEY uk_routing (payment_method, category_id)");
+        $results[] = 'Added unique key on payment_routing (method + category)';
+    } catch (Exception $e) {
+        if (strpos($e->getMessage(), 'Duplicate key') !== false) {
+            $results[] = 'uk_routing already exists';
+        }
+    }
+
+    // Add source_account_id to expenses (which bank account the expense is paid from)
+    try {
+        $db->exec("ALTER TABLE expenses ADD COLUMN source_account_id INT DEFAULT NULL AFTER routed_account_id");
+        $results[] = 'Added source_account_id to expenses';
     } catch (Exception $e) {
         if (strpos($e->getMessage(), 'Duplicate column') !== false) {
-            $results[] = 'edit_locked_at already exists on expenses';
+            $results[] = 'source_account_id already exists on expenses';
         }
+    }
+
+    // Seed opening balance ledger entries for existing accounts
+    $existingLedger = (int)$db->query("SELECT COUNT(*) FROM account_ledger WHERE entry_type = 'opening'")->fetchColumn();
+    if ($existingLedger == 0) {
+        $accts = $db->query("SELECT id, opening_balance, current_balance FROM accounts WHERE opening_balance != 0 OR current_balance != 0")->fetchAll();
+        $stmt = $db->prepare("INSERT INTO account_ledger (account_id, entry_date, entry_type, amount, description) VALUES (?, CURDATE(), 'opening', ?, 'Opening balance')");
+        foreach ($accts as $a) {
+            $bal = (float)$a['current_balance'] ?: (float)$a['opening_balance'];
+            if ($bal != 0) {
+                $stmt->execute([$a['id'], $bal]);
+            }
+        }
+        $results[] = 'Seeded opening balance ledger entries for ' . count($accts) . ' accounts';
     }
 
 } catch (Exception $e) {

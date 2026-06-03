@@ -1982,7 +1982,7 @@ function BalanceSheetView({ data }) {
           {subAccounts.map(a => (
             <div key={a.id} className="flex items-center justify-between py-1.5 px-2 hover:bg-gray-50 rounded">
               <span className="text-sm text-gray-700">{a.account_number ? `${a.account_number} - ` : ''}{a.name}</span>
-              <span className="text-sm font-medium text-gray-900">{formatCurrency(a.current_balance)}</span>
+              <span className="text-sm font-medium text-gray-900">{formatCurrency(a.calculated_balance ?? a.current_balance)}</span>
             </div>
           ))}
         </div>
@@ -2136,6 +2136,18 @@ function ChartOfAccountsTab({ setError, setMessage, isAdmin }) {
   const [viewAccount, setViewAccount] = useState(null);
   const [accountTxns, setAccountTxns] = useState(null);
   const [txnLoading, setTxnLoading] = useState(false);
+  const [showLoan, setShowLoan] = useState(false);
+  const [loanForm, setLoanForm] = useState({ liability_account_id: '', asset_account_id: '', amount: '', transaction_date: new Date().toISOString().split('T')[0], transaction_type: 'loan_received', description: '', reference_number: '' });
+  const [loanSaving, setLoanSaving] = useState(false);
+  const [showRouting, setShowRouting] = useState(false);
+  const [routingRules, setRoutingRules] = useState([]);
+  const [routingForm, setRoutingForm] = useState({ payment_method: 'cash', category_id: '', account_id: '' });
+  const [donationCats, setDonationCats] = useState([]);
+  const [showOpenBal, setShowOpenBal] = useState(null);
+  const [openBalAmount, setOpenBalAmount] = useState('');
+  const [showAcctReport, setShowAcctReport] = useState(null);
+  const [acctReportData, setAcctReportData] = useState(null);
+  const [acctReportDates, setAcctReportDates] = useState({ from: new Date().getFullYear() + '-01-01', to: new Date().toISOString().split('T')[0] });
 
   const loadAccounts = async () => {
     setLoading(true);
@@ -2259,6 +2271,82 @@ function ChartOfAccountsTab({ setError, setMessage, isAdmin }) {
   };
 
   const assetAccounts = accounts.filter(a => a.account_type === 'asset' && a.parent_id);
+  const liabilityAccounts = accounts.filter(a => a.account_type === 'liability' && a.parent_id);
+
+  const handleLoan = async () => {
+    if (!loanForm.liability_account_id || !loanForm.asset_account_id || !loanForm.amount) {
+      setError('Liability account, asset account, and amount are required'); return;
+    }
+    setLoanSaving(true);
+    try {
+      await financeApi.loanTransaction(loanForm);
+      setMessage(loanForm.transaction_type === 'loan_received' ? 'Loan recorded' : 'Loan payment recorded');
+      setShowLoan(false);
+      setLoanForm({ liability_account_id: '', asset_account_id: '', amount: '', transaction_date: new Date().toISOString().split('T')[0], transaction_type: 'loan_received', description: '', reference_number: '' });
+      loadAccounts();
+    } catch (err) { setError(err.message); }
+    setLoanSaving(false);
+  };
+
+  const loadRouting = async () => {
+    try {
+      const data = await financeApi.routingRules();
+      setRoutingRules(data.rules || []);
+    } catch (err) { setRoutingRules([]); }
+    try {
+      const data = await financeApi.categories();
+      setDonationCats((data.categories || []).filter(c => Number(c.is_active) !== 0));
+    } catch (err) {}
+  };
+
+  const handleSaveRouting = async () => {
+    if (!routingForm.payment_method || !routingForm.account_id) { setError('Payment method and account are required'); return; }
+    try {
+      await financeApi.saveRoutingRule({ ...routingForm, category_id: routingForm.category_id || null });
+      setMessage('Routing rule saved');
+      loadRouting();
+      setRoutingForm({ payment_method: 'cash', category_id: '', account_id: '' });
+    } catch (err) { setError(err.message); }
+  };
+
+  const handleDeleteRouting = async (ruleId) => {
+    try { await financeApi.deleteRoutingRule(ruleId); loadRouting(); } catch (err) { setError(err.message); }
+  };
+
+  const handleSetOpeningBalance = async (account) => {
+    if (!openBalAmount && openBalAmount !== '0') { setError('Amount is required'); return; }
+    try {
+      await financeApi.setOpeningBalance({ account_id: account.id, amount: parseFloat(openBalAmount), as_of_date: new Date().toISOString().split('T')[0] });
+      setMessage(`Opening balance set for ${account.name}`);
+      setShowOpenBal(null);
+      setOpenBalAmount('');
+      loadAccounts();
+    } catch (err) { setError(err.message); }
+  };
+
+  const loadAccountReport = async (account) => {
+    setShowAcctReport(account);
+    setAcctReportData(null);
+    try {
+      const data = await financeApi.accountReport(account.id, { date_from: acctReportDates.from, date_to: acctReportDates.to });
+      setAcctReportData(data);
+    } catch (err) { setAcctReportData({ entries: [] }); }
+  };
+
+  const exportAccountReportPDF = () => {
+    if (!acctReportData || !showAcctReport) return;
+    const headers = ['Date', 'Type', 'Description', 'Amount'];
+    const rows = (acctReportData.entries || []).map(e => [e.entry_date, e.entry_type, e.description || '-', formatCurrency(e.amount)]);
+    generatePDF(
+      `Account Report - ${showAcctReport.name}`,
+      headers, rows,
+      `account-report-${showAcctReport.name.replace(/\s+/g, '-')}.pdf`,
+      [`Period: ${acctReportDates.from} to ${acctReportDates.to}`,
+       `Opening Balance: ${formatCurrency(acctReportData.opening_balance)}`,
+       `Period In: ${formatCurrency(acctReportData.period_in)}  |  Period Out: ${formatCurrency(acctReportData.period_out)}`,
+       `Ending Balance: ${formatCurrency(acctReportData.ending_balance)}`]
+    );
+  };
 
   if (loading) {
     return (
@@ -2300,6 +2388,14 @@ function ChartOfAccountsTab({ setError, setMessage, isAdmin }) {
           {isAdmin && (
             <td className="px-4 py-2.5">
               <div className="flex items-center justify-end gap-1">
+                <button onClick={() => loadAccountReport(account)} className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded" title="Report">
+                  <FileText size={14} />
+                </button>
+                {(account.account_type === 'asset' || account.account_type === 'liability') && (
+                  <button onClick={() => { setShowOpenBal(account); setOpenBalAmount(account.current_balance || ''); }} className="p-1.5 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded" title="Set Balance">
+                    <DollarSign size={14} />
+                  </button>
+                )}
                 <button onClick={() => openNew(account.account_type, account.id)} className="p-1.5 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded" title="Add sub-account">
                   <Plus size={14} />
                 </button>
@@ -2338,12 +2434,18 @@ function ChartOfAccountsTab({ setError, setMessage, isAdmin }) {
           <h2 className="text-lg font-semibold text-gray-900">Chart of Accounts</h2>
           <p className="text-sm text-gray-500">Assets, liabilities, equity, income, and expense accounts</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
           {isAdmin && (
-            <button onClick={() => setShowTransfer(true)} className="btn-secondary"><CreditCard size={16} /> Transfer</button>
+            <button onClick={() => { setShowRouting(true); loadRouting(); }} className="btn-secondary text-sm"><Settings size={14} /> Routing</button>
           )}
           {isAdmin && (
-            <button onClick={() => openNew('asset', '')} className="btn-primary"><Plus size={16} /> Add Account</button>
+            <button onClick={() => setShowLoan(true)} className="btn-secondary text-sm"><Landmark size={14} /> Loan</button>
+          )}
+          {isAdmin && (
+            <button onClick={() => setShowTransfer(true)} className="btn-secondary text-sm"><CreditCard size={14} /> Transfer</button>
+          )}
+          {isAdmin && (
+            <button onClick={() => openNew('asset', '')} className="btn-primary text-sm"><Plus size={14} /> Add Account</button>
           )}
         </div>
       </div>
@@ -2547,6 +2649,207 @@ function ChartOfAccountsTab({ setError, setMessage, isAdmin }) {
             )}
           </div>
         ) : null}
+      </Modal>
+
+      {/* Loan Transaction Modal */}
+      <Modal isOpen={showLoan} onClose={() => setShowLoan(false)} title="Record Loan Transaction" size="md">
+        <div className="space-y-4">
+          <div>
+            <label className="label">Transaction Type</label>
+            <select className="input" value={loanForm.transaction_type} onChange={e => setLoanForm(f => ({ ...f, transaction_type: e.target.value }))}>
+              <option value="loan_received">Loan Received (money comes in)</option>
+              <option value="loan_payment">Loan Payment (pay back)</option>
+            </select>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="label">Liability Account (Loan) *</label>
+              <select className="input" value={loanForm.liability_account_id} onChange={e => setLoanForm(f => ({ ...f, liability_account_id: e.target.value }))}>
+                <option value="">-- Select loan/liability --</option>
+                {liabilityAccounts.map(a => (
+                  <option key={a.id} value={a.id}>{a.name} ({formatCurrency(a.current_balance)})</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="label">Bank Account (where money goes/comes from) *</label>
+              <select className="input" value={loanForm.asset_account_id} onChange={e => setLoanForm(f => ({ ...f, asset_account_id: e.target.value }))}>
+                <option value="">-- Select bank account --</option>
+                {assetAccounts.map(a => (
+                  <option key={a.id} value={a.id}>{a.name} ({formatCurrency(a.current_balance)})</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="label">Amount ($) *</label>
+              <input type="number" step="0.01" min="0" className="input" value={loanForm.amount} onChange={e => setLoanForm(f => ({ ...f, amount: e.target.value }))} />
+            </div>
+            <div>
+              <label className="label">Date</label>
+              <input type="date" className="input" value={loanForm.transaction_date} onChange={e => setLoanForm(f => ({ ...f, transaction_date: e.target.value }))} />
+            </div>
+          </div>
+          <div>
+            <label className="label">Description</label>
+            <input className="input" placeholder="e.g. Bank loan for building renovation" value={loanForm.description} onChange={e => setLoanForm(f => ({ ...f, description: e.target.value }))} />
+          </div>
+          <div>
+            <label className="label">Reference #</label>
+            <input className="input" placeholder="Loan reference number" value={loanForm.reference_number} onChange={e => setLoanForm(f => ({ ...f, reference_number: e.target.value }))} />
+          </div>
+          <div className="bg-gray-50 rounded-lg p-3 text-sm text-gray-600">
+            {loanForm.transaction_type === 'loan_received'
+              ? 'This will increase the liability (loan balance) and increase the bank account balance.'
+              : 'This will decrease the liability (loan balance) and decrease the bank account balance.'}
+          </div>
+          <div className="flex justify-end gap-3 pt-2">
+            <button onClick={() => setShowLoan(false)} className="btn-secondary">Cancel</button>
+            <button onClick={handleLoan} disabled={loanSaving} className="btn-primary">
+              {loanSaving ? <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" /> : <Check size={16} />}
+              Record
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Payment Routing Modal */}
+      <Modal isOpen={showRouting} onClose={() => setShowRouting(false)} title="Payment Routing Rules" size="lg">
+        <div className="space-y-4">
+          <p className="text-sm text-gray-500">Configure which bank account receives funds based on payment method and category.</p>
+
+          {routingRules.length > 0 && (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 border-b">
+                  <tr>
+                    <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Method</th>
+                    <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Category</th>
+                    <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Routes To</th>
+                    <th className="w-10"></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {routingRules.map(r => (
+                    <tr key={r.id} className="hover:bg-gray-50">
+                      <td className="px-3 py-2 capitalize">{paymentMethodLabel[r.payment_method] || r.payment_method}</td>
+                      <td className="px-3 py-2">{r.category_name || 'All (default)'}</td>
+                      <td className="px-3 py-2 font-medium">{r.account_name}</td>
+                      <td className="px-3 py-2">
+                        <button onClick={() => handleDeleteRouting(r.id)} className="p-1 text-gray-400 hover:text-red-500"><Trash2 size={14} /></button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <div className="border-t pt-4">
+            <h4 className="text-sm font-semibold text-gray-700 mb-3">Add Routing Rule</h4>
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+              <select className="input text-sm" value={routingForm.payment_method} onChange={e => setRoutingForm(f => ({ ...f, payment_method: e.target.value }))}>
+                {paymentMethods.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
+              </select>
+              <select className="input text-sm" value={routingForm.category_id} onChange={e => setRoutingForm(f => ({ ...f, category_id: e.target.value }))}>
+                <option value="">All categories (default)</option>
+                {donationCats.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+              <select className="input text-sm" value={routingForm.account_id} onChange={e => setRoutingForm(f => ({ ...f, account_id: e.target.value }))}>
+                <option value="">-- Bank account --</option>
+                {assetAccounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+              </select>
+              <button onClick={handleSaveRouting} className="btn-primary text-sm"><Plus size={14} /> Add</button>
+            </div>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Set Opening Balance Modal */}
+      <Modal isOpen={!!showOpenBal} onClose={() => setShowOpenBal(null)} title={`Set Balance - ${showOpenBal?.name || ''}`} size="sm">
+        <div className="space-y-4">
+          <p className="text-sm text-gray-500">Set the current balance for this account. Use this to import balances from your previous system (QuickBooks).</p>
+          <div>
+            <label className="label">Balance ($)</label>
+            <input type="number" step="0.01" className="input" value={openBalAmount} onChange={e => setOpenBalAmount(e.target.value)} />
+          </div>
+          <div className="flex justify-end gap-3 pt-2">
+            <button onClick={() => setShowOpenBal(null)} className="btn-secondary">Cancel</button>
+            <button onClick={() => handleSetOpeningBalance(showOpenBal)} className="btn-primary">
+              <Check size={16} /> Set Balance
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Account Report Modal */}
+      <Modal isOpen={!!showAcctReport} onClose={() => { setShowAcctReport(null); setAcctReportData(null); }} title={`Account Report - ${showAcctReport?.name || ''}`} size="lg">
+        <div className="space-y-4">
+          <div className="flex items-end gap-3">
+            <div className="flex-1">
+              <label className="label">From</label>
+              <input type="date" className="input" value={acctReportDates.from} onChange={e => setAcctReportDates(d => ({ ...d, from: e.target.value }))} />
+            </div>
+            <div className="flex-1">
+              <label className="label">To</label>
+              <input type="date" className="input" value={acctReportDates.to} onChange={e => setAcctReportDates(d => ({ ...d, to: e.target.value }))} />
+            </div>
+            <button onClick={() => loadAccountReport(showAcctReport)} className="btn-primary"><Search size={14} /> Load</button>
+            {acctReportData && (
+              <button onClick={exportAccountReportPDF} className="btn-secondary"><Download size={14} /> PDF</button>
+            )}
+          </div>
+
+          {acctReportData && (
+            <>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div className="bg-gray-50 rounded-lg p-3">
+                  <div className="text-xs text-gray-500">Opening Balance</div>
+                  <div className="text-lg font-bold text-gray-900">{formatCurrency(acctReportData.opening_balance)}</div>
+                </div>
+                <div className="bg-green-50 rounded-lg p-3">
+                  <div className="text-xs text-green-600">Period In</div>
+                  <div className="text-lg font-bold text-green-700">{formatCurrency(acctReportData.period_in)}</div>
+                </div>
+                <div className="bg-red-50 rounded-lg p-3">
+                  <div className="text-xs text-red-600">Period Out</div>
+                  <div className="text-lg font-bold text-red-700">{formatCurrency(acctReportData.period_out)}</div>
+                </div>
+                <div className="bg-blue-50 rounded-lg p-3">
+                  <div className="text-xs text-blue-600">Ending Balance</div>
+                  <div className="text-lg font-bold text-blue-700">{formatCurrency(acctReportData.ending_balance)}</div>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50 border-b">
+                    <tr>
+                      <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Date</th>
+                      <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Type</th>
+                      <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Description</th>
+                      <th className="text-right px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {(acctReportData.entries || []).map((e, i) => (
+                      <tr key={i} className="hover:bg-gray-50">
+                        <td className="px-3 py-2 text-gray-600">{e.entry_date}</td>
+                        <td className="px-3 py-2 capitalize">{e.entry_type}</td>
+                        <td className="px-3 py-2 text-gray-700">{e.description || '-'}</td>
+                        <td className={`px-3 py-2 text-right font-medium ${parseFloat(e.amount) >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                          {formatCurrency(e.amount)}
+                        </td>
+                      </tr>
+                    ))}
+                    {(acctReportData.entries || []).length === 0 && (
+                      <tr><td colSpan={4} className="px-3 py-8 text-center text-gray-400">No entries for this period</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </div>
       </Modal>
     </>
   );

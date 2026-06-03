@@ -300,6 +300,16 @@ export const finance = {
   // Balance Sheet & Journal
   balanceSheet: (asOf) => request('finance.php', { params: { action: 'balance_sheet', as_of: asOf } }),
   journal: (params) => request('finance.php', { params: { action: 'journal', ...params } }),
+  // Account Report
+  accountReport: (id, params) => request('finance.php', { params: { action: 'account_report', id, ...params } }),
+  // Routing Rules
+  routingRules: () => request('finance.php', { params: { action: 'routing_rules' } }),
+  saveRoutingRule: (data) => request('finance.php', { method: 'POST', body: data, params: { action: 'routing_rule' } }),
+  deleteRoutingRule: (id) => request('finance.php', { method: 'DELETE', params: { action: 'routing_rule', id } }),
+  // Loans
+  loanTransaction: (data) => request('finance.php', { method: 'POST', body: data, params: { action: 'loan_transaction' } }),
+  // Opening Balance
+  setOpeningBalance: (data) => request('finance.php', { method: 'POST', body: data, params: { action: 'opening_balance' } }),
 };
 
 export { getToken, setToken, removeToken, getUser, setUser, ApiError };

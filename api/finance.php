@@ -58,66 +58,29 @@ switch ($method) {
 
             $transactions = [];
 
-            // Get transfers involving this account
+            // Query account_ledger for all entries in this account and date range
             try {
-                $transfers = $db->prepare("
-                    SELECT t.*, u.name as created_by_name,
-                        fa.name as from_account_name, ta.name as to_account_name
-                    FROM account_transfers t
-                    LEFT JOIN users u ON u.id = t.created_by
-                    LEFT JOIN accounts fa ON fa.id = t.from_account_id
-                    LEFT JOIN accounts ta ON ta.id = t.to_account_id
-                    WHERE (t.from_account_id = ? OR t.to_account_id = ?)
-                    AND t.transfer_date BETWEEN ? AND ?
-                    ORDER BY t.transfer_date DESC
+                $ledgerStmt = $db->prepare("
+                    SELECT al.*, u.name as created_by_name
+                    FROM account_ledger al
+                    LEFT JOIN users u ON u.id = al.created_by
+                    WHERE al.account_id = ?
+                    AND al.entry_date BETWEEN ? AND ?
+                    ORDER BY al.entry_date DESC, al.id DESC
                 ");
-                $transfers->execute([$id, $id, $dateFrom, $dateTo]);
-                foreach ($transfers->fetchAll() as $t) {
-                    $isOutgoing = (int)$t['from_account_id'] === $id;
+                $ledgerStmt->execute([$id, $dateFrom, $dateTo]);
+                foreach ($ledgerStmt->fetchAll() as $entry) {
                     $transactions[] = [
-                        'type' => 'transfer',
-                        'date' => $t['transfer_date'],
-                        'description' => $isOutgoing
-                            ? 'Transfer to ' . $t['to_account_name']
-                            : 'Transfer from ' . $t['from_account_name'],
-                        'amount' => $isOutgoing ? -1 * (float)$t['amount'] : (float)$t['amount'],
-                        'reference' => $t['reference_number'],
-                        'notes' => $t['notes'],
-                        'created_by' => $t['created_by_name'],
+                        'type' => $entry['entry_type'],
+                        'date' => $entry['entry_date'],
+                        'description' => $entry['description'],
+                        'amount' => (float)$entry['amount'],
+                        'reference' => $entry['reference_type'] . ($entry['reference_id'] ? '#' . $entry['reference_id'] : ''),
+                        'notes' => '',
+                        'created_by' => $entry['created_by_name'] ?? '',
                     ];
                 }
             } catch (Exception $e) {}
-
-            // Get donations routed to this account
-            try {
-                $donations = $db->prepare("
-                    SELECT d.*, dc.name as category_name,
-                        COALESCE(m.first_name, '') as member_first_name,
-                        COALESCE(m.last_name, '') as member_last_name,
-                        d.donor_name
-                    FROM donations d
-                    JOIN donation_categories dc ON dc.id = d.category_id
-                    LEFT JOIN members m ON m.id = d.member_id
-                    WHERE d.routed_account_id = ?
-                    AND d.donation_date BETWEEN ? AND ?
-                    ORDER BY d.donation_date DESC
-                ");
-                $donations->execute([$id, $dateFrom, $dateTo]);
-                foreach ($donations->fetchAll() as $d) {
-                    $donor = $d['member_first_name'] ? $d['member_first_name'] . ' ' . $d['member_last_name'] : ($d['donor_name'] ?: 'Anonymous');
-                    $transactions[] = [
-                        'type' => 'donation',
-                        'date' => $d['donation_date'],
-                        'description' => $d['category_name'] . ' - ' . $donor,
-                        'amount' => (float)$d['amount'],
-                        'reference' => $d['reference_number'],
-                        'notes' => $d['notes'],
-                        'created_by' => '',
-                    ];
-                }
-            } catch (Exception $e) {}
-
-            usort($transactions, function($a, $b) { return strcmp($b['date'], $a['date']); });
 
             jsonResponse([
                 'account' => $account,
@@ -130,6 +93,9 @@ switch ($method) {
         // --- BALANCE SHEET ---
         if ($action === 'balance_sheet') {
             $asOf = $_GET['as_of'] ?? date('Y-m-d');
+
+            // Helper: calculate balance from ledger for an account as of a date
+            $balanceStmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) FROM account_ledger WHERE account_id = ? AND entry_date <= ?");
 
             $assets = $db->query("
                 SELECT a.*, (SELECT COUNT(*) FROM accounts c WHERE c.parent_id = a.id) as child_count
@@ -149,17 +115,32 @@ switch ($method) {
                 ORDER BY a.sort_order ASC
             ")->fetchAll();
 
+            // Calculate balances from ledger, fall back to current_balance if no ledger entries
+            $calcBalance = function(&$accounts) use ($balanceStmt, $asOf) {
+                foreach ($accounts as &$acc) {
+                    $balanceStmt->execute([$acc['id'], $asOf]);
+                    $ledgerBalance = (float)$balanceStmt->fetchColumn();
+                    // Check if any ledger entries exist for this account
+                    $acc['calculated_balance'] = $ledgerBalance != 0 ? $ledgerBalance : (float)$acc['current_balance'];
+                }
+                unset($acc);
+            };
+
+            $calcBalance($assets);
+            $calcBalance($liabilities);
+            $calcBalance($equity);
+
             $totalAssets = 0;
             $totalLiabilities = 0;
             $totalEquity = 0;
             foreach ($assets as $a) {
-                if ($a['parent_id']) $totalAssets += (float)$a['current_balance'];
+                if ($a['parent_id']) $totalAssets += $a['calculated_balance'];
             }
             foreach ($liabilities as $l) {
-                if ($l['parent_id']) $totalLiabilities += (float)$l['current_balance'];
+                if ($l['parent_id']) $totalLiabilities += $l['calculated_balance'];
             }
             foreach ($equity as $e) {
-                if ($e['parent_id']) $totalEquity += (float)$e['current_balance'];
+                if ($e['parent_id']) $totalEquity += $e['calculated_balance'];
             }
 
             // Net assets = Assets - Liabilities
@@ -188,6 +169,76 @@ switch ($method) {
                 'ytd_net_income' => $ytdNetIncome,
                 'as_of' => $asOf,
             ]);
+        }
+
+        // --- ACCOUNT REPORT (ledger-based) ---
+        if ($action === 'account_report') {
+            if (!$id) jsonResponse(['error' => 'Account ID required'], 400);
+            $dateFrom = $_GET['date_from'] ?? date('Y-01-01');
+            $dateTo = $_GET['date_to'] ?? date('Y-12-31');
+
+            $stmt = $db->prepare("SELECT * FROM accounts WHERE id = ?");
+            $stmt->execute([$id]);
+            $account = $stmt->fetch();
+            if (!$account) jsonResponse(['error' => 'Account not found'], 404);
+
+            // Opening balance: sum of all ledger entries before date_from
+            $openingStmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) FROM account_ledger WHERE account_id = ? AND entry_date < ?");
+            $openingStmt->execute([$id, $dateFrom]);
+            $openingBalance = (float)$openingStmt->fetchColumn();
+
+            // Ledger entries within date range
+            $entriesStmt = $db->prepare("
+                SELECT al.*, u.name as created_by_name
+                FROM account_ledger al
+                LEFT JOIN users u ON u.id = al.created_by
+                WHERE al.account_id = ? AND al.entry_date BETWEEN ? AND ?
+                ORDER BY al.entry_date ASC, al.id ASC
+            ");
+            $entriesStmt->execute([$id, $dateFrom, $dateTo]);
+            $entries = $entriesStmt->fetchAll();
+
+            // Period totals (in/out)
+            $periodIn = 0;
+            $periodOut = 0;
+            foreach ($entries as $e) {
+                $amt = (float)$e['amount'];
+                if ($amt >= 0) {
+                    $periodIn += $amt;
+                } else {
+                    $periodOut += $amt;
+                }
+            }
+
+            $endingBalance = $openingBalance + $periodIn + $periodOut;
+
+            jsonResponse([
+                'account' => $account,
+                'entries' => $entries,
+                'opening_balance' => $openingBalance,
+                'period_in' => $periodIn,
+                'period_out' => $periodOut,
+                'ending_balance' => $endingBalance,
+                'date_from' => $dateFrom,
+                'date_to' => $dateTo,
+            ]);
+        }
+
+        // --- ROUTING RULES ---
+        if ($action === 'routing_rules') {
+            try {
+                $stmt = $db->query("
+                    SELECT pr.*, a.name as account_name, dc.name as category_name
+                    FROM payment_routing pr
+                    LEFT JOIN accounts a ON a.id = pr.account_id
+                    LEFT JOIN donation_categories dc ON dc.id = pr.category_id
+                    ORDER BY pr.payment_method ASC, pr.category_id ASC
+                ");
+                $rules = $stmt->fetchAll();
+                jsonResponse(['rules' => $rules]);
+            } catch (Exception $e) {
+                jsonResponse(['rules' => [], 'note' => 'payment_routing table may not exist yet']);
+            }
         }
 
         // --- GENERAL JOURNAL ---
@@ -844,9 +895,39 @@ switch ($method) {
                         $data['notes'] ?? null,
                         $currentUser['user_id'],
                     ]);
+                $transferId = (int)$db->lastInsertId();
 
                 $db->prepare("UPDATE accounts SET current_balance = current_balance - ? WHERE id = ?")->execute([$amount, (int)$data['from_account_id']]);
                 $db->prepare("UPDATE accounts SET current_balance = current_balance + ? WHERE id = ?")->execute([$amount, (int)$data['to_account_id']]);
+
+                // Create ledger entries for both accounts
+                $fromAcct = $db->prepare("SELECT name FROM accounts WHERE id = ?")->execute([(int)$data['from_account_id']]) ? $db->query("SELECT name FROM accounts WHERE id = " . (int)$data['from_account_id'])->fetchColumn() : '';
+                $toAcct = $db->prepare("SELECT name FROM accounts WHERE id = ?")->execute([(int)$data['to_account_id']]) ? $db->query("SELECT name FROM accounts WHERE id = " . (int)$data['to_account_id'])->fetchColumn() : '';
+
+                $ledgerStmt = $db->prepare("INSERT INTO account_ledger (account_id, entry_date, entry_type, amount, description, reference_type, reference_id, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+                // Debit from source (negative)
+                $ledgerStmt->execute([
+                    (int)$data['from_account_id'],
+                    $data['transfer_date'],
+                    'withdrawal',
+                    -$amount,
+                    'Transfer to ' . $toAcct,
+                    'transfer',
+                    $transferId,
+                    $currentUser['user_id'],
+                ]);
+                // Credit to destination (positive)
+                $ledgerStmt->execute([
+                    (int)$data['to_account_id'],
+                    $data['transfer_date'],
+                    'deposit',
+                    $amount,
+                    'Transfer from ' . $fromAcct,
+                    'transfer',
+                    $transferId,
+                    $currentUser['user_id'],
+                ]);
+
                 $db->commit();
                 jsonResponse(['message' => 'Transfer completed'], 201);
             } catch (Exception $e) {
@@ -1004,17 +1085,138 @@ switch ($method) {
             jsonResponse(['message' => "$count budget(s) saved", 'count' => $count], 201);
         }
 
+        // --- CREATE/UPDATE ROUTING RULE ---
+        if ($action === 'routing_rule') {
+            requireRole($currentUser, ['pastor', 'admin']);
+            $data = getRequestBody();
+            if (empty($data['payment_method']) || empty($data['account_id'])) {
+                jsonResponse(['error' => 'payment_method and account_id are required'], 400);
+            }
+
+            $categoryId = !empty($data['category_id']) ? (int)$data['category_id'] : null;
+
+            $stmt = $db->prepare("
+                INSERT INTO payment_routing (payment_method, category_id, account_id)
+                VALUES (?, ?, ?)
+                ON DUPLICATE KEY UPDATE account_id = VALUES(account_id)
+            ");
+            $stmt->execute([
+                $data['payment_method'],
+                $categoryId,
+                (int)$data['account_id'],
+            ]);
+
+            jsonResponse(['message' => 'Routing rule saved'], 201);
+        }
+
+        // --- LOAN TRANSACTION ---
+        if ($action === 'loan_transaction') {
+            $data = getRequestBody();
+            if (empty($data['liability_account_id']) || empty($data['asset_account_id']) || empty($data['amount']) || empty($data['transaction_date']) || empty($data['transaction_type'])) {
+                jsonResponse(['error' => 'liability_account_id, asset_account_id, amount, transaction_date, and transaction_type are required'], 400);
+            }
+            $amount = (float)$data['amount'];
+            if ($amount <= 0) jsonResponse(['error' => 'Amount must be positive'], 400);
+
+            $type = $data['transaction_type'];
+            if (!in_array($type, ['loan_received', 'loan_payment'])) {
+                jsonResponse(['error' => 'transaction_type must be loan_received or loan_payment'], 400);
+            }
+
+            $liabilityId = (int)$data['liability_account_id'];
+            $assetId = (int)$data['asset_account_id'];
+            $txDate = $data['transaction_date'];
+            $description = $data['description'] ?? ($type === 'loan_received' ? 'Loan received' : 'Loan payment');
+            $refNumber = $data['reference_number'] ?? null;
+
+            $db->beginTransaction();
+            try {
+                $ledgerStmt = $db->prepare("INSERT INTO account_ledger (account_id, entry_date, entry_type, amount, description, reference_type, reference_id, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+
+                if ($type === 'loan_received') {
+                    // Increase liability (positive on liability account)
+                    $db->prepare("UPDATE accounts SET current_balance = current_balance + ? WHERE id = ?")->execute([$amount, $liabilityId]);
+                    $ledgerStmt->execute([$liabilityId, $txDate, 'deposit', $amount, $description, 'loan', null, $currentUser['user_id']]);
+
+                    // Increase asset (positive on asset account)
+                    $db->prepare("UPDATE accounts SET current_balance = current_balance + ? WHERE id = ?")->execute([$amount, $assetId]);
+                    $ledgerStmt->execute([$assetId, $txDate, 'deposit', $amount, $description, 'loan', null, $currentUser['user_id']]);
+                } else {
+                    // loan_payment: decrease liability
+                    $db->prepare("UPDATE accounts SET current_balance = current_balance - ? WHERE id = ?")->execute([$amount, $liabilityId]);
+                    $ledgerStmt->execute([$liabilityId, $txDate, 'withdrawal', -$amount, $description, 'loan_payment', null, $currentUser['user_id']]);
+
+                    // Decrease asset
+                    $db->prepare("UPDATE accounts SET current_balance = current_balance - ? WHERE id = ?")->execute([$amount, $assetId]);
+                    $ledgerStmt->execute([$assetId, $txDate, 'withdrawal', -$amount, $description, 'loan_payment', null, $currentUser['user_id']]);
+                }
+
+                $db->commit();
+                jsonResponse(['message' => 'Loan transaction recorded'], 201);
+            } catch (Exception $e) {
+                $db->rollBack();
+                jsonResponse(['error' => 'Loan transaction failed: ' . $e->getMessage()], 500);
+            }
+        }
+
+        // --- SET OPENING BALANCE ---
+        if ($action === 'opening_balance') {
+            requireRole($currentUser, ['pastor', 'admin']);
+            $data = getRequestBody();
+            if (empty($data['account_id']) || !isset($data['amount']) || empty($data['as_of_date'])) {
+                jsonResponse(['error' => 'account_id, amount, and as_of_date are required'], 400);
+            }
+
+            $accountId = (int)$data['account_id'];
+            $amount = (float)$data['amount'];
+            $asOfDate = $data['as_of_date'];
+
+            $db->beginTransaction();
+            try {
+                // Delete existing opening ledger entries for this account
+                $db->prepare("DELETE FROM account_ledger WHERE account_id = ? AND entry_type = 'opening'")->execute([$accountId]);
+
+                // Insert new opening balance ledger entry
+                $db->prepare("INSERT INTO account_ledger (account_id, entry_date, entry_type, amount, description, reference_type, reference_id, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+                    ->execute([$accountId, $asOfDate, 'opening', $amount, 'Opening balance', 'opening', null, $currentUser['user_id']]);
+
+                // Update accounts.opening_balance
+                $db->prepare("UPDATE accounts SET opening_balance = ? WHERE id = ?")->execute([$amount, $accountId]);
+
+                // Recalculate current_balance = opening_balance + sum of all non-opening ledger entries
+                $nonOpeningSum = $db->prepare("SELECT COALESCE(SUM(amount), 0) FROM account_ledger WHERE account_id = ? AND entry_type != 'opening'");
+                $nonOpeningSum->execute([$accountId]);
+                $sumNonOpening = (float)$nonOpeningSum->fetchColumn();
+
+                $newBalance = $amount + $sumNonOpening;
+                $db->prepare("UPDATE accounts SET current_balance = ? WHERE id = ?")->execute([$newBalance, $accountId]);
+
+                $db->commit();
+                jsonResponse(['message' => 'Opening balance set', 'current_balance' => $newBalance], 201);
+            } catch (Exception $e) {
+                $db->rollBack();
+                jsonResponse(['error' => 'Failed to set opening balance: ' . $e->getMessage()], 500);
+            }
+        }
+
         // --- BULK DONATIONS ---
         if ($action === 'bulk') {
             $data = getRequestBody();
             $records = $data['records'] ?? [];
             if (empty($records)) jsonResponse(['error' => 'No records provided'], 400);
 
-            // Load payment routing
+            // Load payment routing (with category-specific rules)
             $routing = [];
+            $routingDefault = [];
             try {
-                $routingRows = $db->query("SELECT payment_method, account_id FROM payment_routing")->fetchAll();
-                foreach ($routingRows as $rr) $routing[$rr['payment_method']] = (int)$rr['account_id'];
+                $routingRows = $db->query("SELECT payment_method, category_id, account_id FROM payment_routing")->fetchAll();
+                foreach ($routingRows as $rr) {
+                    if ($rr['category_id']) {
+                        $routing[$rr['payment_method'] . '_' . $rr['category_id']] = (int)$rr['account_id'];
+                    } else {
+                        $routingDefault[$rr['payment_method']] = (int)$rr['account_id'];
+                    }
+                }
             } catch (Exception $e) {}
 
             $stmt = $db->prepare("
@@ -1022,31 +1224,50 @@ switch ($method) {
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ");
 
+            $ledgerStmt = $db->prepare("INSERT INTO account_ledger (account_id, entry_date, entry_type, amount, description, reference_type, reference_id, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+
             $accountUpdates = [];
             $count = 0;
             foreach ($records as $r) {
                 if (empty($r['amount']) || (float)$r['amount'] <= 0) continue;
                 $method = $r['payment_method'] ?? 'cash';
-                $routedAccountId = $routing[$method] ?? null;
+                $categoryId = (int)$r['category_id'];
+                // Category-specific routing takes priority, then default for payment method
+                $routedAccountId = $routing[$method . '_' . $categoryId] ?? $routingDefault[$method] ?? null;
                 $amount = (float)$r['amount'];
+                $donationDate = $r['donation_date'] ?? date('Y-m-d');
 
                 $stmt->execute([
                     !empty($r['member_id']) ? (int)$r['member_id'] : null,
                     !empty($r['service_id']) ? (int)$r['service_id'] : null,
-                    (int)$r['category_id'],
+                    $categoryId,
                     $amount,
                     $method,
                     $r['reference_number'] ?? null,
                     $r['donor_name'] ?? null,
                     $r['notes'] ?? null,
-                    $r['donation_date'] ?? date('Y-m-d'),
+                    $donationDate,
                     $currentUser['user_id'],
                     $routedAccountId,
                 ]);
+                $donationId = (int)$db->lastInsertId();
 
                 if ($routedAccountId) {
                     if (!isset($accountUpdates[$routedAccountId])) $accountUpdates[$routedAccountId] = 0;
                     $accountUpdates[$routedAccountId] += $amount;
+
+                    // Create ledger entry for the routed account
+                    $donorName = $r['donor_name'] ?? 'Anonymous';
+                    $ledgerStmt->execute([
+                        $routedAccountId,
+                        $donationDate,
+                        'deposit',
+                        $amount,
+                        'Donation: ' . $donorName . ' (' . $method . ')',
+                        'donation',
+                        $donationId,
+                        $currentUser['user_id'],
+                    ]);
                 }
                 $count++;
             }
@@ -1292,6 +1513,14 @@ switch ($method) {
             if (!$id) jsonResponse(['error' => 'Budget ID required'], 400);
             $db->prepare("DELETE FROM budgets WHERE id = ?")->execute([$id]);
             jsonResponse(['message' => 'Budget deleted']);
+        }
+
+        // --- DELETE ROUTING RULE ---
+        if ($action === 'routing_rule') {
+            requireRole($currentUser, ['pastor', 'admin']);
+            if (!$id) jsonResponse(['error' => 'Routing rule ID required'], 400);
+            $db->prepare("DELETE FROM payment_routing WHERE id = ?")->execute([$id]);
+            jsonResponse(['message' => 'Routing rule deleted']);
         }
 
         // --- DELETE DONATION ---
