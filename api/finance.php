@@ -1153,6 +1153,17 @@ switch ($method) {
         // --- EXPENSE UPDATE ---
         if ($action === 'expense') {
             if (!$id) jsonResponse(['error' => 'Expense ID required'], 400);
+
+            $isFinanceAdmin = in_array($currentUser['role'], ['pastor', 'admin']);
+            if (!$isFinanceAdmin) {
+                $ageCheck = $db->prepare("SELECT created_at FROM expenses WHERE id = ?");
+                $ageCheck->execute([$id]);
+                $created = $ageCheck->fetchColumn();
+                if ($created && strtotime($created) < strtotime('-24 hours')) {
+                    jsonResponse(['error' => 'This record is older than 24 hours. Only the finance administrator can edit it.'], 403);
+                }
+            }
+
             $data = getRequestBody();
             $fields = [];
             $params = [];
@@ -1197,6 +1208,18 @@ switch ($method) {
 
         // --- DONATION UPDATE ---
         if (!$id) jsonResponse(['error' => 'Donation ID required'], 400);
+
+        // 24-hour edit lock: non-admin users can't edit records older than 24h
+        $isFinanceAdmin = in_array($currentUser['role'], ['pastor', 'admin']);
+        if (!$isFinanceAdmin) {
+            $ageCheck = $db->prepare("SELECT created_at FROM donations WHERE id = ?");
+            $ageCheck->execute([$id]);
+            $created = $ageCheck->fetchColumn();
+            if ($created && strtotime($created) < strtotime('-24 hours')) {
+                jsonResponse(['error' => 'This record is older than 24 hours. Only the finance administrator can edit it.'], 403);
+            }
+        }
+
         $data = getRequestBody();
         $fields = [];
         $params = [];

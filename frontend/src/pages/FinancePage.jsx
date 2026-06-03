@@ -77,22 +77,28 @@ function generatePDF(title, headers, rows, filename, summaryLines) {
 }
 
 export default function FinancePage() {
-  const { isAdmin } = useAuth();
+  const { isAdmin, hasPermission } = useAuth();
   const [tab, setTab] = useState('record');
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
 
-  const tabs = [
-    { key: 'record', label: 'Record Giving', icon: Plus },
-    { key: 'expenses', label: 'Expenses', icon: Receipt },
-    { key: 'history', label: 'History', icon: FileText },
-    { key: 'statements', label: 'Statements', icon: Users },
-    { key: 'reports', label: 'Reports', icon: TrendingUp },
-    { key: 'budgets', label: 'Budgets', icon: BarChart3 },
-    { key: 'financial_statements', label: 'Fin. Statements', icon: Wallet },
-    { key: 'accounts', label: 'Chart of Accounts', icon: BookOpen },
-    ...(isAdmin ? [{ key: 'categories', label: 'Categories', icon: Tag }] : []),
+  const hasFullFinance = isAdmin || hasPermission('finance');
+  const hasGiving = hasFullFinance || hasPermission('finance_giving');
+  const hasExpenses = hasFullFinance || hasPermission('finance_expenses');
+  const hasReports = hasFullFinance || hasPermission('finance_reports');
+
+  const allTabs = [
+    { key: 'record', label: 'Record Giving', icon: Plus, show: hasGiving },
+    { key: 'expenses', label: 'Expenses', icon: Receipt, show: hasExpenses },
+    { key: 'history', label: 'History', icon: FileText, show: hasGiving },
+    { key: 'statements', label: 'Statements', icon: Users, show: hasGiving },
+    { key: 'reports', label: 'Reports', icon: TrendingUp, show: hasReports },
+    { key: 'budgets', label: 'Budgets', icon: BarChart3, show: hasFullFinance },
+    { key: 'financial_statements', label: 'Fin. Statements', icon: Wallet, show: hasReports },
+    { key: 'accounts', label: 'Chart of Accounts', icon: BookOpen, show: hasFullFinance },
+    ...(isAdmin ? [{ key: 'categories', label: 'Categories', icon: Tag, show: true }] : []),
   ];
+  const tabs = allTabs.filter(t => t.show);
 
   return (
     <div>

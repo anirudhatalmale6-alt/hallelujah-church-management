@@ -49,7 +49,11 @@ export function AuthProvider({ children }) {
     if (!user) return false;
     if (isAdmin) return true;
     if (!user.permissions || user.permissions.length === 0) return true;
-    return user.permissions.includes(section);
+    if (user.permissions.includes(section)) return true;
+    if (section === 'finance') {
+      return user.permissions.some(p => p.startsWith('finance'));
+    }
+    return false;
   };
 
   return (
