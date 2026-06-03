@@ -11,7 +11,7 @@ import {
   Download, FileText, Search, TrendingUp, PieChart,
   Calendar, CreditCard, Users, ChevronDown, ChevronUp,
   Printer, Settings, Tag, Eye, ShieldCheck, Receipt,
-  BarChart3, Wallet
+  BarChart3, Wallet, BookOpen, ChevronRight, Landmark
 } from 'lucide-react';
 
 const paymentMethods = [
@@ -86,7 +86,8 @@ export default function FinancePage() {
     { key: 'statements', label: 'Statements', icon: Users },
     { key: 'reports', label: 'Reports', icon: TrendingUp },
     { key: 'budgets', label: 'Budgets', icon: BarChart3 },
-    { key: 'financial_statements', label: 'Statements', icon: Wallet },
+    { key: 'financial_statements', label: 'Fin. Statements', icon: Wallet },
+    { key: 'accounts', label: 'Chart of Accounts', icon: BookOpen },
     ...(isAdmin ? [{ key: 'categories', label: 'Categories', icon: Tag }] : []),
   ];
 
@@ -136,6 +137,7 @@ export default function FinancePage() {
       {tab === 'reports' && <ReportsTab setError={setError} setMessage={setMessage} />}
       {tab === 'budgets' && <BudgetsTab setError={setError} setMessage={setMessage} isAdmin={isAdmin} />}
       {tab === 'financial_statements' && <FinancialStatementsTab setError={setError} setMessage={setMessage} />}
+      {tab === 'accounts' && <ChartOfAccountsTab setError={setError} setMessage={setMessage} isAdmin={isAdmin} />}
       {tab === 'categories' && isAdmin && <CategoriesTab setError={setError} setMessage={setMessage} />}
     </div>
   );
@@ -1890,6 +1892,300 @@ function BudgetActualView({ data }) {
         </div>
       </div>
     </div>
+  );
+}
+
+/* ─── Chart of Accounts Tab ─── */
+function ChartOfAccountsTab({ setError, setMessage, isAdmin }) {
+  const [accounts, setAccounts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showModal, setShowModal] = useState(false);
+  const [editAccount, setEditAccount] = useState(null);
+  const [form, setForm] = useState({
+    name: '', description: '', account_type: 'asset', account_number: '',
+    parent_id: '', opening_balance: '', fund_type: 'general',
+  });
+  const [saving, setSaving] = useState(false);
+  const [expandedTypes, setExpandedTypes] = useState({ asset: true, liability: true, equity: true, income: true, expense: true });
+
+  const loadAccounts = async () => {
+    setLoading(true);
+    try {
+      const data = await financeApi.accounts();
+      setAccounts(data.accounts || []);
+    } catch (err) {
+      setError(err.message);
+    }
+    setLoading(false);
+  };
+
+  useEffect(() => { loadAccounts(); }, []);
+
+  const topLevel = accounts.filter(a => !a.parent_id);
+  const getChildren = (parentId) => accounts.filter(a => String(a.parent_id) === String(parentId));
+
+  const accountTypeLabels = {
+    asset: { label: 'Assets', color: 'bg-blue-600', textColor: 'text-blue-700', bgColor: 'bg-blue-50', icon: Landmark },
+    liability: { label: 'Liabilities', color: 'bg-red-600', textColor: 'text-red-700', bgColor: 'bg-red-50', icon: CreditCard },
+    equity: { label: 'Net Assets / Equity', color: 'bg-purple-600', textColor: 'text-purple-700', bgColor: 'bg-purple-50', icon: Wallet },
+    income: { label: 'Revenue / Income', color: 'bg-green-600', textColor: 'text-green-700', bgColor: 'bg-green-50', icon: DollarSign },
+    expense: { label: 'Expenses', color: 'bg-amber-600', textColor: 'text-amber-700', bgColor: 'bg-amber-50', icon: Receipt },
+  };
+
+  const openNew = (type, parentId) => {
+    setEditAccount(null);
+    setForm({
+      name: '', description: '', account_type: type || 'asset', account_number: '',
+      parent_id: parentId || '', opening_balance: '', fund_type: 'general',
+    });
+    setShowModal(true);
+  };
+
+  const openEdit = (a) => {
+    setEditAccount(a);
+    setForm({
+      name: a.name, description: a.description || '', account_type: a.account_type,
+      account_number: a.account_number || '', parent_id: a.parent_id || '',
+      opening_balance: a.opening_balance || '', fund_type: a.fund_type || 'general',
+    });
+    setShowModal(true);
+  };
+
+  const handleSave = async () => {
+    if (!form.name.trim()) { setError('Account name required'); return; }
+    setSaving(true);
+    try {
+      const payload = {
+        ...form,
+        parent_id: form.parent_id || null,
+        opening_balance: parseFloat(form.opening_balance) || 0,
+        current_balance: parseFloat(form.opening_balance) || 0,
+      };
+      if (editAccount) {
+        await financeApi.updateAccount(editAccount.id, payload);
+        setMessage('Account updated');
+      } else {
+        await financeApi.createAccount(payload);
+        setMessage('Account created');
+      }
+      setShowModal(false);
+      loadAccounts();
+    } catch (err) {
+      setError(err.message);
+    }
+    setSaving(false);
+  };
+
+  const handleDelete = async (id) => {
+    if (!confirm('Delete this account?')) return;
+    try {
+      await financeApi.deleteAccount(id);
+      setMessage('Account deleted');
+      loadAccounts();
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const toggleType = (type) => {
+    setExpandedTypes(prev => ({ ...prev, [type]: !prev[type] }));
+  };
+
+  const updateBalance = async (account, newBalance) => {
+    try {
+      await financeApi.updateAccount(account.id, { current_balance: parseFloat(newBalance) || 0 });
+      loadAccounts();
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-16">
+        <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary-700"></div>
+      </div>
+    );
+  }
+
+  const typeGroups = ['asset', 'liability', 'equity', 'income', 'expense'];
+
+  const renderAccount = (account, level = 0) => {
+    const children = getChildren(account.id);
+    const hasBalance = account.account_type === 'asset' || account.account_type === 'liability';
+    return (
+      <React.Fragment key={account.id}>
+        <tr className={`hover:bg-gray-50 ${level === 0 ? 'font-medium' : ''}`}>
+          <td className="px-4 py-2.5 text-sm" style={{ paddingLeft: `${16 + level * 24}px` }}>
+            <div className="flex items-center gap-2">
+              {children.length > 0 && <ChevronRight size={14} className="text-gray-400" />}
+              <span className={level === 0 ? 'text-gray-900 font-semibold' : 'text-gray-700'}>{account.name}</span>
+              {!Number(account.is_active) && (
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-100 text-gray-500">Inactive</span>
+              )}
+            </div>
+          </td>
+          <td className="px-4 py-2.5 text-sm text-gray-500 font-mono">{account.account_number || '-'}</td>
+          <td className="px-4 py-2.5 text-sm text-gray-500 hidden md:table-cell max-w-[200px] truncate">{account.description || '-'}</td>
+          <td className="px-4 py-2.5 text-sm text-right">
+            {hasBalance ? (
+              <span className={`font-medium ${parseFloat(account.current_balance) < 0 ? 'text-red-700' : 'text-gray-900'}`}>
+                {formatCurrency(account.current_balance)}
+              </span>
+            ) : '-'}
+          </td>
+          {isAdmin && (
+            <td className="px-4 py-2.5">
+              <div className="flex items-center justify-end gap-1">
+                <button onClick={() => openNew(account.account_type, account.id)} className="p-1.5 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded" title="Add sub-account">
+                  <Plus size={14} />
+                </button>
+                <button onClick={() => openEdit(account)} className="p-1.5 text-gray-400 hover:text-primary-700 hover:bg-primary-50 rounded" title="Edit">
+                  <Edit2 size={14} />
+                </button>
+                {parseInt(account.child_count) === 0 && (
+                  <button onClick={() => handleDelete(account.id)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded" title="Delete">
+                    <Trash2 size={14} />
+                  </button>
+                )}
+              </div>
+            </td>
+          )}
+        </tr>
+        {children.map(child => renderAccount(child, level + 1))}
+      </React.Fragment>
+    );
+  };
+
+  // Get all parent-level accounts for each type
+  const getTopForType = (type) => accounts.filter(a => a.account_type === type && !a.parent_id);
+
+  // Calculate type totals (sum of top-level current_balance for asset/liability types)
+  const getTypeTotal = (type) => {
+    if (type !== 'asset' && type !== 'liability') return null;
+    return accounts
+      .filter(a => a.account_type === type && a.parent_id)
+      .reduce((sum, a) => sum + (parseFloat(a.current_balance) || 0), 0);
+  };
+
+  return (
+    <>
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h2 className="text-lg font-semibold text-gray-900">Chart of Accounts</h2>
+          <p className="text-sm text-gray-500">Assets, liabilities, equity, income, and expense accounts</p>
+        </div>
+        {isAdmin && (
+          <button onClick={() => openNew('asset', '')} className="btn-primary"><Plus size={16} /> Add Account</button>
+        )}
+      </div>
+
+      {typeGroups.map(type => {
+        const info = accountTypeLabels[type];
+        const TypeIcon = info.icon;
+        const topAccounts = getTopForType(type);
+        const typeTotal = getTypeTotal(type);
+
+        return (
+          <div key={type} className="card p-0 overflow-hidden mb-4">
+            <button
+              onClick={() => toggleType(type)}
+              className={`w-full flex items-center justify-between px-4 py-3 ${info.bgColor} border-b`}
+            >
+              <div className="flex items-center gap-2">
+                <TypeIcon size={18} className={info.textColor} />
+                <span className={`text-sm font-bold ${info.textColor} uppercase tracking-wider`}>{info.label}</span>
+                {typeTotal !== null && (
+                  <span className={`text-sm font-semibold ${info.textColor} ml-2`}>{formatCurrency(typeTotal)}</span>
+                )}
+              </div>
+              <ChevronDown size={16} className={`${info.textColor} transition-transform ${expandedTypes[type] ? 'rotate-180' : ''}`} />
+            </button>
+            {expandedTypes[type] && (
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead className="bg-gray-50 border-b border-gray-200">
+                    <tr>
+                      <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase">Account Name</th>
+                      <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase w-24">Number</th>
+                      <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase hidden md:table-cell">Description</th>
+                      <th className="text-right px-4 py-2 text-xs font-semibold text-gray-500 uppercase w-32">Balance</th>
+                      {isAdmin && <th className="text-right px-4 py-2 text-xs font-semibold text-gray-500 uppercase w-28">Actions</th>}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {topAccounts.map(a => renderAccount(a, 0))}
+                    {topAccounts.length === 0 && (
+                      <tr><td colSpan={isAdmin ? 5 : 4} className="px-4 py-6 text-center text-gray-400 text-sm">No accounts</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {/* Add/Edit Account Modal */}
+      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title={editAccount ? 'Edit Account' : 'Add Account'} size="md">
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="label">Account Name *</label>
+              <input className="input" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. Checking Account" />
+            </div>
+            <div>
+              <label className="label">Account Number</label>
+              <input className="input" value={form.account_number} onChange={e => setForm(f => ({ ...f, account_number: e.target.value }))} placeholder="e.g. 1200" />
+            </div>
+            <div>
+              <label className="label">Account Type</label>
+              <select className="input" value={form.account_type} onChange={e => setForm(f => ({ ...f, account_type: e.target.value }))} disabled={!!editAccount}>
+                <option value="asset">Asset</option>
+                <option value="liability">Liability</option>
+                <option value="equity">Equity / Net Assets</option>
+                <option value="income">Income / Revenue</option>
+                <option value="expense">Expense</option>
+              </select>
+            </div>
+            <div>
+              <label className="label">Parent Account</label>
+              <select className="input" value={form.parent_id} onChange={e => setForm(f => ({ ...f, parent_id: e.target.value }))}>
+                <option value="">-- Top Level (no parent) --</option>
+                {accounts.filter(a => a.account_type === form.account_type && (!editAccount || String(a.id) !== String(editAccount.id))).map(a => (
+                  <option key={a.id} value={a.id}>{a.account_number ? `${a.account_number} - ` : ''}{a.name}</option>
+                ))}
+              </select>
+            </div>
+            {(form.account_type === 'asset' || form.account_type === 'liability') && (
+              <div>
+                <label className="label">Opening Balance ($)</label>
+                <input type="number" step="0.01" className="input" value={form.opening_balance} onChange={e => setForm(f => ({ ...f, opening_balance: e.target.value }))} placeholder="0.00" />
+              </div>
+            )}
+            <div>
+              <label className="label">Fund Type</label>
+              <select className="input" value={form.fund_type} onChange={e => setForm(f => ({ ...f, fund_type: e.target.value }))}>
+                <option value="general">General</option>
+                <option value="restricted">Restricted</option>
+                <option value="designated">Designated</option>
+              </select>
+            </div>
+          </div>
+          <div>
+            <label className="label">Description</label>
+            <input className="input" value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} placeholder="Optional description" />
+          </div>
+          <div className="flex justify-end gap-3 pt-2">
+            <button onClick={() => setShowModal(false)} className="btn-secondary">Cancel</button>
+            <button onClick={handleSave} disabled={saving} className="btn-primary">
+              {saving ? <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" /> : <Check size={16} />}
+              {editAccount ? 'Save' : 'Add'}
+            </button>
+          </div>
+        </div>
+      </Modal>
+    </>
   );
 }
 

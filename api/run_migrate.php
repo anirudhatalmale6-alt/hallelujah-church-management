@@ -10,101 +10,110 @@ $db = getDB();
 $results = [];
 
 try {
-    // Add fund_type to donation_categories
-    try {
-        $db->exec("ALTER TABLE donation_categories ADD COLUMN fund_type VARCHAR(30) DEFAULT 'general' AFTER description");
-        $results[] = 'Added fund_type to donation_categories';
-    } catch (Exception $e) {
-        if (strpos($e->getMessage(), 'Duplicate column') !== false) {
-            $results[] = 'fund_type column already exists';
-        } else {
-            $results[] = 'fund_type: ' . $e->getMessage();
-        }
-    }
-
-    // Expense categories table
+    // Chart of Accounts table
     $db->exec("
-        CREATE TABLE IF NOT EXISTS expense_categories (
+        CREATE TABLE IF NOT EXISTS accounts (
             id INT AUTO_INCREMENT PRIMARY KEY,
-            name VARCHAR(100) NOT NULL UNIQUE,
-            description VARCHAR(255) DEFAULT NULL,
-            fund_type VARCHAR(30) DEFAULT 'general',
-            sort_order INT DEFAULT 0,
-            is_active TINYINT(1) DEFAULT 1,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-    ");
-    $results[] = 'expense_categories table created';
-
-    // Seed default expense categories
-    $check = $db->query("SELECT COUNT(*) FROM expense_categories")->fetchColumn();
-    if ($check == 0) {
-        $cats = [
-            ['Rent/Mortgage', 'Facility rent or mortgage payments', 'general', 1],
-            ['Utilities', 'Electric, water, gas, internet', 'general', 2],
-            ['Salaries & Wages', 'Staff compensation', 'general', 3],
-            ['Supplies', 'Office and church supplies', 'general', 4],
-            ['Maintenance', 'Building and equipment maintenance', 'general', 5],
-            ['Ministry Programs', 'Ministry and outreach program costs', 'general', 6],
-            ['Events', 'Church event expenses', 'general', 7],
-            ['Insurance', 'Property and liability insurance', 'general', 8],
-            ['Missions', 'Missions support disbursements', 'restricted', 9],
-            ['Benevolence', 'Member assistance disbursements', 'restricted', 10],
-            ['Equipment', 'Equipment purchases', 'general', 11],
-            ['Other', 'Miscellaneous expenses', 'general', 12],
-        ];
-        $stmt = $db->prepare("INSERT INTO expense_categories (name, description, fund_type, sort_order) VALUES (?, ?, ?, ?)");
-        foreach ($cats as $c) {
-            $stmt->execute($c);
-        }
-        $results[] = 'Seeded 12 default expense categories';
-    }
-
-    // Expenses table
-    $db->exec("
-        CREATE TABLE IF NOT EXISTS expenses (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            category_id INT NOT NULL,
-            amount DECIMAL(10,2) NOT NULL,
+            parent_id INT DEFAULT NULL,
+            account_type ENUM('asset','liability','income','expense','equity') NOT NULL,
+            account_number VARCHAR(20) DEFAULT NULL,
+            name VARCHAR(150) NOT NULL,
             description VARCHAR(500) DEFAULT NULL,
-            vendor VARCHAR(200) DEFAULT NULL,
-            payment_method VARCHAR(30) DEFAULT 'check',
-            reference_number VARCHAR(100) DEFAULT NULL,
-            expense_date DATE NOT NULL,
-            receipt_note VARCHAR(500) DEFAULT NULL,
-            status VARCHAR(20) DEFAULT 'recorded',
-            approved_by INT DEFAULT NULL,
-            approved_at DATETIME DEFAULT NULL,
-            recorded_by INT NOT NULL,
+            opening_balance DECIMAL(12,2) DEFAULT 0,
+            current_balance DECIMAL(12,2) DEFAULT 0,
+            fund_type VARCHAR(30) DEFAULT 'general',
+            is_active TINYINT(1) DEFAULT 1,
+            sort_order INT DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-            FOREIGN KEY (category_id) REFERENCES expense_categories(id),
-            FOREIGN KEY (recorded_by) REFERENCES users(id),
-            FOREIGN KEY (approved_by) REFERENCES users(id) ON DELETE SET NULL,
-            INDEX idx_expense_date (expense_date),
-            INDEX idx_category_id (category_id),
-            INDEX idx_status (status)
+            FOREIGN KEY (parent_id) REFERENCES accounts(id) ON DELETE CASCADE,
+            INDEX idx_account_type (account_type),
+            INDEX idx_parent_id (parent_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     ");
-    $results[] = 'expenses table created';
+    $results[] = 'accounts table created';
 
-    // Budgets table
-    $db->exec("
-        CREATE TABLE IF NOT EXISTS budgets (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            category_type VARCHAR(20) NOT NULL,
-            category_id INT NOT NULL,
-            year INT NOT NULL,
-            month INT DEFAULT NULL,
-            amount DECIMAL(10,2) NOT NULL DEFAULT 0,
-            notes VARCHAR(255) DEFAULT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-            UNIQUE KEY uk_budget (category_type, category_id, year, month),
-            INDEX idx_year (year)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-    ");
-    $results[] = 'budgets table created';
+    // Seed default accounts if empty
+    $check = (int)$db->query("SELECT COUNT(*) FROM accounts")->fetchColumn();
+    if ($check == 0) {
+        // Top-level asset
+        $db->exec("INSERT INTO accounts (account_type, account_number, name, description, parent_id, sort_order) VALUES ('asset','1000','Assets','All church assets',NULL,1)");
+        $assetId = (int)$db->lastInsertId();
+
+        // Asset sub-accounts
+        $assetSubs = [
+            ['1100', 'Cash & Reserves', 'Cash on hand and reserves', 2],
+            ['1200', 'Checking Account', 'Primary checking account', 3],
+            ['1300', 'Savings Account', 'Church savings account', 4],
+            ['1400', 'Endowments', 'Endowment funds', 5],
+            ['1500', 'Investments', 'Church investments', 6],
+        ];
+        $stmt = $db->prepare("INSERT INTO accounts (account_type, account_number, name, description, parent_id, sort_order) VALUES ('asset',?,?,?,?,?)");
+        foreach ($assetSubs as $s) {
+            $stmt->execute([$s[0], $s[1], $s[2], $assetId, $s[3]]);
+        }
+
+        // Top-level liability
+        $db->exec("INSERT INTO accounts (account_type, account_number, name, description, parent_id, sort_order) VALUES ('liability','2000','Liabilities','All church liabilities',NULL,10)");
+        $liabilityId = (int)$db->lastInsertId();
+
+        // Liability sub-accounts
+        $liabSubs = [
+            ['2100', 'Loans', 'Outstanding loans', 11],
+            ['2200', 'Mortgages', 'Property mortgages', 12],
+        ];
+        $stmt = $db->prepare("INSERT INTO accounts (account_type, account_number, name, description, parent_id, sort_order) VALUES ('liability',?,?,?,?,?)");
+        foreach ($liabSubs as $s) {
+            $stmt->execute([$s[0], $s[1], $s[2], $liabilityId, $s[3]]);
+        }
+
+        // Top-level equity
+        $db->exec("INSERT INTO accounts (account_type, account_number, name, description, parent_id, sort_order) VALUES ('equity','3000','Net Assets','Church net assets (equity)',NULL,20)");
+        $equityId = (int)$db->lastInsertId();
+
+        $eqSubs = [
+            ['3100', 'Unrestricted Net Assets', 'General fund balance', 21],
+            ['3200', 'Restricted Net Assets', 'Restricted fund balance', 22],
+        ];
+        $stmt = $db->prepare("INSERT INTO accounts (account_type, account_number, name, description, parent_id, sort_order) VALUES ('equity',?,?,?,?,?)");
+        foreach ($eqSubs as $s) {
+            $stmt->execute([$s[0], $s[1], $s[2], $equityId, $s[3]]);
+        }
+
+        // Top-level income (links to donation categories conceptually)
+        $db->exec("INSERT INTO accounts (account_type, account_number, name, description, parent_id, sort_order) VALUES ('income','4000','Revenue','All church income/revenue',NULL,30)");
+        $incomeId = (int)$db->lastInsertId();
+
+        // Seed income sub-accounts from existing donation_categories
+        $donCats = $db->query("SELECT id, name, description FROM donation_categories WHERE is_active = 1 ORDER BY sort_order")->fetchAll();
+        $num = 4100;
+        $ord = 31;
+        $stmt = $db->prepare("INSERT INTO accounts (account_type, account_number, name, description, parent_id, sort_order) VALUES ('income',?,?,?,?,?)");
+        foreach ($donCats as $c) {
+            $stmt->execute([(string)$num, $c['name'], $c['description'] ?: $c['name'], $incomeId, $ord]);
+            $num += 100;
+            $ord++;
+        }
+
+        // Top-level expense
+        $db->exec("INSERT INTO accounts (account_type, account_number, name, description, parent_id, sort_order) VALUES ('expense','5000','Expenses','All church expenses',NULL,50)");
+        $expenseId = (int)$db->lastInsertId();
+
+        // Seed expense sub-accounts from existing expense_categories
+        $expCats = $db->query("SELECT id, name, description FROM expense_categories WHERE is_active = 1 ORDER BY sort_order")->fetchAll();
+        $num = 5100;
+        $ord = 51;
+        $stmt = $db->prepare("INSERT INTO accounts (account_type, account_number, name, description, parent_id, sort_order) VALUES ('expense',?,?,?,?,?)");
+        foreach ($expCats as $c) {
+            $stmt->execute([(string)$num, $c['name'], $c['description'] ?: $c['name'], $expenseId, $ord]);
+            $num += 100;
+            $ord++;
+        }
+
+        $results[] = 'Seeded Chart of Accounts with assets, liabilities, equity, income, and expense accounts';
+    } else {
+        $results[] = 'Accounts already seeded (' . $check . ' accounts)';
+    }
 
 } catch (Exception $e) {
     $results[] = 'Error: ' . $e->getMessage();

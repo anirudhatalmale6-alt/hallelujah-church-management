@@ -287,6 +287,12 @@ export const finance = {
   // Financial Statements
   incomeStatement: (dateFrom, dateTo) => request('finance.php', { params: { action: 'income_statement', date_from: dateFrom, date_to: dateTo } }),
   budgetActual: (year) => request('finance.php', { params: { action: 'budget_actual', year } }),
+  // Chart of Accounts
+  accounts: (type) => request('finance.php', { params: { action: 'accounts', ...(type ? { type } : {}) } }),
+  getAccount: (id) => request('finance.php', { params: { action: 'account', id } }),
+  createAccount: (data) => request('finance.php', { method: 'POST', body: data, params: { action: 'account' } }),
+  updateAccount: (id, data) => request('finance.php', { method: 'PUT', body: data, params: { action: 'account', id } }),
+  deleteAccount: (id) => request('finance.php', { method: 'DELETE', params: { action: 'account', id } }),
 };
 
 export { getToken, setToken, removeToken, getUser, setUser, ApiError };

@@ -10,6 +10,41 @@ $db = getDB();
 
 switch ($method) {
     case 'GET':
+        // --- CHART OF ACCOUNTS ---
+        if ($action === 'accounts') {
+            $type = $_GET['type'] ?? '';
+            $where = '';
+            $params = [];
+            if ($type) {
+                $where = 'WHERE a.account_type = ?';
+                $params[] = $type;
+            }
+            $stmt = $db->prepare("
+                SELECT a.*, p.name as parent_name, p.account_number as parent_number,
+                    (SELECT COUNT(*) FROM accounts c WHERE c.parent_id = a.id) as child_count
+                FROM accounts a
+                LEFT JOIN accounts p ON p.id = a.parent_id
+                $where
+                ORDER BY a.sort_order ASC, a.name ASC
+            ");
+            $stmt->execute($params);
+            $accounts = $stmt->fetchAll();
+            jsonResponse(['accounts' => $accounts]);
+        }
+
+        if ($action === 'account') {
+            if (!$id) jsonResponse(['error' => 'Account ID required'], 400);
+            $stmt = $db->prepare("SELECT * FROM accounts WHERE id = ?");
+            $stmt->execute([$id]);
+            $account = $stmt->fetch();
+            if (!$account) jsonResponse(['error' => 'Account not found'], 404);
+
+            $children = $db->prepare("SELECT * FROM accounts WHERE parent_id = ? ORDER BY sort_order ASC");
+            $children->execute([$id]);
+
+            jsonResponse(['account' => $account, 'children' => $children->fetchAll()]);
+        }
+
         // --- DONATION CATEGORIES ---
         if ($action === 'categories') {
             $stmt = $db->query("SELECT * FROM donation_categories ORDER BY sort_order ASC");
@@ -514,6 +549,35 @@ switch ($method) {
         break;
 
     case 'POST':
+        // --- CREATE ACCOUNT ---
+        if ($action === 'account') {
+            requireRole($currentUser, ['pastor', 'admin']);
+            $data = getRequestBody();
+            $name = trim($data['name'] ?? '');
+            if (!$name) jsonResponse(['error' => 'Account name required'], 400);
+            if (empty($data['account_type'])) jsonResponse(['error' => 'account_type required'], 400);
+
+            $maxOrder = (int)$db->query("SELECT COALESCE(MAX(sort_order), 0) FROM accounts")->fetchColumn() + 1;
+            $parentId = !empty($data['parent_id']) ? (int)$data['parent_id'] : null;
+
+            $stmt = $db->prepare("
+                INSERT INTO accounts (parent_id, account_type, account_number, name, description, opening_balance, current_balance, fund_type, sort_order)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ");
+            $stmt->execute([
+                $parentId,
+                $data['account_type'],
+                $data['account_number'] ?? null,
+                $name,
+                $data['description'] ?? null,
+                (float)($data['opening_balance'] ?? 0),
+                (float)($data['current_balance'] ?? $data['opening_balance'] ?? 0),
+                $data['fund_type'] ?? 'general',
+                $maxOrder,
+            ]);
+            jsonResponse(['message' => 'Account created', 'id' => (int)$db->lastInsertId()], 201);
+        }
+
         // --- DONATION CATEGORY ---
         if ($action === 'category') {
             requireRole($currentUser, ['pastor', 'admin']);
@@ -695,6 +759,30 @@ switch ($method) {
         break;
 
     case 'PUT':
+        // --- ACCOUNT UPDATE ---
+        if ($action === 'account') {
+            requireRole($currentUser, ['pastor', 'admin']);
+            if (!$id) jsonResponse(['error' => 'Account ID required'], 400);
+            $data = getRequestBody();
+            $fields = [];
+            $params = [];
+            $allowed = ['name', 'description', 'account_number', 'fund_type', 'opening_balance', 'current_balance', 'is_active', 'sort_order', 'parent_id'];
+            foreach ($allowed as $f) {
+                if (array_key_exists($f, $data)) {
+                    $fields[] = "$f = ?";
+                    $val = $data[$f];
+                    if (in_array($f, ['opening_balance', 'current_balance'])) $val = (float)$val;
+                    if (in_array($f, ['is_active', 'sort_order'])) $val = (int)$val;
+                    if ($f === 'parent_id') $val = $val ? (int)$val : null;
+                    $params[] = $val;
+                }
+            }
+            if (empty($fields)) jsonResponse(['error' => 'Nothing to update'], 400);
+            $params[] = $id;
+            $db->prepare("UPDATE accounts SET " . implode(', ', $fields) . " WHERE id = ?")->execute($params);
+            jsonResponse(['message' => 'Account updated']);
+        }
+
         // --- DONATION CATEGORY UPDATE ---
         if ($action === 'category') {
             requireRole($currentUser, ['pastor', 'admin']);
@@ -798,6 +886,18 @@ switch ($method) {
         break;
 
     case 'DELETE':
+        // --- DELETE ACCOUNT ---
+        if ($action === 'account') {
+            requireRole($currentUser, ['pastor', 'admin']);
+            if (!$id) jsonResponse(['error' => 'Account ID required'], 400);
+            $childCount = (int)$db->prepare("SELECT COUNT(*) FROM accounts WHERE parent_id = ?")->execute([$id]) ? $db->query("SELECT COUNT(*) FROM accounts WHERE parent_id = $id")->fetchColumn() : 0;
+            if ($childCount > 0) {
+                jsonResponse(['error' => 'Cannot delete account with sub-accounts. Remove sub-accounts first or deactivate it.'], 400);
+            }
+            $db->prepare("DELETE FROM accounts WHERE id = ?")->execute([$id]);
+            jsonResponse(['message' => 'Account deleted']);
+        }
+
         // --- DELETE DONATION CATEGORY ---
         if ($action === 'category') {
             requireRole($currentUser, ['pastor', 'admin']);
