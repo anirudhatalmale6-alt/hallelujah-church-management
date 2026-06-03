@@ -298,7 +298,7 @@ export const finance = {
   transfer: (data) => request('finance.php', { method: 'POST', body: data, params: { action: 'transfer' } }),
   transfers: (params) => request('finance.php', { params: { action: 'transfers', ...params } }),
   // Balance Sheet & Journal
-  balanceSheet: (asOf) => request('finance.php', { params: { action: 'balance_sheet', as_of: asOf } }),
+  balanceSheet: (dateFrom, dateTo) => request('finance.php', { params: { action: 'balance_sheet', date_from: dateFrom, date_to: dateTo } }),
   journal: (params) => request('finance.php', { params: { action: 'journal', ...params } }),
   // Account Report
   accountReport: (id, params) => request('finance.php', { params: { action: 'account_report', id, ...params } }),

@@ -1514,7 +1514,7 @@ function FinancialStatementsTab({ setError }) {
       } else if (view === 'budget_actual') {
         setData(await financeApi.budgetActual(year));
       } else if (view === 'balance_sheet') {
-        setData(await financeApi.balanceSheet(dateTo));
+        setData(await financeApi.balanceSheet(dateFrom, dateTo));
       } else if (view === 'journal') {
         setData(await financeApi.journal({ date_from: dateFrom, date_to: dateTo, page: journalPage }));
       }
@@ -1640,7 +1640,7 @@ function FinancialStatementsTab({ setError }) {
     doc.text('Balance Sheet', 14, 23);
     doc.setFontSize(9);
     doc.setTextColor(100);
-    doc.text(`As of: ${data.as_of}`, 14, 29);
+    doc.text(`Period: ${data.date_from || ''} to ${data.date_to || ''}`, 14, 29);
     doc.setTextColor(0);
 
     const assetRows = (data.assets || []).filter(a => a.parent_id).map(a => [
@@ -1669,7 +1669,7 @@ function FinancialStatementsTab({ setError }) {
     doc.text('NET ASSETS (Assets - Liabilities)', 14, y);
     doc.text(formatCurrency(data.net_assets), 196, y, { align: 'right' });
 
-    doc.save(`balance-sheet-${data.as_of}.pdf`);
+    doc.save(`balance-sheet-${data.date_from}-to-${data.date_to}.pdf`);
   };
 
   if (loading) {
@@ -1693,7 +1693,7 @@ function FinancialStatementsTab({ setError }) {
               <option value="journal">General Journal</option>
             </select>
           </div>
-          {(view === 'income_statement' || view === 'journal') ? (
+          {(view === 'income_statement' || view === 'journal' || view === 'balance_sheet') ? (
             <>
               <div>
                 <label className="label">From</label>
@@ -1704,11 +1704,6 @@ function FinancialStatementsTab({ setError }) {
                 <input type="date" className="input" value={dateTo} onChange={e => setDateTo(e.target.value)} />
               </div>
             </>
-          ) : view === 'balance_sheet' ? (
-            <div>
-              <label className="label">As Of Date</label>
-              <input type="date" className="input" value={dateTo} onChange={e => setDateTo(e.target.value)} />
-            </div>
           ) : (
             <div>
               <label className="label">Year</label>
@@ -1994,7 +1989,11 @@ function BalanceSheetView({ data }) {
     <div className="card">
       <div className="text-center mb-6">
         <h2 className="text-xl font-bold text-gray-900">Balance Sheet</h2>
-        <p className="text-sm text-gray-500">As of {new Date(data.as_of + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</p>
+        <p className="text-sm text-gray-500">
+          {new Date(data.date_from + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}
+          {' '} to {' '}
+          {new Date(data.date_to + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}
+        </p>
       </div>
 
       {renderSection(data.assets || [], 'Assets', 'text-blue-700 border-blue-200')}
@@ -2021,19 +2020,19 @@ function BalanceSheetView({ data }) {
       </div>
 
       <div className="border-t border-gray-200 pt-4 mt-4">
-        <h3 className="text-sm font-bold text-gray-700 uppercase tracking-wider mb-3">Year-to-Date Activity</h3>
+        <h3 className="text-sm font-bold text-gray-700 uppercase tracking-wider mb-3">Period Activity</h3>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <div className="bg-green-50 rounded-lg p-3">
-            <div className="text-xs text-green-600 font-medium">YTD Income</div>
-            <div className="text-lg font-bold text-green-700">{formatCurrency(data.ytd_income)}</div>
+            <div className="text-xs text-green-600 font-medium">Period Income</div>
+            <div className="text-lg font-bold text-green-700">{formatCurrency(data.period_income)}</div>
           </div>
           <div className="bg-red-50 rounded-lg p-3">
-            <div className="text-xs text-red-600 font-medium">YTD Expenses</div>
-            <div className="text-lg font-bold text-red-700">{formatCurrency(data.ytd_expenses)}</div>
+            <div className="text-xs text-red-600 font-medium">Period Expenses</div>
+            <div className="text-lg font-bold text-red-700">{formatCurrency(data.period_expenses)}</div>
           </div>
-          <div className={`rounded-lg p-3 ${data.ytd_net_income >= 0 ? 'bg-emerald-50' : 'bg-amber-50'}`}>
-            <div className={`text-xs font-medium ${data.ytd_net_income >= 0 ? 'text-emerald-600' : 'text-amber-600'}`}>YTD Net Income</div>
-            <div className={`text-lg font-bold ${data.ytd_net_income >= 0 ? 'text-emerald-700' : 'text-amber-700'}`}>{formatCurrency(data.ytd_net_income)}</div>
+          <div className={`rounded-lg p-3 ${data.period_net_income >= 0 ? 'bg-emerald-50' : 'bg-amber-50'}`}>
+            <div className={`text-xs font-medium ${data.period_net_income >= 0 ? 'text-emerald-600' : 'text-amber-600'}`}>Period Net Income</div>
+            <div className={`text-lg font-bold ${data.period_net_income >= 0 ? 'text-emerald-700' : 'text-amber-700'}`}>{formatCurrency(data.period_net_income)}</div>
           </div>
         </div>
       </div>

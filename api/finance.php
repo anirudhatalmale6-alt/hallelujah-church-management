@@ -92,36 +92,37 @@ switch ($method) {
 
         // --- BALANCE SHEET ---
         if ($action === 'balance_sheet') {
-            $asOf = $_GET['as_of'] ?? date('Y-m-d');
+            $dateFrom = $_GET['date_from'] ?? null;
+            $dateTo = $_GET['date_to'] ?? $_GET['as_of'] ?? date('Y-m-d');
+            if (!$dateFrom) {
+                $dateFrom = substr($dateTo, 0, 4) . '-01-01';
+            }
 
-            // Helper: calculate balance from ledger for an account as of a date
+            $countStmt = $db->prepare("SELECT COUNT(*) FROM account_ledger WHERE account_id = ?");
             $balanceStmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) FROM account_ledger WHERE account_id = ? AND entry_date <= ?");
 
-            $assets = $db->query("
-                SELECT a.*, (SELECT COUNT(*) FROM accounts c WHERE c.parent_id = a.id) as child_count
-                FROM accounts a WHERE a.account_type = 'asset' AND a.is_active = 1
-                ORDER BY a.sort_order ASC
-            ")->fetchAll();
+            $fetchAccounts = function($type) use ($db) {
+                return $db->query("
+                    SELECT a.*, (SELECT COUNT(*) FROM accounts c WHERE c.parent_id = a.id) as child_count
+                    FROM accounts a WHERE a.account_type = '$type' AND a.is_active = 1
+                    ORDER BY a.sort_order ASC
+                ")->fetchAll();
+            };
 
-            $liabilities = $db->query("
-                SELECT a.*, (SELECT COUNT(*) FROM accounts c WHERE c.parent_id = a.id) as child_count
-                FROM accounts a WHERE a.account_type = 'liability' AND a.is_active = 1
-                ORDER BY a.sort_order ASC
-            ")->fetchAll();
+            $assets = $fetchAccounts('asset');
+            $liabilities = $fetchAccounts('liability');
+            $equity = $fetchAccounts('equity');
 
-            $equity = $db->query("
-                SELECT a.*, (SELECT COUNT(*) FROM accounts c WHERE c.parent_id = a.id) as child_count
-                FROM accounts a WHERE a.account_type = 'equity' AND a.is_active = 1
-                ORDER BY a.sort_order ASC
-            ")->fetchAll();
-
-            // Calculate balances from ledger, fall back to current_balance if no ledger entries
-            $calcBalance = function(&$accounts) use ($balanceStmt, $asOf) {
+            $calcBalance = function(&$accounts) use ($countStmt, $balanceStmt, $dateTo) {
                 foreach ($accounts as &$acc) {
-                    $balanceStmt->execute([$acc['id'], $asOf]);
-                    $ledgerBalance = (float)$balanceStmt->fetchColumn();
-                    // Check if any ledger entries exist for this account
-                    $acc['calculated_balance'] = $ledgerBalance != 0 ? $ledgerBalance : (float)$acc['current_balance'];
+                    $countStmt->execute([$acc['id']]);
+                    $hasLedger = (int)$countStmt->fetchColumn() > 0;
+                    if ($hasLedger) {
+                        $balanceStmt->execute([$acc['id'], $dateTo]);
+                        $acc['calculated_balance'] = (float)$balanceStmt->fetchColumn();
+                    } else {
+                        $acc['calculated_balance'] = (float)$acc['current_balance'];
+                    }
                 }
                 unset($acc);
             };
@@ -143,18 +144,18 @@ switch ($method) {
                 if ($e['parent_id']) $totalEquity += $e['calculated_balance'];
             }
 
-            // Net assets = Assets - Liabilities
             $netAssets = $totalAssets - $totalLiabilities;
 
-            // YTD income and expenses
-            $yearStart = date('Y') . '-01-01';
-            $ytdIncome = (float)$db->prepare("SELECT COALESCE(SUM(amount), 0) FROM donations WHERE donation_date BETWEEN ? AND ?")->execute([$yearStart, $asOf]) ?
-                (float)$db->query("SELECT COALESCE(SUM(amount), 0) FROM donations WHERE donation_date BETWEEN '$yearStart' AND '$asOf'")->fetchColumn() : 0;
-            $ytdExpenses = 0;
+            $incStmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) FROM donations WHERE donation_date BETWEEN ? AND ?");
+            $incStmt->execute([$dateFrom, $dateTo]);
+            $periodIncome = (float)$incStmt->fetchColumn();
+            $periodExpenses = 0;
             try {
-                $ytdExpenses = (float)$db->query("SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE expense_date BETWEEN '$yearStart' AND '$asOf'")->fetchColumn();
+                $expStmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE expense_date BETWEEN ? AND ?");
+                $expStmt->execute([$dateFrom, $dateTo]);
+                $periodExpenses = (float)$expStmt->fetchColumn();
             } catch (Exception $e) {}
-            $ytdNetIncome = $ytdIncome - $ytdExpenses;
+            $periodNetIncome = $periodIncome - $periodExpenses;
 
             jsonResponse([
                 'assets' => $assets,
@@ -164,14 +165,15 @@ switch ($method) {
                 'total_liabilities' => $totalLiabilities,
                 'total_equity' => $totalEquity,
                 'net_assets' => $netAssets,
-                'ytd_income' => $ytdIncome,
-                'ytd_expenses' => $ytdExpenses,
-                'ytd_net_income' => $ytdNetIncome,
-                'as_of' => $asOf,
+                'period_income' => $periodIncome,
+                'period_expenses' => $periodExpenses,
+                'period_net_income' => $periodNetIncome,
+                'date_from' => $dateFrom,
+                'date_to' => $dateTo,
             ]);
         }
 
-        // --- ACCOUNT REPORT (ledger-based) ---
+        // --- ACCOUNT REPORT (ledger + donation/expense based) ---
         if ($action === 'account_report') {
             if (!$id) jsonResponse(['error' => 'Account ID required'], 400);
             $dateFrom = $_GET['date_from'] ?? date('Y-01-01');
@@ -182,32 +184,102 @@ switch ($method) {
             $account = $stmt->fetch();
             if (!$account) jsonResponse(['error' => 'Account not found'], 404);
 
-            // Opening balance: sum of all ledger entries before date_from
-            $openingStmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) FROM account_ledger WHERE account_id = ? AND entry_date < ?");
-            $openingStmt->execute([$id, $dateFrom]);
-            $openingBalance = (float)$openingStmt->fetchColumn();
+            $entries = [];
+            $openingBalance = 0;
 
-            // Ledger entries within date range
-            $entriesStmt = $db->prepare("
-                SELECT al.*, u.name as created_by_name
-                FROM account_ledger al
-                LEFT JOIN users u ON u.id = al.created_by
-                WHERE al.account_id = ? AND al.entry_date BETWEEN ? AND ?
-                ORDER BY al.entry_date ASC, al.id ASC
-            ");
-            $entriesStmt->execute([$id, $dateFrom, $dateTo]);
-            $entries = $entriesStmt->fetchAll();
+            if ($account['account_type'] === 'income') {
+                // For income accounts, find matching donation category and pull donations
+                $catName = $account['name'];
+                $catStmt = $db->prepare("SELECT id FROM donation_categories WHERE name = ? LIMIT 1");
+                $catStmt->execute([$catName]);
+                $catId = $catStmt->fetchColumn();
 
-            // Period totals (in/out)
+                if ($catId) {
+                    $openStmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) FROM donations WHERE category_id = ? AND donation_date < ?");
+                    $openStmt->execute([$catId, $dateFrom]);
+                    $openingBalance = (float)$openStmt->fetchColumn();
+
+                    $donStmt = $db->prepare("
+                        SELECT d.donation_date as entry_date, 'donation' as entry_type, d.amount,
+                            CONCAT(COALESCE(CONCAT(m.first_name, ' ', m.last_name), d.donor_name, 'Anonymous'), ' - ', d.payment_method) as description,
+                            u.name as created_by_name
+                        FROM donations d
+                        LEFT JOIN members m ON m.id = d.member_id
+                        LEFT JOIN users u ON u.id = d.recorded_by
+                        WHERE d.category_id = ? AND d.donation_date BETWEEN ? AND ?
+                        ORDER BY d.donation_date ASC, d.id ASC
+                    ");
+                    $donStmt->execute([$catId, $dateFrom, $dateTo]);
+                    $entries = $donStmt->fetchAll();
+                }
+            } elseif ($account['account_type'] === 'expense') {
+                // For expense accounts, find matching expense category and pull expenses
+                $catName = $account['name'];
+                $catStmt = $db->prepare("SELECT id FROM expense_categories WHERE name = ? LIMIT 1");
+                $catStmt->execute([$catName]);
+                $catId = $catStmt->fetchColumn();
+
+                if ($catId) {
+                    $openStmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE category_id = ? AND expense_date < ?");
+                    $openStmt->execute([$catId, $dateFrom]);
+                    $openingBalance = (float)$openStmt->fetchColumn();
+
+                    $expStmt = $db->prepare("
+                        SELECT e.expense_date as entry_date, 'expense' as entry_type, e.amount,
+                            CONCAT(COALESCE(e.vendor, ''), ' - ', COALESCE(e.description, '')) as description,
+                            u.name as created_by_name
+                        FROM expenses e
+                        LEFT JOIN users u ON u.id = e.recorded_by
+                        WHERE e.category_id = ? AND e.expense_date BETWEEN ? AND ?
+                        ORDER BY e.expense_date ASC, e.id ASC
+                    ");
+                    $expStmt->execute([$catId, $dateFrom, $dateTo]);
+                    $entries = $expStmt->fetchAll();
+                }
+            } else {
+                // For asset/liability/equity accounts, use ledger
+                $openingStmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) FROM account_ledger WHERE account_id = ? AND entry_date < ?");
+                $openingStmt->execute([$id, $dateFrom]);
+                $openingBalance = (float)$openingStmt->fetchColumn();
+                if ($openingBalance == 0) $openingBalance = (float)$account['opening_balance'];
+
+                $entriesStmt = $db->prepare("
+                    SELECT al.entry_date, al.entry_type, al.amount, al.description, u.name as created_by_name
+                    FROM account_ledger al
+                    LEFT JOIN users u ON u.id = al.created_by
+                    WHERE al.account_id = ? AND al.entry_date BETWEEN ? AND ?
+                    ORDER BY al.entry_date ASC, al.id ASC
+                ");
+                $entriesStmt->execute([$id, $dateFrom, $dateTo]);
+                $entries = $entriesStmt->fetchAll();
+
+                // Also add donations routed to this account
+                try {
+                    $routedStmt = $db->prepare("
+                        SELECT d.donation_date as entry_date, 'deposit' as entry_type, d.amount,
+                            CONCAT(dc.name, ' - ', COALESCE(CONCAT(m.first_name, ' ', m.last_name), d.donor_name, 'Anonymous')) as description,
+                            u.name as created_by_name
+                        FROM donations d
+                        JOIN donation_categories dc ON dc.id = d.category_id
+                        LEFT JOIN members m ON m.id = d.member_id
+                        LEFT JOIN users u ON u.id = d.recorded_by
+                        WHERE d.routed_account_id = ? AND d.donation_date BETWEEN ? AND ?
+                        ORDER BY d.donation_date ASC
+                    ");
+                    $routedStmt->execute([$id, $dateFrom, $dateTo]);
+                    $routed = $routedStmt->fetchAll();
+                    if (!empty($routed)) $entries = array_merge($entries, $routed);
+                } catch (Exception $e) {}
+
+                usort($entries, function($a, $b) { return strcmp($a['entry_date'], $b['entry_date']); });
+            }
+
             $periodIn = 0;
             $periodOut = 0;
             foreach ($entries as $e) {
                 $amt = (float)$e['amount'];
-                if ($amt >= 0) {
-                    $periodIn += $amt;
-                } else {
-                    $periodOut += $amt;
-                }
+                if ($amt >= 0) $periodIn += $amt;
+                else $periodOut += $amt;
             }
 
             $endingBalance = $openingBalance + $periodIn + $periodOut;
@@ -217,7 +289,7 @@ switch ($method) {
                 'entries' => $entries,
                 'opening_balance' => $openingBalance,
                 'period_in' => $periodIn,
-                'period_out' => $periodOut,
+                'period_out' => abs($periodOut),
                 'ending_balance' => $endingBalance,
                 'date_from' => $dateFrom,
                 'date_to' => $dateTo,
