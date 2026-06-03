@@ -1497,14 +1497,29 @@ function BudgetsTab({ setError, setMessage, isAdmin }) {
 }
 
 /* ─── Financial Statements Tab ─── */
+const fsYears = [];
+for (let y = 2010; y <= new Date().getFullYear() + 2; y++) fsYears.push(y);
+const fsMonths = [
+  { val: '01', label: 'January' }, { val: '02', label: 'February' }, { val: '03', label: 'March' },
+  { val: '04', label: 'April' }, { val: '05', label: 'May' }, { val: '06', label: 'June' },
+  { val: '07', label: 'July' }, { val: '08', label: 'August' }, { val: '09', label: 'September' },
+  { val: '10', label: 'October' }, { val: '11', label: 'November' }, { val: '12', label: 'December' },
+];
+
 function FinancialStatementsTab({ setError }) {
   const [view, setView] = useState('income_statement');
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [year, setYear] = useState(new Date().getFullYear());
-  const [dateFrom, setDateFrom] = useState(new Date().getFullYear() + '-01-01');
-  const [dateTo, setDateTo] = useState(new Date().toISOString().split('T')[0]);
+  const [fromYear, setFromYear] = useState(new Date().getFullYear());
+  const [fromMonth, setFromMonth] = useState('01');
+  const [toYear, setToYear] = useState(new Date().getFullYear());
+  const [toMonth, setToMonth] = useState(String(new Date().getMonth() + 1).padStart(2, '0'));
   const [journalPage, setJournalPage] = useState(1);
+
+  const dateFrom = `${fromYear}-${fromMonth}-01`;
+  const lastDay = new Date(toYear, parseInt(toMonth), 0).getDate();
+  const dateTo = `${toYear}-${toMonth}-${String(lastDay).padStart(2, '0')}`;
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -1697,18 +1712,32 @@ function FinancialStatementsTab({ setError }) {
             <>
               <div>
                 <label className="label">From</label>
-                <input type="date" className="input" value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
+                <div className="flex gap-1">
+                  <select className="input" value={fromMonth} onChange={e => setFromMonth(e.target.value)}>
+                    {fsMonths.map(m => <option key={m.val} value={m.val}>{m.label}</option>)}
+                  </select>
+                  <select className="input w-24" value={fromYear} onChange={e => setFromYear(parseInt(e.target.value))}>
+                    {fsYears.map(y => <option key={y} value={y}>{y}</option>)}
+                  </select>
+                </div>
               </div>
               <div>
                 <label className="label">To</label>
-                <input type="date" className="input" value={dateTo} onChange={e => setDateTo(e.target.value)} />
+                <div className="flex gap-1">
+                  <select className="input" value={toMonth} onChange={e => setToMonth(e.target.value)}>
+                    {fsMonths.map(m => <option key={m.val} value={m.val}>{m.label}</option>)}
+                  </select>
+                  <select className="input w-24" value={toYear} onChange={e => setToYear(parseInt(e.target.value))}>
+                    {fsYears.map(y => <option key={y} value={y}>{y}</option>)}
+                  </select>
+                </div>
               </div>
             </>
           ) : (
             <div>
               <label className="label">Year</label>
               <select className="input" value={year} onChange={e => setYear(parseInt(e.target.value))}>
-                {[2024, 2025, 2026, 2027].map(y => (
+                {fsYears.map(y => (
                   <option key={y} value={y}>{y}</option>
                 ))}
               </select>
@@ -2146,7 +2175,12 @@ function ChartOfAccountsTab({ setError, setMessage, isAdmin }) {
   const [openBalAmount, setOpenBalAmount] = useState('');
   const [showAcctReport, setShowAcctReport] = useState(null);
   const [acctReportData, setAcctReportData] = useState(null);
-  const [acctReportDates, setAcctReportDates] = useState({ from: new Date().getFullYear() + '-01-01', to: new Date().toISOString().split('T')[0] });
+  const [acctReportDates, setAcctReportDates] = useState({ fromYear: new Date().getFullYear(), fromMonth: '01', toYear: new Date().getFullYear(), toMonth: String(new Date().getMonth() + 1).padStart(2, '0') });
+  const [showDescription, setShowDescription] = useState(true);
+
+  const acctDateFrom = `${acctReportDates.fromYear}-${acctReportDates.fromMonth}-01`;
+  const acctLastDay = new Date(acctReportDates.toYear, parseInt(acctReportDates.toMonth), 0).getDate();
+  const acctDateTo = `${acctReportDates.toYear}-${acctReportDates.toMonth}-${String(acctLastDay).padStart(2, '0')}`;
 
   const loadAccounts = async () => {
     setLoading(true);
@@ -2327,20 +2361,23 @@ function ChartOfAccountsTab({ setError, setMessage, isAdmin }) {
     setShowAcctReport(account);
     setAcctReportData(null);
     try {
-      const data = await financeApi.accountReport(account.id, { date_from: acctReportDates.from, date_to: acctReportDates.to });
+      const data = await financeApi.accountReport(account.id, { date_from: acctDateFrom, date_to: acctDateTo });
       setAcctReportData(data);
     } catch (err) { setAcctReportData({ entries: [] }); }
   };
 
   const exportAccountReportPDF = () => {
     if (!acctReportData || !showAcctReport) return;
-    const headers = ['Date', 'Type', 'Description', 'Amount'];
-    const rows = (acctReportData.entries || []).map(e => [e.entry_date, e.entry_type, e.description || '-', formatCurrency(e.amount)]);
+    const headers = showDescription ? ['Date', 'Type', 'Description', 'Amount'] : ['Date', 'Type', 'Amount'];
+    const rows = (acctReportData.entries || []).map(e =>
+      showDescription ? [e.entry_date, e.entry_type, e.description || '-', formatCurrency(e.amount)]
+        : [e.entry_date, e.entry_type, formatCurrency(e.amount)]
+    );
     generatePDF(
       `Account Report - ${showAcctReport.name}`,
       headers, rows,
       `account-report-${showAcctReport.name.replace(/\s+/g, '-')}.pdf`,
-      [`Period: ${acctReportDates.from} to ${acctReportDates.to}`,
+      [`Period: ${acctDateFrom} to ${acctDateTo}`,
        `Opening Balance: ${formatCurrency(acctReportData.opening_balance)}`,
        `Period In: ${formatCurrency(acctReportData.period_in)}  |  Period Out: ${formatCurrency(acctReportData.period_out)}`,
        `Ending Balance: ${formatCurrency(acctReportData.ending_balance)}`]
@@ -2783,18 +2820,32 @@ function ChartOfAccountsTab({ setError, setMessage, isAdmin }) {
       {/* Account Report Modal */}
       <Modal isOpen={!!showAcctReport} onClose={() => { setShowAcctReport(null); setAcctReportData(null); }} title={`Account Report - ${showAcctReport?.name || ''}`} size="lg">
         <div className="space-y-4">
-          <div className="flex items-end gap-3">
-            <div className="flex-1">
+          <div className="flex items-end gap-2 flex-wrap">
+            <div>
               <label className="label">From</label>
-              <input type="date" className="input" value={acctReportDates.from} onChange={e => setAcctReportDates(d => ({ ...d, from: e.target.value }))} />
+              <div className="flex gap-1">
+                <select className="input text-sm" value={acctReportDates.fromMonth} onChange={e => setAcctReportDates(d => ({ ...d, fromMonth: e.target.value }))}>
+                  {fsMonths.map(m => <option key={m.val} value={m.val}>{m.label}</option>)}
+                </select>
+                <select className="input text-sm w-20" value={acctReportDates.fromYear} onChange={e => setAcctReportDates(d => ({ ...d, fromYear: parseInt(e.target.value) }))}>
+                  {fsYears.map(y => <option key={y} value={y}>{y}</option>)}
+                </select>
+              </div>
             </div>
-            <div className="flex-1">
+            <div>
               <label className="label">To</label>
-              <input type="date" className="input" value={acctReportDates.to} onChange={e => setAcctReportDates(d => ({ ...d, to: e.target.value }))} />
+              <div className="flex gap-1">
+                <select className="input text-sm" value={acctReportDates.toMonth} onChange={e => setAcctReportDates(d => ({ ...d, toMonth: e.target.value }))}>
+                  {fsMonths.map(m => <option key={m.val} value={m.val}>{m.label}</option>)}
+                </select>
+                <select className="input text-sm w-20" value={acctReportDates.toYear} onChange={e => setAcctReportDates(d => ({ ...d, toYear: parseInt(e.target.value) }))}>
+                  {fsYears.map(y => <option key={y} value={y}>{y}</option>)}
+                </select>
+              </div>
             </div>
-            <button onClick={() => loadAccountReport(showAcctReport)} className="btn-primary"><Search size={14} /> Load</button>
+            <button onClick={() => loadAccountReport(showAcctReport)} className="btn-primary text-sm"><Search size={14} /> Load</button>
             {acctReportData && (
-              <button onClick={exportAccountReportPDF} className="btn-secondary"><Download size={14} /> PDF</button>
+              <button onClick={exportAccountReportPDF} className="btn-secondary text-sm"><Download size={14} /> PDF</button>
             )}
           </div>
 
@@ -2819,13 +2870,20 @@ function ChartOfAccountsTab({ setError, setMessage, isAdmin }) {
                 </div>
               </div>
 
+              <div className="flex items-center gap-2 mb-1">
+                <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer">
+                  <input type="checkbox" checked={showDescription} onChange={e => setShowDescription(e.target.checked)} className="rounded" />
+                  Show Description
+                </label>
+              </div>
+
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead className="bg-gray-50 border-b">
                     <tr>
                       <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Date</th>
                       <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Type</th>
-                      <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Description</th>
+                      {showDescription && <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Description</th>}
                       <th className="text-right px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Amount</th>
                     </tr>
                   </thead>
@@ -2834,14 +2892,14 @@ function ChartOfAccountsTab({ setError, setMessage, isAdmin }) {
                       <tr key={i} className="hover:bg-gray-50">
                         <td className="px-3 py-2 text-gray-600">{e.entry_date}</td>
                         <td className="px-3 py-2 capitalize">{e.entry_type}</td>
-                        <td className="px-3 py-2 text-gray-700">{e.description || '-'}</td>
+                        {showDescription && <td className="px-3 py-2 text-gray-700">{e.description || '-'}</td>}
                         <td className={`px-3 py-2 text-right font-medium ${parseFloat(e.amount) >= 0 ? 'text-green-700' : 'text-red-700'}`}>
                           {formatCurrency(e.amount)}
                         </td>
                       </tr>
                     ))}
                     {(acctReportData.entries || []).length === 0 && (
-                      <tr><td colSpan={4} className="px-3 py-8 text-center text-gray-400">No entries for this period</td></tr>
+                      <tr><td colSpan={showDescription ? 4 : 3} className="px-3 py-8 text-center text-gray-400">No entries for this period</td></tr>
                     )}
                   </tbody>
                 </table>
