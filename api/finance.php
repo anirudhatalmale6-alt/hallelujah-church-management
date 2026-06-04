@@ -455,6 +455,8 @@ switch ($method) {
                 $entries[] = [
                     'date' => $r['date'],
                     'type' => 'Income',
+                    'source' => 'donation',
+                    'record_id' => (int)$r['id'],
                     'description' => $r['description'],
                     'debit' => (float)$r['amount'],
                     'credit' => 0,
@@ -480,6 +482,8 @@ switch ($method) {
                     $entries[] = [
                         'date' => $r['date'],
                         'type' => 'Expense',
+                        'source' => 'expense',
+                        'record_id' => (int)$r['id'],
                         'description' => $r['description'],
                         'debit' => 0,
                         'credit' => (float)$r['amount'],
@@ -506,6 +510,8 @@ switch ($method) {
                     $entries[] = [
                         'date' => $r['transfer_date'],
                         'type' => 'Transfer',
+                        'source' => 'transfer',
+                        'record_id' => (int)$r['id'],
                         'description' => 'Transfer: ' . $r['from_name'] . ' → ' . $r['to_name'],
                         'debit' => (float)$r['amount'],
                         'credit' => (float)$r['amount'],
@@ -1717,6 +1723,35 @@ switch ($method) {
 
                 $db->commit();
                 jsonResponse(['message' => 'Entry deleted and balance reversed']);
+            } catch (Exception $e) {
+                $db->rollBack();
+                jsonResponse(['error' => 'Failed: ' . $e->getMessage()], 500);
+            }
+        }
+
+        // --- DELETE TRANSFER ---
+        if ($action === 'transfer') {
+            requireRole($currentUser, ['pastor', 'admin']);
+            if (!$id) jsonResponse(['error' => 'Transfer ID required'], 400);
+
+            $transfer = $db->prepare("SELECT * FROM account_transfers WHERE id = ?");
+            $transfer->execute([$id]);
+            $t = $transfer->fetch();
+            if (!$t) jsonResponse(['error' => 'Transfer not found'], 404);
+
+            $db->beginTransaction();
+            try {
+                // Reverse balances
+                $db->prepare("UPDATE accounts SET current_balance = current_balance + ? WHERE id = ?")
+                    ->execute([(float)$t['amount'], $t['from_account_id']]);
+                $db->prepare("UPDATE accounts SET current_balance = current_balance - ? WHERE id = ?")
+                    ->execute([(float)$t['amount'], $t['to_account_id']]);
+                // Delete ledger entries
+                $db->prepare("DELETE FROM account_ledger WHERE reference_type = 'transfer' AND reference_id = ?")->execute([$id]);
+                // Delete transfer
+                $db->prepare("DELETE FROM account_transfers WHERE id = ?")->execute([$id]);
+                $db->commit();
+                jsonResponse(['message' => 'Transfer deleted and balances reversed']);
             } catch (Exception $e) {
                 $db->rollBack();
                 jsonResponse(['error' => 'Failed: ' . $e->getMessage()], 500);

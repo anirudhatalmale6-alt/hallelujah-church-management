@@ -146,7 +146,7 @@ export default function FinancePage() {
       {tab === 'statements' && <StatementsTab setError={setError} setMessage={setMessage} />}
       {tab === 'reports' && <ReportsTab setError={setError} setMessage={setMessage} />}
       {tab === 'budgets' && <BudgetsTab setError={setError} setMessage={setMessage} isAdmin={isAdmin} />}
-      {tab === 'financial_statements' && <FinancialStatementsTab setError={setError} setMessage={setMessage} />}
+      {tab === 'financial_statements' && <FinancialStatementsTab setError={setError} setMessage={setMessage} isAdmin={isAdmin} />}
       {tab === 'pledges' && <PledgesTab setError={setError} setMessage={setMessage} isAdmin={isAdmin} />}
       {tab === 'accounts' && <ChartOfAccountsTab setError={setError} setMessage={setMessage} isAdmin={isAdmin} />}
       {tab === 'categories' && isAdmin && <CategoriesTab setError={setError} setMessage={setMessage} />}
@@ -1508,7 +1508,7 @@ const fsMonths = [
   { val: '10', label: 'October' }, { val: '11', label: 'November' }, { val: '12', label: 'December' },
 ];
 
-function FinancialStatementsTab({ setError }) {
+function FinancialStatementsTab({ setError, setMessage, isAdmin }) {
   const [view, setView] = useState('income_statement');
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -1761,7 +1761,20 @@ function FinancialStatementsTab({ setError }) {
       {view === 'income_statement' && data && <IncomeStatementView data={data} />}
       {view === 'balance_sheet' && data && <BalanceSheetView data={data} />}
       {view === 'budget_actual' && data && <BudgetActualView data={data} />}
-      {view === 'journal' && data && <GeneralJournalView data={data} page={journalPage} setPage={setJournalPage} />}
+      {view === 'journal' && data && <GeneralJournalView data={data} page={journalPage} setPage={setJournalPage} isAdmin={isAdmin} onDelete={async (entry) => {
+        if (!confirm('Are you sure you want to delete this entry? Balances will be reversed.')) return;
+        try {
+          if (entry.source === 'donation') {
+            await financeApi.deleteRoutedDonation(entry.record_id);
+          } else if (entry.source === 'expense') {
+            await financeApi.deleteExpense(entry.record_id);
+          } else if (entry.source === 'transfer') {
+            await financeApi.deleteTransfer(entry.record_id);
+          }
+          setMessage('Entry deleted');
+          loadData();
+        } catch (err) { setError(err.message); }
+      }} />}
     </>
   );
 }
@@ -2071,7 +2084,7 @@ function BalanceSheetView({ data }) {
   );
 }
 
-function GeneralJournalView({ data, page, setPage }) {
+function GeneralJournalView({ data, page, setPage, onDelete, isAdmin }) {
   const typeColors = {
     Income: 'bg-green-100 text-green-700',
     Expense: 'bg-red-100 text-red-700',
@@ -2111,6 +2124,7 @@ function GeneralJournalView({ data, page, setPage }) {
                 <th className="text-right px-4 py-2 text-xs font-semibold text-gray-500 uppercase">Credit</th>
                 <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase hidden lg:table-cell">Method</th>
                 <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase hidden lg:table-cell">By</th>
+                {isAdmin && onDelete && <th className="w-10"></th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -2127,10 +2141,17 @@ function GeneralJournalView({ data, page, setPage }) {
                   <td className="px-4 py-2 text-sm text-right font-medium text-red-700">{e.credit > 0 ? formatCurrency(e.credit) : ''}</td>
                   <td className="px-4 py-2 text-sm text-gray-500 hidden lg:table-cell capitalize">{paymentMethodLabel[e.method] || e.method || '-'}</td>
                   <td className="px-4 py-2 text-sm text-gray-500 hidden lg:table-cell">{e.recorded_by || '-'}</td>
+                  {isAdmin && onDelete && (
+                    <td className="px-2 py-2">
+                      <button onClick={() => onDelete(e)} className="p-1 text-gray-300 hover:text-red-500" title="Delete entry">
+                        <Trash2 size={14} />
+                      </button>
+                    </td>
+                  )}
                 </tr>
               ))}
               {(data.entries || []).length === 0 && (
-                <tr><td colSpan={7} className="px-4 py-12 text-center text-gray-400">No journal entries for this period</td></tr>
+                <tr><td colSpan={isAdmin && onDelete ? 8 : 7} className="px-4 py-12 text-center text-gray-400">No journal entries for this period</td></tr>
               )}
             </tbody>
           </table>

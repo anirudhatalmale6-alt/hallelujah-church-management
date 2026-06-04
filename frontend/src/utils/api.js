@@ -310,9 +310,10 @@ export const finance = {
   loanTransaction: (data) => request('finance.php', { method: 'POST', body: data, params: { action: 'loan_transaction' } }),
   // Opening Balance
   setOpeningBalance: (data) => request('finance.php', { method: 'POST', body: data, params: { action: 'opening_balance' } }),
-  // Delete from account report
+  // Delete from account report / journal
   deleteLedgerEntry: (id) => request('finance.php', { method: 'DELETE', params: { action: 'ledger_entry', id } }),
   deleteRoutedDonation: (id) => request('finance.php', { method: 'DELETE', params: { action: 'routed_donation', id } }),
+  deleteTransfer: (id) => request('finance.php', { method: 'DELETE', params: { action: 'transfer', id } }),
   // Pledges
   pledges: (params) => request('finance.php', { params: { action: 'pledges', ...params } }),
   pledgeAlerts: () => request('finance.php', { params: { action: 'pledge_alerts' } }),
