@@ -342,13 +342,15 @@ function ExpensesTab({ setError, setMessage, isAdmin }) {
   const [form, setForm] = useState({
     category_id: '', amount: '', description: '', vendor: '',
     payment_method: 'check', reference_number: '', expense_date: new Date().toISOString().split('T')[0],
-    receipt_note: '',
+    receipt_note: '', source_account_id: '',
   });
   const [saving, setSaving] = useState(false);
   const [deleteId, setDeleteId] = useState(null);
+  const [bankAccounts, setBankAccounts] = useState([]);
 
   useEffect(() => {
     financeApi.expenseCategories().then(d => setCategories((d.categories || []).filter(c => Number(c.is_active) !== 0)));
+    financeApi.accounts('asset').then(d => setBankAccounts((d.accounts || []).filter(a => a.parent_id && parseInt(a.child_count) === 0)));
   }, []);
 
   const loadExpenses = useCallback(async () => {
@@ -378,7 +380,7 @@ function ExpensesTab({ setError, setMessage, isAdmin }) {
     setForm({
       category_id: '', amount: '', description: '', vendor: '',
       payment_method: 'check', reference_number: '', expense_date: new Date().toISOString().split('T')[0],
-      receipt_note: '',
+      receipt_note: '', source_account_id: '',
     });
     setShowForm(true);
   };
@@ -388,7 +390,7 @@ function ExpensesTab({ setError, setMessage, isAdmin }) {
     setForm({
       category_id: e.category_id, amount: e.amount, description: e.description || '',
       vendor: e.vendor || '', payment_method: e.payment_method, reference_number: e.reference_number || '',
-      expense_date: e.expense_date, receipt_note: e.receipt_note || '',
+      expense_date: e.expense_date, receipt_note: e.receipt_note || '', source_account_id: e.source_account_id || '',
     });
     setShowForm(true);
   };
@@ -605,6 +607,16 @@ function ExpensesTab({ setError, setMessage, isAdmin }) {
               <label className="label">Reference #</label>
               <input className="input" placeholder="Check/receipt number" value={form.reference_number} onChange={e => setForm(f => ({ ...f, reference_number: e.target.value }))} />
             </div>
+          </div>
+          <div>
+            <label className="label">Paid From (Bank Account) *</label>
+            <select className="input" value={form.source_account_id} onChange={e => setForm(f => ({ ...f, source_account_id: e.target.value }))}>
+              <option value="">-- Select bank account --</option>
+              {bankAccounts.map(a => (
+                <option key={a.id} value={a.id}>{a.name} ({formatCurrency(a.current_balance)})</option>
+              ))}
+            </select>
+            <p className="text-xs text-gray-400 mt-1">The expense amount will be deducted from this account</p>
           </div>
           <div>
             <label className="label">Description</label>

@@ -1228,7 +1228,18 @@ switch ($method) {
             try {
                 $stmt = $db->prepare("INSERT INTO donation_categories (name, description, fund_type, sort_order) VALUES (?, ?, ?, ?)");
                 $stmt->execute([$name, $data['description'] ?? null, $data['fund_type'] ?? 'general', $maxOrder]);
-                jsonResponse(['message' => 'Category created', 'id' => (int)$db->lastInsertId()], 201);
+                $catId = (int)$db->lastInsertId();
+
+                // Auto-create matching account in Chart of Accounts
+                $incomeParent = $db->query("SELECT id FROM accounts WHERE account_type = 'income' AND parent_id IS NULL LIMIT 1")->fetchColumn();
+                if ($incomeParent) {
+                    $maxAcctOrder = (int)$db->query("SELECT COALESCE(MAX(sort_order), 0) FROM accounts WHERE account_type = 'income'")->fetchColumn() + 1;
+                    $nextNum = (int)$db->query("SELECT COALESCE(MAX(CAST(account_number AS UNSIGNED)), 4000) FROM accounts WHERE account_type = 'income'")->fetchColumn() + 100;
+                    $db->prepare("INSERT INTO accounts (parent_id, account_type, account_number, name, description, fund_type, sort_order) VALUES (?, 'income', ?, ?, ?, ?, ?)")
+                        ->execute([$incomeParent, (string)$nextNum, $name, $data['description'] ?? null, $data['fund_type'] ?? 'general', $maxAcctOrder]);
+                }
+
+                jsonResponse(['message' => 'Category created', 'id' => $catId], 201);
             } catch (Exception $e) {
                 jsonResponse(['error' => 'Category already exists'], 400);
             }
@@ -1245,7 +1256,18 @@ switch ($method) {
             try {
                 $stmt = $db->prepare("INSERT INTO expense_categories (name, description, fund_type, sort_order) VALUES (?, ?, ?, ?)");
                 $stmt->execute([$name, $data['description'] ?? null, $data['fund_type'] ?? 'general', $maxOrder]);
-                jsonResponse(['message' => 'Expense category created', 'id' => (int)$db->lastInsertId()], 201);
+                $catId = (int)$db->lastInsertId();
+
+                // Auto-create matching account in Chart of Accounts
+                $expenseParent = $db->query("SELECT id FROM accounts WHERE account_type = 'expense' AND parent_id IS NULL LIMIT 1")->fetchColumn();
+                if ($expenseParent) {
+                    $maxAcctOrder = (int)$db->query("SELECT COALESCE(MAX(sort_order), 0) FROM accounts WHERE account_type = 'expense'")->fetchColumn() + 1;
+                    $nextNum = (int)$db->query("SELECT COALESCE(MAX(CAST(account_number AS UNSIGNED)), 5000) FROM accounts WHERE account_type = 'expense'")->fetchColumn() + 100;
+                    $db->prepare("INSERT INTO accounts (parent_id, account_type, account_number, name, description, fund_type, sort_order) VALUES (?, 'expense', ?, ?, ?, ?, ?)")
+                        ->execute([$expenseParent, (string)$nextNum, $name, $data['description'] ?? null, $data['fund_type'] ?? 'general', $maxAcctOrder]);
+                }
+
+                jsonResponse(['message' => 'Expense category created', 'id' => $catId], 201);
             } catch (Exception $e) {
                 jsonResponse(['error' => 'Category already exists'], 400);
             }
@@ -1261,13 +1283,16 @@ switch ($method) {
                 jsonResponse(['error' => 'Amount must be positive'], 400);
             }
 
+            $amount = (float)$data['amount'];
+            $sourceAccountId = !empty($data['source_account_id']) ? (int)$data['source_account_id'] : null;
+
             $stmt = $db->prepare("
-                INSERT INTO expenses (category_id, amount, description, vendor, payment_method, reference_number, expense_date, receipt_note, recorded_by)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO expenses (category_id, amount, description, vendor, payment_method, reference_number, expense_date, receipt_note, recorded_by, source_account_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ");
             $stmt->execute([
                 (int)$data['category_id'],
-                (float)$data['amount'],
+                $amount,
                 $data['description'] ?? null,
                 $data['vendor'] ?? null,
                 $data['payment_method'] ?? 'check',
@@ -1275,9 +1300,19 @@ switch ($method) {
                 $data['expense_date'],
                 $data['receipt_note'] ?? null,
                 $currentUser['user_id'],
+                $sourceAccountId,
             ]);
+            $expenseId = (int)$db->lastInsertId();
 
-            jsonResponse(['message' => 'Expense recorded', 'id' => (int)$db->lastInsertId()], 201);
+            // Deduct from source bank account
+            if ($sourceAccountId) {
+                $db->prepare("UPDATE accounts SET current_balance = current_balance - ? WHERE id = ?")
+                    ->execute([$amount, $sourceAccountId]);
+                $db->prepare("INSERT INTO account_ledger (account_id, entry_date, entry_type, amount, description, reference_type, reference_id, created_by) VALUES (?, ?, 'withdrawal', ?, ?, 'expense', ?, ?)")
+                    ->execute([$sourceAccountId, $data['expense_date'], -$amount, ($data['vendor'] ?? '') . ' - ' . ($data['description'] ?? 'Expense'), $expenseId, $currentUser['user_id']]);
+            }
+
+            jsonResponse(['message' => 'Expense recorded', 'id' => $expenseId], 201);
         }
 
         // --- SET BUDGET ---
