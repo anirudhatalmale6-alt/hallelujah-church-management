@@ -199,9 +199,9 @@ switch ($method) {
                     $openingBalance = (float)$openStmt->fetchColumn();
 
                     $donStmt = $db->prepare("
-                        SELECT d.donation_date as entry_date, 'donation' as entry_type, d.amount,
+                        SELECT d.id, d.donation_date as entry_date, 'donation' as entry_type, d.amount,
                             CONCAT(COALESCE(CONCAT(m.first_name, ' ', m.last_name), d.donor_name, 'Anonymous'), ' - ', d.payment_method) as description,
-                            u.name as created_by_name
+                            u.name as created_by_name, 'donation' as source, 'donation' as reference_type, d.id as reference_id
                         FROM donations d
                         LEFT JOIN members m ON m.id = d.member_id
                         LEFT JOIN users u ON u.id = d.recorded_by
@@ -224,9 +224,9 @@ switch ($method) {
                     $openingBalance = (float)$openStmt->fetchColumn();
 
                     $expStmt = $db->prepare("
-                        SELECT e.expense_date as entry_date, 'expense' as entry_type, e.amount,
+                        SELECT e.id, e.expense_date as entry_date, 'expense' as entry_type, e.amount,
                             CONCAT(COALESCE(e.vendor, ''), ' - ', COALESCE(e.description, '')) as description,
-                            u.name as created_by_name
+                            u.name as created_by_name, 'expense' as source, 'expense' as reference_type, e.id as reference_id
                         FROM expenses e
                         LEFT JOIN users u ON u.id = e.recorded_by
                         WHERE e.category_id = ? AND e.expense_date BETWEEN ? AND ?
@@ -243,7 +243,9 @@ switch ($method) {
                 if ($openingBalance == 0) $openingBalance = (float)$account['opening_balance'];
 
                 $entriesStmt = $db->prepare("
-                    SELECT al.entry_date, al.entry_type, al.amount, al.description, u.name as created_by_name
+                    SELECT al.id, al.entry_date, al.entry_type, al.amount, al.description,
+                        al.reference_type, al.reference_id, u.name as created_by_name,
+                        'ledger' as source
                     FROM account_ledger al
                     LEFT JOIN users u ON u.id = al.created_by
                     WHERE al.account_id = ? AND al.entry_date BETWEEN ? AND ?
@@ -255,9 +257,11 @@ switch ($method) {
                 // Also add donations routed to this account
                 try {
                     $routedStmt = $db->prepare("
-                        SELECT d.donation_date as entry_date, 'deposit' as entry_type, d.amount,
-                            CONCAT(dc.name, ' - ', COALESCE(CONCAT(m.first_name, ' ', m.last_name), d.donor_name, 'Anonymous')) as description,
-                            u.name as created_by_name
+                        SELECT d.id, d.donation_date as entry_date, 'deposit' as entry_type, d.amount,
+                            CONCAT(dc.name, ' - ', COALESCE(CONCAT(m.first_name, ' ', m.last_name), d.donor_name, 'Anonymous'),
+                                ' (', d.payment_method, ')') as description,
+                            u.name as created_by_name,
+                            'donation' as source, 'donation' as reference_type, d.id as reference_id
                         FROM donations d
                         JOIN donation_categories dc ON dc.id = d.category_id
                         LEFT JOIN members m ON m.id = d.member_id
@@ -1674,6 +1678,80 @@ switch ($method) {
         break;
 
     case 'DELETE':
+        // --- DELETE LEDGER ENTRY (and reverse balance + delete source record) ---
+        if ($action === 'ledger_entry') {
+            requireRole($currentUser, ['pastor', 'admin']);
+            if (!$id) jsonResponse(['error' => 'Ledger entry ID required'], 400);
+
+            $entry = $db->prepare("SELECT * FROM account_ledger WHERE id = ?")->execute([$id]) ?
+                $db->query("SELECT * FROM account_ledger WHERE id = $id")->fetch() : null;
+
+            if (!$entry) jsonResponse(['error' => 'Ledger entry not found'], 404);
+
+            $db->beginTransaction();
+            try {
+                // Reverse balance on account
+                $db->prepare("UPDATE accounts SET current_balance = current_balance - ? WHERE id = ?")
+                    ->execute([(float)$entry['amount'], $entry['account_id']]);
+
+                // Delete the ledger entry
+                $db->prepare("DELETE FROM account_ledger WHERE id = ?")->execute([$id]);
+
+                // If it references a donation, delete that too
+                if ($entry['reference_type'] === 'donation' && $entry['reference_id']) {
+                    $db->prepare("DELETE FROM donations WHERE id = ?")->execute([$entry['reference_id']]);
+                }
+
+                // If it references a transfer, delete the paired entry and reverse the other account
+                if ($entry['reference_type'] === 'transfer' && $entry['reference_id']) {
+                    $paired = $db->prepare("SELECT * FROM account_ledger WHERE reference_type = 'transfer' AND reference_id = ? AND id != ?");
+                    $paired->execute([$entry['reference_id'], $id]);
+                    $pairedEntry = $paired->fetch();
+                    if ($pairedEntry) {
+                        $db->prepare("UPDATE accounts SET current_balance = current_balance - ? WHERE id = ?")
+                            ->execute([(float)$pairedEntry['amount'], $pairedEntry['account_id']]);
+                        $db->prepare("DELETE FROM account_ledger WHERE id = ?")->execute([$pairedEntry['id']]);
+                    }
+                    $db->prepare("DELETE FROM account_transfers WHERE id = ?")->execute([$entry['reference_id']]);
+                }
+
+                $db->commit();
+                jsonResponse(['message' => 'Entry deleted and balance reversed']);
+            } catch (Exception $e) {
+                $db->rollBack();
+                jsonResponse(['error' => 'Failed: ' . $e->getMessage()], 500);
+            }
+        }
+
+        // --- DELETE ROUTED DONATION (from account report) ---
+        if ($action === 'routed_donation') {
+            requireRole($currentUser, ['pastor', 'admin']);
+            if (!$id) jsonResponse(['error' => 'Donation ID required'], 400);
+
+            $donation = $db->prepare("SELECT * FROM donations WHERE id = ?");
+            $donation->execute([$id]);
+            $don = $donation->fetch();
+            if (!$don) jsonResponse(['error' => 'Donation not found'], 404);
+
+            $db->beginTransaction();
+            try {
+                // Reverse account balance if routed
+                if ($don['routed_account_id']) {
+                    $db->prepare("UPDATE accounts SET current_balance = current_balance - ? WHERE id = ?")
+                        ->execute([(float)$don['amount'], $don['routed_account_id']]);
+                }
+                // Delete associated ledger entries
+                $db->prepare("DELETE FROM account_ledger WHERE reference_type = 'donation' AND reference_id = ?")->execute([$id]);
+                // Delete the donation
+                $db->prepare("DELETE FROM donations WHERE id = ?")->execute([$id]);
+                $db->commit();
+                jsonResponse(['message' => 'Donation and ledger entry deleted']);
+            } catch (Exception $e) {
+                $db->rollBack();
+                jsonResponse(['error' => 'Failed: ' . $e->getMessage()], 500);
+            }
+        }
+
         // --- DELETE PLEDGE ---
         if ($action === 'pledge') {
             requireRole($currentUser, ['pastor', 'admin']);

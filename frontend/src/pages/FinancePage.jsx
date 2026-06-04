@@ -2627,6 +2627,22 @@ function ChartOfAccountsTab({ setError, setMessage, isAdmin }) {
     );
   };
 
+  const handleDeleteEntry = async (entry) => {
+    if (!confirm('Are you sure you want to delete this entry? This will reverse the balance.')) return;
+    try {
+      if (entry.source === 'ledger') {
+        await financeApi.deleteLedgerEntry(entry.id);
+      } else if (entry.source === 'donation' || entry.reference_type === 'donation') {
+        await financeApi.deleteRoutedDonation(entry.reference_id || entry.id);
+      } else if (entry.source === 'expense') {
+        await financeApi.deleteExpense(entry.reference_id || entry.id);
+      }
+      setMessage('Entry deleted');
+      loadAccountReport(showAcctReport);
+      loadAccounts();
+    } catch (err) { setError(err.message); }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-16">
@@ -3128,6 +3144,7 @@ function ChartOfAccountsTab({ setError, setMessage, isAdmin }) {
                       <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Type</th>
                       {showDescription && <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Description</th>}
                       <th className="text-right px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Amount</th>
+                      {isAdmin && <th className="w-10"></th>}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
@@ -3139,10 +3156,17 @@ function ChartOfAccountsTab({ setError, setMessage, isAdmin }) {
                         <td className={`px-3 py-2 text-right font-medium ${parseFloat(e.amount) >= 0 ? 'text-green-700' : 'text-red-700'}`}>
                           {formatCurrency(e.amount)}
                         </td>
+                        {isAdmin && (
+                          <td className="px-2 py-2">
+                            <button onClick={() => handleDeleteEntry(e)} className="p-1 text-gray-300 hover:text-red-500" title="Delete entry">
+                              <Trash2 size={14} />
+                            </button>
+                          </td>
+                        )}
                       </tr>
                     ))}
                     {(acctReportData.entries || []).length === 0 && (
-                      <tr><td colSpan={showDescription ? 4 : 3} className="px-3 py-8 text-center text-gray-400">No entries for this period</td></tr>
+                      <tr><td colSpan={showDescription ? (isAdmin ? 5 : 4) : (isAdmin ? 4 : 3)} className="px-3 py-8 text-center text-gray-400">No entries for this period</td></tr>
                     )}
                   </tbody>
                 </table>
