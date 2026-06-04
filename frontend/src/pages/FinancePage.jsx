@@ -2585,6 +2585,7 @@ function ChartOfAccountsTab({ setError, setMessage, isAdmin }) {
   };
 
   const handleDeleteRouting = async (ruleId) => {
+    if (!confirm('Are you sure you want to delete this routing rule?')) return;
     try { await financeApi.deleteRoutingRule(ruleId); loadRouting(); } catch (err) { setError(err.message); }
   };
 

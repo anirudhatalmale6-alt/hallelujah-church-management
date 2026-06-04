@@ -156,6 +156,7 @@ export default function ChecklistPage() {
   };
 
   const removeServiceItem = async (id) => {
+    if (!confirm('Are you sure you want to remove this item?')) return;
     try {
       await checklistApi.deleteItem(id);
       loadChecklist();
@@ -178,6 +179,7 @@ export default function ChecklistPage() {
   };
 
   const deleteTemplate = async (id) => {
+    if (!confirm('Are you sure you want to delete this template?')) return;
     try {
       await checklistApi.deleteTemplate(id);
       loadTemplates();

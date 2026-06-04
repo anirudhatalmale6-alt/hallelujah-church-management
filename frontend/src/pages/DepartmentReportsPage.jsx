@@ -1160,6 +1160,7 @@ function ManageDepartmentsTab({ departments, reloadDepartments, setError, setMes
   };
 
   const handleDeleteTemplate = async (id) => {
+    if (!confirm('Are you sure you want to delete this template?')) return;
     try {
       await deptApi.deleteTemplate(id);
       loadTemplates();
