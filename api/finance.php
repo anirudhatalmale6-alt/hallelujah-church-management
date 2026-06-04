@@ -58,7 +58,7 @@ switch ($method) {
 
             $transactions = [];
 
-            // Query account_ledger for all entries in this account and date range
+            // Ledger entries (exclude donation refs to avoid duplicates)
             try {
                 $ledgerStmt = $db->prepare("
                     SELECT al.*, u.name as created_by_name
@@ -66,6 +66,7 @@ switch ($method) {
                     LEFT JOIN users u ON u.id = al.created_by
                     WHERE al.account_id = ?
                     AND al.entry_date BETWEEN ? AND ?
+                    AND al.reference_type != 'donation'
                     ORDER BY al.entry_date DESC, al.id DESC
                 ");
                 $ledgerStmt->execute([$id, $dateFrom, $dateTo]);
@@ -81,6 +82,34 @@ switch ($method) {
                     ];
                 }
             } catch (Exception $e) {}
+
+            // Routed donations (with donor names)
+            try {
+                $routedStmt = $db->prepare("
+                    SELECT d.donation_date, d.amount,
+                        CONCAT(dc.name, ' - ', COALESCE(CONCAT(m.first_name, ' ', m.last_name), d.donor_name, 'Anonymous'),
+                            ' (', d.payment_method, ')') as description
+                    FROM donations d
+                    JOIN donation_categories dc ON dc.id = d.category_id
+                    LEFT JOIN members m ON m.id = d.member_id
+                    WHERE d.routed_account_id = ? AND d.donation_date BETWEEN ? AND ?
+                    ORDER BY d.donation_date DESC
+                ");
+                $routedStmt->execute([$id, $dateFrom, $dateTo]);
+                foreach ($routedStmt->fetchAll() as $d) {
+                    $transactions[] = [
+                        'type' => 'deposit',
+                        'date' => $d['donation_date'],
+                        'description' => $d['description'],
+                        'amount' => (float)$d['amount'],
+                        'reference' => '',
+                        'notes' => '',
+                        'created_by' => '',
+                    ];
+                }
+            } catch (Exception $e) {}
+
+            usort($transactions, function($a, $b) { return strcmp($b['date'], $a['date']); });
 
             jsonResponse([
                 'account' => $account,
@@ -236,10 +265,16 @@ switch ($method) {
                     $entries = $expStmt->fetchAll();
                 }
             } else {
-                // For asset/liability/equity accounts, use ledger
-                $openingStmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) FROM account_ledger WHERE account_id = ? AND entry_date < ?");
+                // For asset/liability/equity accounts, use ledger (exclude donation refs - counted via routed donations)
+                $openingStmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) FROM account_ledger WHERE account_id = ? AND entry_date < ? AND reference_type != 'donation'");
                 $openingStmt->execute([$id, $dateFrom]);
                 $openingBalance = (float)$openingStmt->fetchColumn();
+                // Add pre-period routed donations
+                try {
+                    $preDonStmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) FROM donations WHERE routed_account_id = ? AND donation_date < ?");
+                    $preDonStmt->execute([$id, $dateFrom]);
+                    $openingBalance += (float)$preDonStmt->fetchColumn();
+                } catch (Exception $e) {}
                 if ($openingBalance == 0) $openingBalance = (float)$account['opening_balance'];
 
                 $entriesStmt = $db->prepare("
@@ -249,6 +284,7 @@ switch ($method) {
                     FROM account_ledger al
                     LEFT JOIN users u ON u.id = al.created_by
                     WHERE al.account_id = ? AND al.entry_date BETWEEN ? AND ?
+                    AND al.reference_type != 'donation'
                     ORDER BY al.entry_date ASC, al.id ASC
                 ");
                 $entriesStmt->execute([$id, $dateFrom, $dateTo]);
