@@ -2638,7 +2638,8 @@ function ChartOfAccountsTab({ setError, setMessage, isAdmin }) {
 
   const renderAccount = (account, level = 0) => {
     const children = getChildren(account.id);
-    const hasBalance = account.account_type === 'asset' || account.account_type === 'liability';
+    const isLeaf = parseInt(account.child_count) === 0;
+    const hasBalance = (account.account_type === 'asset' || account.account_type === 'liability') && isLeaf;
     return (
       <React.Fragment key={account.id}>
         <tr className={`hover:bg-gray-50 ${level === 0 ? 'font-medium' : ''}`}>
@@ -2669,7 +2670,7 @@ function ChartOfAccountsTab({ setError, setMessage, isAdmin }) {
                 <button onClick={() => loadAccountReport(account)} className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded" title="Report">
                   <FileText size={14} />
                 </button>
-                {(account.account_type === 'asset' || account.account_type === 'liability') && (
+                {(account.account_type === 'asset' || account.account_type === 'liability') && parseInt(account.child_count) === 0 && (
                   <button onClick={() => { setShowOpenBal(account); setOpenBalAmount(account.current_balance || ''); }} className="p-1.5 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded" title="Set Balance">
                     <DollarSign size={14} />
                   </button>

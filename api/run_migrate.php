@@ -10,29 +10,24 @@ $db = getDB();
 $results = [];
 
 try {
-    $db->exec("
-        CREATE TABLE IF NOT EXISTS pledges (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            member_id INT NOT NULL,
-            category_id INT NOT NULL,
-            amount DECIMAL(10,2) NOT NULL,
-            frequency ENUM('weekly','monthly','quarterly','annually') DEFAULT 'monthly',
-            start_date DATE NOT NULL,
-            end_date DATE DEFAULT NULL,
-            notes VARCHAR(500) DEFAULT NULL,
-            status ENUM('active','completed','cancelled') DEFAULT 'active',
-            created_by INT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-            FOREIGN KEY (member_id) REFERENCES members(id),
-            FOREIGN KEY (category_id) REFERENCES donation_categories(id),
-            FOREIGN KEY (created_by) REFERENCES users(id),
-            INDEX idx_member (member_id),
-            INDEX idx_status (status),
-            INDEX idx_dates (start_date, end_date)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-    ");
-    $results[] = 'pledges table created';
+    // Clean up: zero out balances on parent accounts (accounts that have children)
+    // Only leaf accounts should hold balances
+    $parentAccounts = $db->query("
+        SELECT a.id, a.name, a.current_balance, a.opening_balance
+        FROM accounts a
+        WHERE (SELECT COUNT(*) FROM accounts c WHERE c.parent_id = a.id) > 0
+        AND (a.current_balance != 0 OR a.opening_balance != 0)
+    ")->fetchAll();
+
+    foreach ($parentAccounts as $pa) {
+        $db->prepare("UPDATE accounts SET current_balance = 0, opening_balance = 0 WHERE id = ?")->execute([$pa['id']]);
+        $db->prepare("DELETE FROM account_ledger WHERE account_id = ? AND entry_type = 'opening'")->execute([$pa['id']]);
+        $results[] = "Cleared balance on parent account: {$pa['name']} (was \${$pa['current_balance']})";
+    }
+
+    if (empty($parentAccounts)) {
+        $results[] = 'No parent accounts with balances to clean up';
+    }
 
 } catch (Exception $e) {
     $results[] = 'Error: ' . $e->getMessage();
