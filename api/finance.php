@@ -1509,8 +1509,9 @@ switch ($method) {
                 if (empty($r['amount']) || (float)$r['amount'] <= 0) continue;
                 $method = $r['payment_method'] ?? 'cash';
                 $categoryId = (int)$r['category_id'];
-                // Category-specific routing takes priority, then default for payment method
-                $routedAccountId = $routing[$method . '_' . $categoryId] ?? $routingDefault[$method] ?? null;
+                // Manual deposit_to overrides automatic routing
+                $routedAccountId = !empty($r['deposit_to']) ? (int)$r['deposit_to'] :
+                    ($routing[$method . '_' . $categoryId] ?? $routingDefault[$method] ?? null);
                 $amount = (float)$r['amount'];
                 $donationDate = $r['donation_date'] ?? date('Y-m-d');
 

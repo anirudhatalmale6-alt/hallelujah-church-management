@@ -164,14 +164,17 @@ function RecordGivingTab({ setError, setMessage }) {
   const [saving, setSaving] = useState(false);
   const [donationDate, setDonationDate] = useState(new Date().toISOString().split('T')[0]);
 
+  const [bankAccounts, setBankAccounts] = useState([]);
+
   function createEmptyEntry() {
-    return { member_id: '', category_id: '', amount: '', payment_method: 'cash', donor_name: '', notes: '', key: Date.now() + Math.random() };
+    return { member_id: '', category_id: '', amount: '', payment_method: 'cash', donor_name: '', notes: '', deposit_to: '', key: Date.now() + Math.random() };
   }
 
   useEffect(() => {
     financeApi.categories().then(d => setCategories((d.categories || []).filter(c => Number(c.is_active) !== 0)));
     membersApi.list({ limit: 9999, sort: 'last_name' }).then(d => setMembersList(d.members || []));
     servicesApi.list({ limit: 50 }).then(d => setServicesList(d.services || []));
+    financeApi.accounts('asset').then(d => setBankAccounts((d.accounts || []).filter(a => a.parent_id && parseInt(a.child_count) === 0)));
   }, []);
 
   const updateEntry = (idx, field, value) => {
@@ -208,6 +211,7 @@ function RecordGivingTab({ setError, setMessage }) {
         donor_name: e.donor_name || null,
         notes: e.notes || null,
         donation_date: donationDate,
+        deposit_to: e.deposit_to || null,
       }));
       const result = await financeApi.bulkRecord(records);
       setMessage(result.message || `${records.length} donation(s) recorded`);
@@ -251,6 +255,7 @@ function RecordGivingTab({ setError, setMessage }) {
                 <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Category</th>
                 <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase w-28">Amount</th>
                 <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Method</th>
+                <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Deposit To</th>
                 <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase hidden lg:table-cell">Notes</th>
                 <th className="w-10"></th>
               </tr>
@@ -285,6 +290,14 @@ function RecordGivingTab({ setError, setMessage }) {
                     <select className="input py-1.5 text-sm" value={entry.payment_method} onChange={e => updateEntry(idx, 'payment_method', e.target.value)}>
                       {paymentMethods.map(p => (
                         <option key={p.value} value={p.value}>{p.label}</option>
+                      ))}
+                    </select>
+                  </td>
+                  <td className="px-3 py-2">
+                    <select className="input py-1.5 text-sm" value={entry.deposit_to} onChange={e => updateEntry(idx, 'deposit_to', e.target.value)}>
+                      <option value="">Auto (routing)</option>
+                      {bankAccounts.map(a => (
+                        <option key={a.id} value={a.id}>{a.name}</option>
                       ))}
                     </select>
                   </td>
@@ -347,11 +360,63 @@ function ExpensesTab({ setError, setMessage, isAdmin }) {
   const [saving, setSaving] = useState(false);
   const [deleteId, setDeleteId] = useState(null);
   const [bankAccounts, setBankAccounts] = useState([]);
+  const [expDate, setExpDate] = useState(new Date().toISOString().split('T')[0]);
+  const [expEntries, setExpEntries] = useState([createExpEntry()]);
+  const [expSaving, setExpSaving] = useState(false);
+
+  function createExpEntry() {
+    return { category_id: '', amount: '', vendor: '', payment_method: 'check', source_account_id: '', description: '', key: Date.now() + Math.random() };
+  }
 
   useEffect(() => {
     financeApi.expenseCategories().then(d => setCategories((d.categories || []).filter(c => Number(c.is_active) !== 0)));
     financeApi.accounts('asset').then(d => setBankAccounts((d.accounts || []).filter(a => a.parent_id && parseInt(a.child_count) === 0)));
   }, []);
+
+  const updateExpEntry = (idx, field, value) => {
+    setExpEntries(prev => {
+      const updated = prev.map((e, i) => i === idx ? { ...e, [field]: value } : e);
+      const last = updated[updated.length - 1];
+      if (idx === updated.length - 1 && (last.category_id || last.amount || last.vendor)) {
+        updated.push(createExpEntry());
+      }
+      return updated;
+    });
+  };
+
+  const removeExpEntry = (idx) => {
+    if (expEntries.length <= 1) return;
+    setExpEntries(prev => prev.filter((_, i) => i !== idx));
+  };
+
+  const handleSaveExpenses = async () => {
+    const valid = expEntries.filter(e => e.category_id && e.amount && parseFloat(e.amount) > 0);
+    if (valid.length === 0) { setError('Fill in at least one entry with category and amount'); return; }
+    setExpSaving(true);
+    setError('');
+    try {
+      let count = 0;
+      for (const e of valid) {
+        await financeApi.recordExpense({
+          category_id: parseInt(e.category_id),
+          amount: parseFloat(e.amount),
+          vendor: e.vendor || null,
+          description: e.description || null,
+          payment_method: e.payment_method,
+          expense_date: expDate,
+          source_account_id: e.source_account_id || null,
+        });
+        count++;
+      }
+      setMessage(`${count} expense(s) recorded`);
+      setExpEntries([createExpEntry()]);
+      loadExpenses();
+    } catch (err) { setError(err.message); }
+    setExpSaving(false);
+  };
+
+  const expFilledEntries = expEntries.filter(e => e.category_id || e.amount || e.vendor);
+  const expTotal = expEntries.reduce((sum, e) => sum + (parseFloat(e.amount) || 0), 0);
 
   const loadExpenses = useCallback(async () => {
     setLoading(true);
@@ -462,11 +527,83 @@ function ExpensesTab({ setError, setMessage, isAdmin }) {
 
   return (
     <>
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-lg font-semibold text-gray-900">Expense Tracking</h2>
-        <button onClick={openNew} className="btn-primary"><Plus size={16} /> Record Expense</button>
+      {/* Compact expense entry */}
+      <div className="card mb-4">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-lg font-semibold text-gray-900">Record Expenses</h2>
+          <div className="flex items-center gap-3">
+            <label className="label mb-0 text-sm">Date:</label>
+            <input type="date" className="input w-auto py-1.5 text-sm" value={expDate} onChange={e => setExpDate(e.target.value)} />
+          </div>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead className="bg-gray-50 border-b border-gray-200">
+              <tr>
+                <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase w-8">#</th>
+                <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Category</th>
+                <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase w-28">Amount</th>
+                <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Vendor</th>
+                <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Method</th>
+                <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Paid From</th>
+                <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase hidden lg:table-cell">Description</th>
+                <th className="w-10"></th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {expEntries.map((entry, idx) => (
+                <tr key={entry.key} className="hover:bg-gray-50">
+                  <td className="px-3 py-2 text-xs text-gray-400 font-mono">{idx + 1}</td>
+                  <td className="px-3 py-2">
+                    <select className="input py-1.5 text-sm" value={entry.category_id} onChange={e => updateExpEntry(idx, 'category_id', e.target.value)}>
+                      <option value="">Select</option>
+                      {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    </select>
+                  </td>
+                  <td className="px-3 py-2">
+                    <input type="number" step="0.01" min="0" className="input py-1.5 text-sm text-right" placeholder="0.00" value={entry.amount} onChange={e => updateExpEntry(idx, 'amount', e.target.value)} />
+                  </td>
+                  <td className="px-3 py-2">
+                    <input className="input py-1.5 text-sm" placeholder="Vendor" value={entry.vendor} onChange={e => updateExpEntry(idx, 'vendor', e.target.value)} />
+                  </td>
+                  <td className="px-3 py-2">
+                    <select className="input py-1.5 text-sm" value={entry.payment_method} onChange={e => updateExpEntry(idx, 'payment_method', e.target.value)}>
+                      {paymentMethods.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
+                    </select>
+                  </td>
+                  <td className="px-3 py-2">
+                    <select className="input py-1.5 text-sm" value={entry.source_account_id} onChange={e => updateExpEntry(idx, 'source_account_id', e.target.value)}>
+                      <option value="">-- Select --</option>
+                      {bankAccounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                    </select>
+                  </td>
+                  <td className="px-3 py-2 hidden lg:table-cell">
+                    <input className="input py-1.5 text-sm" placeholder="Description" value={entry.description} onChange={e => updateExpEntry(idx, 'description', e.target.value)} />
+                  </td>
+                  <td className="px-2 py-2">
+                    {expEntries.length > 1 && (entry.category_id || entry.amount || idx < expEntries.length - 1) && (
+                      <button onClick={() => removeExpEntry(idx)} className="p-1 text-gray-300 hover:text-red-500"><X size={14} /></button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="flex items-center justify-between mt-3">
+          <div className="text-sm text-gray-500">{expFilledEntries.length} entr{expFilledEntries.length === 1 ? 'y' : 'ies'} | New rows appear automatically</div>
+          <div className="flex items-center gap-4">
+            <div className="text-lg font-bold text-gray-900">Total: {formatCurrency(expTotal)}</div>
+            <button onClick={handleSaveExpenses} disabled={expSaving} className="btn-primary">
+              {expSaving ? <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" /> : <Receipt size={16} />}
+              Save All ({expFilledEntries.length})
+            </button>
+          </div>
+        </div>
       </div>
 
+      {/* Expense history */}
+      <h3 className="text-lg font-semibold text-gray-900 mb-3">Expense History</h3>
       <div className="card mb-6">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
           <div className="lg:col-span-2">
