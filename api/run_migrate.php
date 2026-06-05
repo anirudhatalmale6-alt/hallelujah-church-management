@@ -10,41 +10,39 @@ $db = getDB();
 $results = [];
 
 try {
-    // Sync: create accounts for any expense categories missing from Chart of Accounts
-    $expenseParent = $db->query("SELECT id FROM accounts WHERE account_type = 'expense' AND parent_id IS NULL LIMIT 1")->fetchColumn();
-    if ($expenseParent) {
-        $cats = $db->query("SELECT name, description, fund_type FROM expense_categories WHERE is_active = 1")->fetchAll();
-        foreach ($cats as $c) {
-            $exists = $db->prepare("SELECT COUNT(*) FROM accounts WHERE account_type = 'expense' AND name = ?");
-            $exists->execute([$c['name']]);
-            if ((int)$exists->fetchColumn() === 0) {
-                $maxOrder = (int)$db->query("SELECT COALESCE(MAX(sort_order), 0) FROM accounts WHERE account_type = 'expense'")->fetchColumn() + 1;
-                $nextNum = (int)$db->query("SELECT COALESCE(MAX(CAST(account_number AS UNSIGNED)), 5000) FROM accounts WHERE account_type = 'expense'")->fetchColumn() + 100;
-                $db->prepare("INSERT INTO accounts (parent_id, account_type, account_number, name, description, fund_type, sort_order) VALUES (?, 'expense', ?, ?, ?, ?, ?)")
-                    ->execute([$expenseParent, (string)$nextNum, $c['name'], $c['description'], $c['fund_type'] ?: 'general', $maxOrder]);
-                $results[] = "Created expense account: {$c['name']}";
-            }
+    // Reconcile all asset/liability leaf account balances
+    $accounts = $db->query("
+        SELECT a.id, a.name, a.account_type, a.opening_balance, a.current_balance
+        FROM accounts a
+        WHERE a.account_type IN ('asset', 'liability')
+        AND (SELECT COUNT(*) FROM accounts c WHERE c.parent_id = a.id) = 0
+    ")->fetchAll();
+
+    foreach ($accounts as $acc) {
+        $accId = (int)$acc['id'];
+        $opening = (float)$acc['opening_balance'];
+
+        // Sum ALL non-opening ledger entries (includes transfers, withdrawals, deposits)
+        $ledgerSum = (float)$db->query("SELECT COALESCE(SUM(amount), 0) FROM account_ledger WHERE account_id = $accId AND entry_type != 'opening'")->fetchColumn();
+
+        // Find routed donations that DON'T have a corresponding ledger entry
+        // (old donations recorded before the ledger system)
+        $unledgeredDonations = (float)$db->query("
+            SELECT COALESCE(SUM(d.amount), 0) FROM donations d
+            WHERE d.routed_account_id = $accId
+            AND NOT EXISTS (SELECT 1 FROM account_ledger al WHERE al.reference_type = 'donation' AND al.reference_id = d.id AND al.account_id = $accId)
+        ")->fetchColumn();
+
+        $correctBalance = $opening + $ledgerSum + $unledgeredDonations;
+        $oldBalance = (float)$acc['current_balance'];
+
+        if (abs($correctBalance - $oldBalance) > 0.001) {
+            $db->prepare("UPDATE accounts SET current_balance = ? WHERE id = ?")->execute([$correctBalance, $accId]);
+            $results[] = "{$acc['name']}: \${$oldBalance} -> \${$correctBalance} (opening: {$opening}, ledger: {$ledgerSum}, unledgered donations: {$unledgeredDonations})";
+        } else {
+            $results[] = "{$acc['name']}: \${$oldBalance} OK";
         }
     }
-
-    // Sync: create accounts for any donation categories missing from Chart of Accounts
-    $incomeParent = $db->query("SELECT id FROM accounts WHERE account_type = 'income' AND parent_id IS NULL LIMIT 1")->fetchColumn();
-    if ($incomeParent) {
-        $cats = $db->query("SELECT name, description, fund_type FROM donation_categories WHERE is_active = 1")->fetchAll();
-        foreach ($cats as $c) {
-            $exists = $db->prepare("SELECT COUNT(*) FROM accounts WHERE account_type = 'income' AND name = ?");
-            $exists->execute([$c['name']]);
-            if ((int)$exists->fetchColumn() === 0) {
-                $maxOrder = (int)$db->query("SELECT COALESCE(MAX(sort_order), 0) FROM accounts WHERE account_type = 'income'")->fetchColumn() + 1;
-                $nextNum = (int)$db->query("SELECT COALESCE(MAX(CAST(account_number AS UNSIGNED)), 4000) FROM accounts WHERE account_type = 'income'")->fetchColumn() + 100;
-                $db->prepare("INSERT INTO accounts (parent_id, account_type, account_number, name, description, fund_type, sort_order) VALUES (?, 'income', ?, ?, ?, ?, ?)")
-                    ->execute([$incomeParent, (string)$nextNum, $c['name'], $c['description'], $c['fund_type'] ?: 'general', $maxOrder]);
-                $results[] = "Created income account: {$c['name']}";
-            }
-        }
-    }
-
-    if (empty($results)) $results[] = 'All categories already synced to Chart of Accounts';
 
 } catch (Exception $e) {
     $results[] = 'Error: ' . $e->getMessage();
