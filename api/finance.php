@@ -265,18 +265,19 @@ switch ($method) {
                     $entries = $expStmt->fetchAll();
                 }
             } else {
-                // For asset/liability/equity accounts, use ledger (exclude donation refs - counted via routed donations)
-                $openingStmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) FROM account_ledger WHERE account_id = ? AND entry_date < ? AND reference_type != 'donation'");
-                $openingStmt->execute([$id, $dateFrom]);
-                $openingBalance = (float)$openingStmt->fetchColumn();
-                // Add pre-period routed donations
+                // For asset/liability/equity accounts
+                // Opening balance = account's opening_balance + any pre-period non-opening, non-donation ledger entries + pre-period routed donations
+                $openingBalance = (float)$account['opening_balance'];
+                $preLedger = $db->prepare("SELECT COALESCE(SUM(amount), 0) FROM account_ledger WHERE account_id = ? AND entry_date < ? AND entry_type != 'opening' AND reference_type != 'donation'");
+                $preLedger->execute([$id, $dateFrom]);
+                $openingBalance += (float)$preLedger->fetchColumn();
                 try {
                     $preDonStmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) FROM donations WHERE routed_account_id = ? AND donation_date < ?");
                     $preDonStmt->execute([$id, $dateFrom]);
                     $openingBalance += (float)$preDonStmt->fetchColumn();
                 } catch (Exception $e) {}
-                if ($openingBalance == 0) $openingBalance = (float)$account['opening_balance'];
 
+                // Period entries: exclude opening entries AND donation refs (donations shown from routed query)
                 $entriesStmt = $db->prepare("
                     SELECT al.id, al.entry_date, al.entry_type, al.amount, al.description,
                         al.reference_type, al.reference_id, u.name as created_by_name,
@@ -284,6 +285,7 @@ switch ($method) {
                     FROM account_ledger al
                     LEFT JOIN users u ON u.id = al.created_by
                     WHERE al.account_id = ? AND al.entry_date BETWEEN ? AND ?
+                    AND al.entry_type != 'opening'
                     AND al.reference_type != 'donation'
                     ORDER BY al.entry_date ASC, al.id ASC
                 ");
