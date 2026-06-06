@@ -78,7 +78,7 @@ function generatePDF(title, headers, rows, filename, summaryLines) {
 
 export default function FinancePage() {
   const { isAdmin, hasPermission } = useAuth();
-  const [tab, setTab] = useState('record');
+  const [tab, setTab] = useState(() => new URLSearchParams(window.location.search).get('tab') || 'record');
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
 

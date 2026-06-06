@@ -139,7 +139,7 @@ export default function DashboardPage() {
             value={`$${Number(data.expenses.this_month || 0).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`}
             sub={`$${Number(data.expenses.this_year || 0).toLocaleString()} YTD`}
             color="bg-red-100 text-red-600"
-            to="/system/public/finance"
+            to="/system/public/finance?tab=expenses"
           />
         )}
       </div>
