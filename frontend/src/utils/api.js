@@ -310,6 +310,8 @@ export const finance = {
   loanTransaction: (data) => request('finance.php', { method: 'POST', body: data, params: { action: 'loan_transaction' } }),
   // Opening Balance
   setOpeningBalance: (data) => request('finance.php', { method: 'POST', body: data, params: { action: 'opening_balance' } }),
+  // All transactions (unified)
+  allTransactions: (params) => request('finance.php', { params: { action: 'all_transactions', ...params } }),
   // Delete from account report / journal
   deleteLedgerEntry: (id) => request('finance.php', { method: 'DELETE', params: { action: 'ledger_entry', id } }),
   deleteRoutedDonation: (id) => request('finance.php', { method: 'DELETE', params: { action: 'routed_donation', id } }),

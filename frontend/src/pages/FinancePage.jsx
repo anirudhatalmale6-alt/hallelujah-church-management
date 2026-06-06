@@ -165,6 +165,15 @@ function RecordGivingTab({ setError, setMessage }) {
   const [donationDate, setDonationDate] = useState(new Date().toISOString().split('T')[0]);
 
   const [bankAccounts, setBankAccounts] = useState([]);
+  const [donations, setDonations] = useState([]);
+  const [donTotal, setDonTotal] = useState(0);
+  const [donPages, setDonPages] = useState(1);
+  const [donPage, setDonPage] = useState(1);
+  const [donLoading, setDonLoading] = useState(true);
+  const [editDonation, setEditDonation] = useState(null);
+  const [editForm, setEditForm] = useState({});
+  const [editSaving, setEditSaving] = useState(false);
+  const [deleteId, setDeleteId] = useState(null);
 
   function createEmptyEntry() {
     return { member_id: '', category_id: '', amount: '', payment_method: 'cash', donor_name: '', notes: '', deposit_to: '', key: Date.now() + Math.random() };
@@ -176,6 +185,19 @@ function RecordGivingTab({ setError, setMessage }) {
     servicesApi.list({ limit: 50 }).then(d => setServicesList(d.services || []));
     financeApi.accounts('asset').then(d => setBankAccounts((d.accounts || []).filter(a => a.parent_id && parseInt(a.child_count) === 0)));
   }, []);
+
+  const loadDonations = useCallback(async () => {
+    setDonLoading(true);
+    try {
+      const data = await financeApi.list({ page: donPage, limit: 25 });
+      setDonations(data.donations || []);
+      setDonTotal(data.total || 0);
+      setDonPages(data.pages || 1);
+    } catch (err) { setError(err.message); }
+    setDonLoading(false);
+  }, [donPage, setError]);
+
+  useEffect(() => { loadDonations(); }, [loadDonations]);
 
   const updateEntry = (idx, field, value) => {
     setEntries(prev => {
@@ -216,6 +238,7 @@ function RecordGivingTab({ setError, setMessage }) {
       const result = await financeApi.bulkRecord(records);
       setMessage(result.message || `${records.length} donation(s) recorded`);
       setEntries([createEmptyEntry()]);
+      loadDonations();
     } catch (err) {
       setError(err.message);
     }
@@ -332,6 +355,72 @@ function RecordGivingTab({ setError, setMessage }) {
           </button>
         </div>
       </div>
+
+      {/* Giving History */}
+      <h3 className="text-lg font-semibold text-gray-900 mt-6 mb-3">Giving History</h3>
+      <div className="card p-0 overflow-hidden">
+        {donLoading ? (
+          <div className="flex items-center justify-center py-12"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-700"></div></div>
+        ) : donations.length === 0 ? (
+          <div className="text-center py-12 text-gray-400">No donations recorded yet</div>
+        ) : (
+          <>
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-gray-50 border-b border-gray-200">
+                  <tr>
+                    <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase">Date</th>
+                    <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase">Donor</th>
+                    <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase hidden md:table-cell">Category</th>
+                    <th className="text-right px-4 py-2 text-xs font-semibold text-gray-500 uppercase">Amount</th>
+                    <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase hidden lg:table-cell">Method</th>
+                    <th className="text-right px-4 py-2 text-xs font-semibold text-gray-500 uppercase">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {donations.map(d => (
+                    <tr key={d.id} className="hover:bg-gray-50">
+                      <td className="px-4 py-2 text-sm text-gray-600">{new Date(d.donation_date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</td>
+                      <td className="px-4 py-2 text-sm font-medium text-gray-900">{d.member_id ? `${d.member_first_name} ${d.member_last_name}` : (d.donor_name || 'Anonymous')}</td>
+                      <td className="px-4 py-2 hidden md:table-cell"><span className="badge bg-blue-50 text-blue-700">{d.category_name}</span></td>
+                      <td className="px-4 py-2 text-right text-sm font-semibold text-green-700">{formatCurrency(d.amount)}</td>
+                      <td className="px-4 py-2 text-sm text-gray-500 hidden lg:table-cell capitalize">{paymentMethodLabel[d.payment_method] || d.payment_method}</td>
+                      <td className="px-4 py-2">
+                        <div className="flex items-center justify-end gap-1">
+                          <button onClick={() => { setEditDonation(d); setEditForm({ amount: d.amount, category_id: d.category_id, payment_method: d.payment_method, notes: d.notes || '', donation_date: d.donation_date }); }} className="p-1.5 text-gray-400 hover:text-primary-700 hover:bg-primary-50 rounded"><Edit2 size={14} /></button>
+                          <button onClick={() => setDeleteId(d.id)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded"><Trash2 size={14} /></button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {donPages > 1 && <div className="px-4 pb-3"><Pagination page={donPage} pages={donPages} total={donTotal} onPageChange={setDonPage} /></div>}
+          </>
+        )}
+      </div>
+
+      <Modal isOpen={!!editDonation} onClose={() => setEditDonation(null)} title="Edit Donation" size="sm">
+        <div className="space-y-4">
+          <div><label className="label">Amount ($)</label><input type="number" step="0.01" className="input" value={editForm.amount || ''} onChange={e => setEditForm(f => ({ ...f, amount: e.target.value }))} /></div>
+          <div><label className="label">Category</label><select className="input" value={editForm.category_id || ''} onChange={e => setEditForm(f => ({ ...f, category_id: e.target.value }))}>{categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
+          <div><label className="label">Method</label><select className="input" value={editForm.payment_method || 'cash'} onChange={e => setEditForm(f => ({ ...f, payment_method: e.target.value }))}>{paymentMethods.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}</select></div>
+          <div><label className="label">Date</label><input type="date" className="input" value={editForm.donation_date || ''} onChange={e => setEditForm(f => ({ ...f, donation_date: e.target.value }))} /></div>
+          <div className="flex justify-end gap-3 pt-2">
+            <button onClick={() => setEditDonation(null)} className="btn-secondary">Cancel</button>
+            <button onClick={async () => { setEditSaving(true); try { await financeApi.update(editDonation.id, editForm); setEditDonation(null); setMessage('Updated'); loadDonations(); } catch(err) { setError(err.message); } setEditSaving(false); }} disabled={editSaving} className="btn-primary"><Check size={16} /> Save</button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal isOpen={!!deleteId} onClose={() => setDeleteId(null)} title="Delete Donation" size="sm">
+        <p className="text-gray-600 mb-6">Are you sure you want to delete this donation?</p>
+        <div className="flex justify-end gap-3">
+          <button onClick={() => setDeleteId(null)} className="btn-secondary">Cancel</button>
+          <button onClick={async () => { try { await financeApi.deleteRoutedDonation(deleteId); setDeleteId(null); setMessage('Deleted'); loadDonations(); } catch(err) { setError(err.message); } }} className="btn-danger"><Trash2 size={16} /> Delete</button>
+        </div>
+      </Modal>
     </>
   );
 }
@@ -785,8 +874,210 @@ function ExpensesTab({ setError, setMessage, isAdmin }) {
   );
 }
 
-/* ─── History Tab ─── */
+/* ─── History Tab (Unified All Transactions) ─── */
 function HistoryTab({ setError, setMessage, isAdmin }) {
+  const [entries, setEntries] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [totalEntries, setTotalEntries] = useState(0);
+  const [pages, setPages] = useState(1);
+  const [page, setPage] = useState(1);
+  const [totals, setTotals] = useState({ income: 0, expense: 0, transfer: 0 });
+  const [typeFilter, setTypeFilter] = useState('');
+  const [searchFilter, setSearchFilter] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [editItem, setEditItem] = useState(null);
+  const [editForm, setEditForm] = useState({});
+  const [editSaving, setEditSaving] = useState(false);
+  const [deleteItem, setDeleteItem] = useState(null);
+  const [categories, setCategories] = useState([]);
+  const [expCategories, setExpCategories] = useState([]);
+
+  useEffect(() => {
+    financeApi.categories().then(d => setCategories(d.categories || []));
+    financeApi.expenseCategories().then(d => setExpCategories(d.categories || []));
+  }, []);
+
+  const loadEntries = useCallback(async () => {
+    setLoading(true);
+    try {
+      const params = { page };
+      if (typeFilter) params.type = typeFilter;
+      if (searchFilter) params.search = searchFilter;
+      if (dateFrom) params.date_from = dateFrom;
+      if (dateTo) params.date_to = dateTo;
+      const data = await financeApi.allTransactions(params);
+      setEntries(data.entries || []);
+      setTotalEntries(data.total || 0);
+      setPages(data.pages || 1);
+      setTotals({ income: data.total_income || 0, expense: data.total_expense || 0, transfer: data.total_transfer || 0 });
+    } catch (err) { setError(err.message); }
+    setLoading(false);
+  }, [page, typeFilter, searchFilter, dateFrom, dateTo, setError]);
+
+  useEffect(() => { loadEntries(); }, [loadEntries]);
+
+  const openEdit = (e) => {
+    setEditItem(e);
+    if (e.source === 'donation') {
+      setEditForm({ amount: e.amount, payment_method: e.method, notes: e.notes || '' });
+    } else if (e.source === 'expense') {
+      setEditForm({ amount: e.amount, payment_method: e.method, description: e.notes || '' });
+    }
+  };
+
+  const handleEdit = async () => {
+    if (!editItem) return;
+    setEditSaving(true);
+    try {
+      if (editItem.source === 'donation') {
+        await financeApi.update(editItem.id, editForm);
+      } else if (editItem.source === 'expense') {
+        await financeApi.updateExpense(editItem.id, editForm);
+      }
+      setEditItem(null);
+      setMessage('Updated');
+      loadEntries();
+    } catch (err) { setError(err.message); }
+    setEditSaving(false);
+  };
+
+  const handleDelete = async () => {
+    if (!deleteItem) return;
+    try {
+      if (deleteItem.source === 'donation') await financeApi.deleteRoutedDonation(deleteItem.id);
+      else if (deleteItem.source === 'expense') await financeApi.deleteExpense(deleteItem.id);
+      else if (deleteItem.source === 'transfer') await financeApi.deleteTransfer(deleteItem.id);
+      setDeleteItem(null);
+      setMessage('Deleted');
+      loadEntries();
+    } catch (err) { setError(err.message); }
+  };
+
+  const handleApprove = async (e) => {
+    try {
+      if (e.source === 'expense') await financeApi.approveExpense(e.id);
+      setMessage('Approved');
+      loadEntries();
+    } catch (err) { setError(err.message); }
+  };
+
+  const typeColors = { Income: 'bg-green-100 text-green-700', Expense: 'bg-red-100 text-red-700', Transfer: 'bg-blue-100 text-blue-700' };
+
+  return (
+    <>
+      <h2 className="text-lg font-semibold text-gray-900 mb-4">All Transactions</h2>
+
+      <div className="card mb-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+          <div className="lg:col-span-2">
+            <div className="relative">
+              <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input type="text" placeholder="Search..." value={searchFilter} onChange={e => { setSearchFilter(e.target.value); setPage(1); }} className="input pl-10" />
+            </div>
+          </div>
+          <select className="input" value={typeFilter} onChange={e => { setTypeFilter(e.target.value); setPage(1); }}>
+            <option value="">All Types</option>
+            <option value="income">Income</option>
+            <option value="expense">Expense</option>
+            <option value="transfer">Transfer</option>
+          </select>
+          <input type="date" className="input" value={dateFrom} onChange={e => { setDateFrom(e.target.value); setPage(1); }} />
+          <input type="date" className="input" value={dateTo} onChange={e => { setDateTo(e.target.value); setPage(1); }} />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+        <div className="card bg-green-50 py-3"><div className="text-xs text-green-600">Total Income</div><div className="text-lg font-bold text-green-700">{formatCurrency(totals.income)}</div></div>
+        <div className="card bg-red-50 py-3"><div className="text-xs text-red-600">Total Expenses</div><div className="text-lg font-bold text-red-700">{formatCurrency(totals.expense)}</div></div>
+        <div className="card bg-blue-50 py-3"><div className="text-xs text-blue-600">Transfers</div><div className="text-lg font-bold text-blue-700">{formatCurrency(totals.transfer)}</div></div>
+        <div className={`card py-3 ${totals.income - totals.expense >= 0 ? 'bg-emerald-50' : 'bg-amber-50'}`}><div className={`text-xs ${totals.income - totals.expense >= 0 ? 'text-emerald-600' : 'text-amber-600'}`}>Net</div><div className={`text-lg font-bold ${totals.income - totals.expense >= 0 ? 'text-emerald-700' : 'text-amber-700'}`}>{formatCurrency(totals.income - totals.expense)}</div></div>
+      </div>
+
+      <div className="card p-0 overflow-hidden">
+        {loading ? (
+          <div className="flex items-center justify-center py-16"><div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary-700"></div></div>
+        ) : entries.length === 0 ? (
+          <div className="text-center py-16 text-gray-400">No transactions found</div>
+        ) : (
+          <>
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-gray-50 border-b border-gray-200">
+                  <tr>
+                    <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase">Date</th>
+                    <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase">Type</th>
+                    <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase">Description</th>
+                    <th className="text-right px-4 py-2 text-xs font-semibold text-gray-500 uppercase">Amount</th>
+                    <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase hidden md:table-cell">Method</th>
+                    <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase hidden lg:table-cell">Account</th>
+                    <th className="text-center px-4 py-2 text-xs font-semibold text-gray-500 uppercase">Status</th>
+                    <th className="text-right px-4 py-2 text-xs font-semibold text-gray-500 uppercase">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {entries.map(e => (
+                    <tr key={`${e.source}-${e.id}`} className="hover:bg-gray-50">
+                      <td className="px-4 py-2 text-sm text-gray-600">{e.date}</td>
+                      <td className="px-4 py-2"><span className={`px-2 py-0.5 rounded-full text-xs font-medium ${typeColors[e.type]}`}>{e.type}</span></td>
+                      <td className="px-4 py-2 text-sm text-gray-700 max-w-[250px] truncate">{e.description}</td>
+                      <td className={`px-4 py-2 text-sm text-right font-semibold ${e.type === 'Income' ? 'text-green-700' : e.type === 'Expense' ? 'text-red-700' : 'text-blue-700'}`}>{formatCurrency(e.amount)}</td>
+                      <td className="px-4 py-2 text-sm text-gray-500 hidden md:table-cell capitalize">{paymentMethodLabel[e.method] || e.method || '-'}</td>
+                      <td className="px-4 py-2 text-sm text-gray-500 hidden lg:table-cell">{e.account || '-'}</td>
+                      <td className="px-4 py-2 text-center">
+                        {e.source === 'expense' ? (
+                          <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${e.status === 'approved' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
+                            {e.status === 'approved' ? 'Approved' : 'Pending'}
+                          </span>
+                        ) : <span className="text-xs text-gray-400">-</span>}
+                      </td>
+                      <td className="px-4 py-2">
+                        <div className="flex items-center justify-end gap-1">
+                          {isAdmin && e.source === 'expense' && e.status !== 'approved' && (
+                            <button onClick={() => handleApprove(e)} className="p-1.5 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded" title="Approve"><ShieldCheck size={14} /></button>
+                          )}
+                          {e.source !== 'transfer' && (
+                            <button onClick={() => openEdit(e)} className="p-1.5 text-gray-400 hover:text-primary-700 hover:bg-primary-50 rounded" title="Edit"><Edit2 size={14} /></button>
+                          )}
+                          {isAdmin && (
+                            <button onClick={() => setDeleteItem(e)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded" title="Delete"><Trash2 size={14} /></button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {pages > 1 && <div className="px-4 pb-3"><Pagination page={page} pages={pages} total={totalEntries} onPageChange={setPage} /></div>}
+          </>
+        )}
+      </div>
+
+      <Modal isOpen={!!editItem} onClose={() => setEditItem(null)} title={`Edit ${editItem?.type || ''}`} size="sm">
+        <div className="space-y-4">
+          <div><label className="label">Amount ($)</label><input type="number" step="0.01" className="input" value={editForm.amount || ''} onChange={e => setEditForm(f => ({ ...f, amount: e.target.value }))} /></div>
+          <div><label className="label">Method</label><select className="input" value={editForm.payment_method || ''} onChange={e => setEditForm(f => ({ ...f, payment_method: e.target.value }))}>{paymentMethods.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}</select></div>
+          <div className="flex justify-end gap-3 pt-2">
+            <button onClick={() => setEditItem(null)} className="btn-secondary">Cancel</button>
+            <button onClick={handleEdit} disabled={editSaving} className="btn-primary"><Check size={16} /> Save</button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal isOpen={!!deleteItem} onClose={() => setDeleteItem(null)} title="Delete Transaction" size="sm">
+        <p className="text-gray-600 mb-6">Are you sure you want to delete this {deleteItem?.type?.toLowerCase()}? Balances will be adjusted.</p>
+        <div className="flex justify-end gap-3">
+          <button onClick={() => setDeleteItem(null)} className="btn-secondary">Cancel</button>
+          <button onClick={handleDelete} className="btn-danger"><Trash2 size={16} /> Delete</button>
+        </div>
+      </Modal>
+    </>
+  );
+}
+
+/* ─── OLD History Tab - REMOVED, replaced by unified transactions above ─── */
+function OldHistoryTab_UNUSED({ setError, setMessage, isAdmin }) {
   const [donations, setDonations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [total, setTotal] = useState(0);

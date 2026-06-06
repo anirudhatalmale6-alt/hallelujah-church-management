@@ -514,6 +514,138 @@ switch ($method) {
             }
         }
 
+        // --- ALL TRANSACTIONS (unified) ---
+        if ($action === 'all_transactions') {
+            $dateFrom = $_GET['date_from'] ?? date('Y-m-01');
+            $dateTo = $_GET['date_to'] ?? date('Y-m-d');
+            $typeFilter = $_GET['type'] ?? '';
+            $searchFilter = $_GET['search'] ?? '';
+            $page = max(1, (int)($_GET['page'] ?? 1));
+            $limit = 50;
+
+            $entries = [];
+
+            // Donations
+            if (!$typeFilter || $typeFilter === 'income') {
+                $stmt = $db->prepare("
+                    SELECT d.id, d.donation_date as date, d.amount, d.payment_method, d.notes,
+                        d.created_at, d.recorded_by,
+                        COALESCE(CONCAT(m.first_name, ' ', m.last_name), d.donor_name, 'Anonymous') as who,
+                        dc.name as category_name, u.name as recorded_by_name,
+                        a.name as account_name
+                    FROM donations d
+                    JOIN donation_categories dc ON dc.id = d.category_id
+                    LEFT JOIN members m ON m.id = d.member_id
+                    LEFT JOIN users u ON u.id = d.recorded_by
+                    LEFT JOIN accounts a ON a.id = d.routed_account_id
+                    WHERE d.donation_date BETWEEN ? AND ?
+                    ORDER BY d.donation_date DESC, d.created_at DESC
+                ");
+                $stmt->execute([$dateFrom, $dateTo]);
+                foreach ($stmt->fetchAll() as $r) {
+                    $entries[] = [
+                        'id' => (int)$r['id'], 'source' => 'donation', 'type' => 'Income',
+                        'date' => $r['date'], 'amount' => (float)$r['amount'],
+                        'description' => $r['category_name'] . ' - ' . $r['who'],
+                        'method' => $r['payment_method'], 'account' => $r['account_name'] ?: '',
+                        'recorded_by' => $r['recorded_by_name'], 'created_at' => $r['created_at'],
+                        'status' => 'recorded', 'notes' => $r['notes'],
+                    ];
+                }
+            }
+
+            // Expenses
+            if (!$typeFilter || $typeFilter === 'expense') {
+                try {
+                    $stmt = $db->prepare("
+                        SELECT e.id, e.expense_date as date, e.amount, e.payment_method, e.description as notes,
+                            e.vendor, e.status, e.created_at, e.approved_by, e.approved_at,
+                            ec.name as category_name, u.name as recorded_by_name,
+                            a.name as account_name, u2.name as approved_by_name
+                        FROM expenses e
+                        JOIN expense_categories ec ON ec.id = e.category_id
+                        LEFT JOIN users u ON u.id = e.recorded_by
+                        LEFT JOIN accounts a ON a.id = e.source_account_id
+                        LEFT JOIN users u2 ON u2.id = e.approved_by
+                        WHERE e.expense_date BETWEEN ? AND ?
+                        ORDER BY e.expense_date DESC, e.created_at DESC
+                    ");
+                    $stmt->execute([$dateFrom, $dateTo]);
+                    foreach ($stmt->fetchAll() as $r) {
+                        $entries[] = [
+                            'id' => (int)$r['id'], 'source' => 'expense', 'type' => 'Expense',
+                            'date' => $r['date'], 'amount' => (float)$r['amount'],
+                            'description' => $r['category_name'] . ($r['vendor'] ? ' - ' . $r['vendor'] : ''),
+                            'method' => $r['payment_method'], 'account' => $r['account_name'] ?: '',
+                            'recorded_by' => $r['recorded_by_name'], 'created_at' => $r['created_at'],
+                            'status' => $r['status'], 'notes' => $r['notes'],
+                            'approved_by_name' => $r['approved_by_name'],
+                        ];
+                    }
+                } catch (Exception $e) {}
+            }
+
+            // Transfers
+            if (!$typeFilter || $typeFilter === 'transfer') {
+                try {
+                    $stmt = $db->prepare("
+                        SELECT t.id, t.transfer_date as date, t.amount, t.notes, t.created_at,
+                            fa.name as from_name, ta.name as to_name, u.name as recorded_by_name
+                        FROM account_transfers t
+                        LEFT JOIN accounts fa ON fa.id = t.from_account_id
+                        LEFT JOIN accounts ta ON ta.id = t.to_account_id
+                        LEFT JOIN users u ON u.id = t.created_by
+                        WHERE t.transfer_date BETWEEN ? AND ?
+                        ORDER BY t.transfer_date DESC
+                    ");
+                    $stmt->execute([$dateFrom, $dateTo]);
+                    foreach ($stmt->fetchAll() as $r) {
+                        $entries[] = [
+                            'id' => (int)$r['id'], 'source' => 'transfer', 'type' => 'Transfer',
+                            'date' => $r['date'], 'amount' => (float)$r['amount'],
+                            'description' => $r['from_name'] . ' -> ' . $r['to_name'],
+                            'method' => '', 'account' => '',
+                            'recorded_by' => $r['recorded_by_name'], 'created_at' => $r['created_at'],
+                            'status' => 'recorded', 'notes' => $r['notes'],
+                        ];
+                    }
+                } catch (Exception $e) {}
+            }
+
+            // Filter by search
+            if ($searchFilter) {
+                $search = strtolower($searchFilter);
+                $entries = array_filter($entries, function($e) use ($search) {
+                    return strpos(strtolower($e['description']), $search) !== false
+                        || strpos(strtolower($e['method'] ?? ''), $search) !== false
+                        || strpos(strtolower($e['account'] ?? ''), $search) !== false;
+                });
+                $entries = array_values($entries);
+            }
+
+            usort($entries, function($a, $b) { return strcmp($b['date'], $a['date']) ?: strcmp($b['created_at'], $a['created_at']); });
+
+            $totalIncome = array_sum(array_map(fn($e) => $e['type'] === 'Income' ? $e['amount'] : 0, $entries));
+            $totalExpense = array_sum(array_map(fn($e) => $e['type'] === 'Expense' ? $e['amount'] : 0, $entries));
+            $totalTransfer = array_sum(array_map(fn($e) => $e['type'] === 'Transfer' ? $e['amount'] : 0, $entries));
+            $totalEntries = count($entries);
+
+            $offset = ($page - 1) * $limit;
+            $pagedEntries = array_slice($entries, $offset, $limit);
+
+            jsonResponse([
+                'entries' => $pagedEntries,
+                'total' => $totalEntries,
+                'total_income' => $totalIncome,
+                'total_expense' => $totalExpense,
+                'total_transfer' => $totalTransfer,
+                'page' => $page,
+                'pages' => max(1, ceil($totalEntries / $limit)),
+                'date_from' => $dateFrom,
+                'date_to' => $dateTo,
+            ]);
+        }
+
         // --- ROUTING RULES ---
         if ($action === 'routing_rules') {
             try {
