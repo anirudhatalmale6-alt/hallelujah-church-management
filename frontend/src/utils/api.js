@@ -325,4 +325,15 @@ export const finance = {
   deletePledge: (id) => request('finance.php', { method: 'DELETE', params: { action: 'pledge', id } }),
 };
 
+// Messaging
+export const messaging = {
+  list: (params) => request('messaging.php', { params }),
+  get: (id) => request('messaging.php', { params: { action: 'get', id } }),
+  send: (data) => request('messaging.php', { method: 'POST', body: data, params: { action: 'send' } }),
+  delete: (id) => request('messaging.php', { method: 'DELETE', params: { id } }),
+  config: () => request('messaging.php', { params: { action: 'config' } }),
+  saveConfig: (data) => request('messaging.php', { method: 'POST', body: data, params: { action: 'config' } }),
+  testEmail: (email) => request('messaging.php', { method: 'POST', body: { email }, params: { action: 'test_email' } }),
+};
+
 export { getToken, setToken, removeToken, getUser, setUser, ApiError };

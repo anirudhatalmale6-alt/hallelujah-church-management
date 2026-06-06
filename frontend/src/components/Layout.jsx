@@ -4,7 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import {
   LayoutDashboard, Users, UserCheck, Calendar, Church, Home,
   Settings, LogOut, Menu, X, ChevronDown, FileText, FolderOpen,
-  Lock, ClipboardCheck, ClipboardList, DollarSign
+  Lock, ClipboardCheck, ClipboardList, DollarSign, MessageSquare
 } from 'lucide-react';
 
 const navItems = [
@@ -17,6 +17,7 @@ const navItems = [
   { path: '/system/public/checklist', icon: ClipboardList, label: 'Checklist', perm: 'checklist' },
   { path: '/system/public/department-reports', icon: ClipboardCheck, label: 'Dept. Reports', perm: 'department_reports' },
   { path: '/system/public/finance', icon: DollarSign, label: 'Finance', perm: 'finance' },
+  { path: '/system/public/communication', icon: MessageSquare, label: 'Communication', perm: 'communication' },
   { path: '/system/public/reports', icon: FileText, label: 'Reports', perm: 'reports' },
 ];
 

@@ -54,6 +54,7 @@ export default function UsersPage() {
     { key: 'finance_giving', label: 'Finance: Giving Only' },
     { key: 'finance_expenses', label: 'Finance: Expenses Only' },
     { key: 'finance_reports', label: 'Finance: Reports Only' },
+    { key: 'communication', label: 'Communication' },
   ];
 
   const loadUsers = useCallback(async () => {
