@@ -7,7 +7,7 @@ import Modal from '../components/Modal';
 import Pagination from '../components/Pagination';
 import {
   Search, Plus, Edit2, Trash2, Eye, Filter, Users,
-  UserPlus, AlertCircle, Check, X, ArrowDownAZ, Download
+  UserPlus, AlertCircle, Check, X, ArrowDownAZ, Download, Upload
 } from 'lucide-react';
 
 const emptyMember = {
@@ -15,9 +15,20 @@ const emptyMember = {
   address: '', city: '', state: '', zip: '',
   gender: '', date_of_birth: '', family_group: '',
   household_id: '', household_role: '',
-  membership_date: '', status: 'active', notes: '',
+  membership_date: '', status: 'active', person_type: 'church_member', notes: '',
   baptism_date: '', salvation_date: '', first_visit_date: '',
   membership_class_date: '', dedication_date: '', wedding_date: '',
+};
+
+const personTypeLabels = {
+  church_member: 'Church Member',
+  community: 'Community',
+  companion: 'Companion',
+};
+const personTypeColors = {
+  church_member: 'bg-primary-50 text-primary-700',
+  community: 'bg-amber-50 text-amber-700',
+  companion: 'bg-purple-50 text-purple-700',
 };
 
 export default function MembersPage() {
@@ -31,7 +42,12 @@ export default function MembersPage() {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [groupFilter, setGroupFilter] = useState('');
+  const [personTypeFilter, setPersonTypeFilter] = useState('');
   const [sortBy, setSortBy] = useState('last_name');
+  const [showImport, setShowImport] = useState(false);
+  const [importData, setImportData] = useState(null);
+  const [importSaving, setImportSaving] = useState(false);
+  const [importPersonType, setImportPersonType] = useState('community');
   const [page, setPage] = useState(1);
   const [showModal, setShowModal] = useState(false);
   const [editMember, setEditMember] = useState(null);
@@ -50,14 +66,11 @@ export default function MembersPage() {
   const loadMembers = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await membersApi.list({
-        search,
-        status: statusFilter,
-        family_group: groupFilter,
-        sort: sortBy,
-        page,
-        limit: 25,
-      });
+      const params = { search, sort: sortBy, page, limit: 25 };
+      if (statusFilter) params.status = statusFilter;
+      if (groupFilter) params.family_group = groupFilter;
+      if (personTypeFilter) params.person_type = personTypeFilter;
+      const data = await membersApi.list(params);
       setMembers(data.members);
       setTotal(data.total);
       setPages(data.pages);
@@ -66,7 +79,7 @@ export default function MembersPage() {
       setError(err.message);
     }
     setLoading(false);
-  }, [search, statusFilter, groupFilter, sortBy, page]);
+  }, [search, statusFilter, groupFilter, personTypeFilter, sortBy, page]);
 
   useEffect(() => {
     loadMembers();
@@ -185,15 +198,18 @@ export default function MembersPage() {
     <div>
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Members</h1>
-          <p className="text-gray-500 mt-1">{total} church members</p>
+          <h1 className="text-2xl font-bold text-gray-900">People</h1>
+          <p className="text-gray-500 mt-1">{total} people</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
+          <button onClick={() => setShowImport(true)} className="btn-secondary">
+            <Upload size={18} /> Import
+          </button>
           <button onClick={exportCSV} className="btn-secondary">
-            <Download size={18} /> Export CSV
+            <Download size={18} /> Export
           </button>
           <button onClick={openNew} className="btn-primary">
-            <UserPlus size={18} /> Add Member
+            <UserPlus size={18} /> Add Person
           </button>
         </div>
       </div>
@@ -205,7 +221,7 @@ export default function MembersPage() {
             <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
             <input
               type="text"
-              placeholder="Search members..."
+              placeholder="Search people..."
               value={search}
               onChange={(e) => { setSearch(e.target.value); setPage(1); }}
               className="input pl-10"
@@ -221,6 +237,16 @@ export default function MembersPage() {
             <option value="newest">Newest First</option>
           </select>
           <select
+            value={personTypeFilter}
+            onChange={(e) => { setPersonTypeFilter(e.target.value); setPage(1); }}
+            className="input w-auto"
+          >
+            <option value="">All People</option>
+            <option value="church_member">Church Members</option>
+            <option value="community">Community</option>
+            <option value="companion">Companions</option>
+          </select>
+          <select
             value={statusFilter}
             onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}
             className="input w-auto"
@@ -229,7 +255,6 @@ export default function MembersPage() {
             <option value="active">Active</option>
             <option value="inactive">Inactive</option>
             <option value="visitor">Visitor</option>
-            <option value="non_member_attendee">Non-Member Attendee</option>
           </select>
           {familyGroups.length > 0 && (
             <select
@@ -255,9 +280,9 @@ export default function MembersPage() {
         ) : members.length === 0 ? (
           <div className="text-center py-16">
             <Users size={48} className="text-gray-300 mx-auto mb-3" />
-            <p className="text-gray-500">No members found</p>
+            <p className="text-gray-500">No people found</p>
             <button onClick={openNew} className="btn-primary mt-4">
-              <Plus size={16} /> Add First Member
+              <Plus size={16} /> Add First Person
             </button>
           </div>
         ) : (
@@ -269,6 +294,7 @@ export default function MembersPage() {
                     <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Name</th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider hidden md:table-cell">Contact</th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider hidden lg:table-cell">Group</th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Type</th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Status</th>
                     <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Actions</th>
                   </tr>
@@ -294,6 +320,7 @@ export default function MembersPage() {
                       <td className="px-4 py-3 hidden lg:table-cell text-sm text-gray-600">
                         {m.family_group || '-'}
                       </td>
+                      <td className="px-4 py-3"><span className={`px-2 py-0.5 rounded-full text-xs font-medium ${personTypeColors[m.person_type] || personTypeColors.church_member}`}>{personTypeLabels[m.person_type] || 'Member'}</span></td>
                       <td className="px-4 py-3">{statusBadge(m.status)}</td>
                       <td className="px-4 py-3">
                         <div className="flex items-center justify-end gap-1">
@@ -338,7 +365,7 @@ export default function MembersPage() {
       <Modal
         isOpen={showModal}
         onClose={() => setShowModal(false)}
-        title={editMember ? 'Edit Member' : 'Add New Member'}
+        title={editMember ? 'Edit Person' : 'Add New Person'}
         size="lg"
       >
         <form onSubmit={handleSave}>
@@ -422,12 +449,19 @@ export default function MembersPage() {
               <input type="date" className="input" value={form.membership_date} onChange={e => updateField('membership_date', e.target.value)} />
             </div>
             <div>
+              <label className="label">Person Type</label>
+              <select className="input" value={form.person_type || 'church_member'} onChange={e => updateField('person_type', e.target.value)}>
+                <option value="church_member">Church Member</option>
+                <option value="community">Community Contact</option>
+                <option value="companion">Companion</option>
+              </select>
+            </div>
+            <div>
               <label className="label">Status</label>
               <select className="input" value={form.status} onChange={e => updateField('status', e.target.value)}>
                 <option value="active">Active</option>
                 <option value="inactive">Inactive</option>
                 <option value="visitor">Visitor</option>
-                <option value="non_member_attendee">Non-Member Attendee</option>
               </select>
             </div>
 
@@ -494,20 +528,132 @@ export default function MembersPage() {
             <button type="button" onClick={() => setShowModal(false)} className="btn-secondary">Cancel</button>
             <button type="submit" disabled={saving} className="btn-primary">
               {saving ? <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" /> : <Check size={16} />}
-              {editMember ? 'Save Changes' : 'Add Member'}
+              {editMember ? 'Save Changes' : 'Add Person'}
             </button>
           </div>
         </form>
       </Modal>
 
       {/* Delete Confirmation */}
-      <Modal isOpen={!!deleteId} onClose={() => setDeleteId(null)} title="Delete Member" size="sm">
-        <p className="text-gray-600 mb-6">Are you sure you want to delete this member? This action cannot be undone and will also remove all their attendance records.</p>
+      <Modal isOpen={!!deleteId} onClose={() => setDeleteId(null)} title="Delete Person" size="sm">
+        <p className="text-gray-600 mb-6">Are you sure you want to delete this person? This action cannot be undone and will also remove all their attendance records.</p>
         <div className="flex items-center justify-end gap-3">
           <button onClick={() => setDeleteId(null)} className="btn-secondary">Cancel</button>
           <button onClick={handleDelete} className="btn-danger">
             <Trash2 size={16} /> Delete
           </button>
+        </div>
+      </Modal>
+
+      {/* Import Modal */}
+      <Modal isOpen={showImport} onClose={() => { setShowImport(false); setImportData(null); }} title="Import Contacts" size="lg">
+        <div className="space-y-4">
+          <p className="text-sm text-gray-500">Upload a CSV file from Google Contacts, Outlook, or any spreadsheet. The system will auto-detect the columns.</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="label">Import As</label>
+              <select className="input" value={importPersonType} onChange={e => setImportPersonType(e.target.value)}>
+                <option value="community">Community Contact</option>
+                <option value="companion">Companion</option>
+                <option value="church_member">Church Member</option>
+              </select>
+            </div>
+            <div>
+              <label className="label">CSV File</label>
+              <input type="file" accept=".csv,.vcf,.txt" className="input" onChange={e => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (ev) => {
+                  const text = ev.target.result;
+                  const lines = text.split('\n').filter(l => l.trim());
+                  if (lines.length < 2) { setError('File is empty or has no data rows'); return; }
+                  const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, ''));
+                  const rows = [];
+                  for (let i = 1; i < lines.length; i++) {
+                    const vals = lines[i].match(/(".*?"|[^,]*)/g)?.map(v => v.trim().replace(/^"|"$/g, '')) || [];
+                    if (vals.length < 2) continue;
+                    const row = {};
+                    headers.forEach((h, idx) => { row[h] = vals[idx] || ''; });
+                    const fn = row['First Name'] || row['Given Name'] || row['first_name'] || row['FirstName'] || '';
+                    const ln = row['Last Name'] || row['Family Name'] || row['last_name'] || row['LastName'] || '';
+                    const email = row['E-mail 1 - Value'] || row['Email'] || row['email'] || row['E-mail Address'] || row['Email Address'] || '';
+                    const phone = row['Phone 1 - Value'] || row['Phone'] || row['phone'] || row['Mobile Phone'] || row['Primary Phone'] || '';
+                    if (fn || ln || email) {
+                      rows.push({ first_name: fn, last_name: ln, email, phone, selected: true });
+                    }
+                  }
+                  setImportData({ headers, rows, fileName: file.name });
+                };
+                reader.readAsText(file);
+              }} />
+            </div>
+          </div>
+
+          {importData && (
+            <>
+              <div className="text-sm text-gray-600">{importData.rows.length} contacts found in {importData.fileName}</div>
+              <div className="max-h-64 overflow-y-auto border rounded-lg">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50 border-b sticky top-0">
+                    <tr>
+                      <th className="px-3 py-2 text-left"><input type="checkbox" checked={importData.rows.every(r => r.selected)} onChange={e => setImportData(d => ({ ...d, rows: d.rows.map(r => ({ ...r, selected: e.target.checked })) }))} /></th>
+                      <th className="px-3 py-2 text-left text-xs text-gray-500">First Name</th>
+                      <th className="px-3 py-2 text-left text-xs text-gray-500">Last Name</th>
+                      <th className="px-3 py-2 text-left text-xs text-gray-500">Email</th>
+                      <th className="px-3 py-2 text-left text-xs text-gray-500">Phone</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y">
+                    {importData.rows.map((r, i) => (
+                      <tr key={i} className={r.selected ? '' : 'opacity-40'}>
+                        <td className="px-3 py-1.5"><input type="checkbox" checked={r.selected} onChange={e => setImportData(d => ({ ...d, rows: d.rows.map((row, idx) => idx === i ? { ...row, selected: e.target.checked } : row) }))} /></td>
+                        <td className="px-3 py-1.5">{r.first_name}</td>
+                        <td className="px-3 py-1.5">{r.last_name}</td>
+                        <td className="px-3 py-1.5 text-gray-500">{r.email}</td>
+                        <td className="px-3 py-1.5 text-gray-500">{r.phone}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+
+          <div className="flex justify-end gap-3 pt-2">
+            <button onClick={() => { setShowImport(false); setImportData(null); }} className="btn-secondary">Cancel</button>
+            {importData && (
+              <button
+                disabled={importSaving}
+                onClick={async () => {
+                  const selected = importData.rows.filter(r => r.selected);
+                  if (selected.length === 0) { setError('No contacts selected'); return; }
+                  setImportSaving(true);
+                  try {
+                    const contacts = selected.map(r => ({
+                      first_name: r.first_name,
+                      last_name: r.last_name,
+                      email: r.email,
+                      phone: r.phone,
+                      person_type: importPersonType,
+                      import_source: importData.fileName,
+                    }));
+                    const result = await membersApi.import(contacts);
+                    setShowImport(false);
+                    setImportData(null);
+                    setError('');
+                    loadMembers();
+                    alert(`Imported: ${result.imported || 0}, Skipped duplicates: ${result.skipped || 0}`);
+                  } catch (err) { setError(err.message); }
+                  setImportSaving(false);
+                }}
+                className="btn-primary"
+              >
+                {importSaving ? <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" /> : <Upload size={16} />}
+                Import {importData.rows.filter(r => r.selected).length} Contacts
+              </button>
+            )}
+          </div>
         </div>
       </Modal>
     </div>

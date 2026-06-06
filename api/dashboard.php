@@ -26,17 +26,18 @@ $hasPerm = function($section) use ($isAdmin, $userPerms) {
     return in_array($section, $userPerms);
 };
 
-// Total members by status
-$memberStats = ['total' => 0, 'active' => 0, 'inactive' => 0, 'visitors' => 0, 'non_member_attendees' => 0];
+// Total members by status (church_member only) + community count
+$memberStats = ['total' => 0, 'active' => 0, 'inactive' => 0, 'visitors' => 0, 'non_member_attendees' => 0, 'community' => 0];
 $newThisMonth = 0;
 if ($hasPerm('members')) {
     $memberStats = $db->query("
         SELECT
-            COUNT(*) as total,
-            COUNT(CASE WHEN status = 'active' THEN 1 END) as active,
-            COUNT(CASE WHEN status = 'inactive' THEN 1 END) as inactive,
-            COUNT(CASE WHEN status = 'visitor' THEN 1 END) as visitors,
-            COUNT(CASE WHEN status = 'non_member_attendee' THEN 1 END) as non_member_attendees
+            COUNT(CASE WHEN person_type = 'church_member' OR person_type IS NULL THEN 1 END) as total,
+            COUNT(CASE WHEN (person_type = 'church_member' OR person_type IS NULL) AND status = 'active' THEN 1 END) as active,
+            COUNT(CASE WHEN (person_type = 'church_member' OR person_type IS NULL) AND status = 'inactive' THEN 1 END) as inactive,
+            COUNT(CASE WHEN (person_type = 'church_member' OR person_type IS NULL) AND status = 'visitor' THEN 1 END) as visitors,
+            COUNT(CASE WHEN (person_type = 'church_member' OR person_type IS NULL) AND status = 'non_member_attendee' THEN 1 END) as non_member_attendees,
+            COUNT(CASE WHEN person_type = 'community' THEN 1 END) as community
         FROM members
     ")->fetch();
 
@@ -189,6 +190,7 @@ jsonResponse([
         'inactive' => (int)($memberStats['inactive'] ?? 0),
         'visitors' => (int)($memberStats['visitors'] ?? 0),
         'non_member_attendees' => (int)($memberStats['non_member_attendees'] ?? 0),
+        'community' => (int)($memberStats['community'] ?? 0),
         'new_this_month' => (int)$newThisMonth,
     ],
     'attendance' => [

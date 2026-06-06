@@ -9,7 +9,7 @@ import {
 
 const navItems = [
   { path: '/system/public/', icon: LayoutDashboard, label: 'Dashboard', perm: 'dashboard' },
-  { path: '/system/public/members', icon: Users, label: 'Members', perm: 'members' },
+  { path: '/system/public/members', icon: Users, label: 'People', perm: 'members' },
   { path: '/system/public/households', icon: Home, label: 'Households', perm: 'households' },
   { path: '/system/public/groups', icon: FolderOpen, label: 'Groups', perm: 'groups' },
   { path: '/system/public/attendance', icon: UserCheck, label: 'Attendance', perm: 'attendance' },

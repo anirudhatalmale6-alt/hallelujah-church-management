@@ -114,6 +114,7 @@ export const members = {
   create: (data) => request('members.php', { method: 'POST', body: data }),
   update: (id, data) => request('members.php', { method: 'PUT', body: data, params: { id } }),
   delete: (id) => request('members.php', { method: 'DELETE', params: { id } }),
+  import: (contacts) => request('members.php', { method: 'POST', body: { contacts }, params: { action: 'import' } }),
 };
 
 // Services

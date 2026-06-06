@@ -71,6 +71,7 @@ switch ($method) {
             $search = $_GET['search'] ?? '';
             $status = $_GET['status'] ?? '';
             $family_group = $_GET['family_group'] ?? '';
+            $person_type = $_GET['person_type'] ?? '';
             $page = max(1, (int)($_GET['page'] ?? 1));
             $limit = min(100, max(10, (int)($_GET['limit'] ?? 50)));
             $offset = ($page - 1) * $limit;
@@ -90,6 +91,10 @@ switch ($method) {
             if ($family_group) {
                 $where[] = "FIND_IN_SET(?, REPLACE(family_group, ', ', ',')) > 0";
                 $params[] = $family_group;
+            }
+            if ($person_type) {
+                $where[] = "person_type = ?";
+                $params[] = $person_type;
             }
 
             $whereClause = $where ? 'WHERE ' . implode(' AND ', $where) : '';
@@ -129,6 +134,74 @@ switch ($method) {
         break;
 
     case 'POST':
+        // Handle bulk import action
+        if (isset($_GET['action']) && $_GET['action'] === 'import') {
+            $data = getRequestBody();
+            $contacts = $data['contacts'] ?? [];
+            if (!is_array($contacts) || empty($contacts)) {
+                jsonResponse(['error' => 'contacts array is required'], 400);
+            }
+
+            $imported = 0;
+            $skipped = 0;
+            $errors = [];
+
+            // Get existing emails for duplicate detection
+            $existingEmails = [];
+            $emailStmt = $db->query("SELECT LOWER(email) FROM members WHERE email IS NOT NULL AND email != ''");
+            while ($row = $emailStmt->fetchColumn()) {
+                $existingEmails[$row] = true;
+            }
+
+            $insertStmt = $db->prepare("
+                INSERT INTO members (first_name, last_name, email, phone, person_type, import_source, status)
+                VALUES (?, ?, ?, ?, ?, ?, 'active')
+            ");
+
+            foreach ($contacts as $i => $contact) {
+                if (empty($contact['first_name']) || empty($contact['last_name'])) {
+                    $errors[] = "Row $i: first_name and last_name are required";
+                    $skipped++;
+                    continue;
+                }
+
+                $email = !empty($contact['email']) ? trim($contact['email']) : null;
+
+                // Skip duplicates by email
+                if ($email && isset($existingEmails[strtolower($email)])) {
+                    $skipped++;
+                    continue;
+                }
+
+                try {
+                    $insertStmt->execute([
+                        trim($contact['first_name']),
+                        trim($contact['last_name']),
+                        $email,
+                        $contact['phone'] ?? null,
+                        $contact['person_type'] ?? 'community',
+                        $contact['import_source'] ?? null,
+                    ]);
+                    $imported++;
+                    // Track newly inserted email to avoid duplicates within same batch
+                    if ($email) {
+                        $existingEmails[strtolower($email)] = true;
+                    }
+                } catch (Exception $e) {
+                    $errors[] = "Row $i: " . $e->getMessage();
+                    $skipped++;
+                }
+            }
+
+            jsonResponse([
+                'message' => "Import complete: $imported imported, $skipped skipped",
+                'imported' => $imported,
+                'skipped' => $skipped,
+                'errors' => $errors,
+            ]);
+            break;
+        }
+
         $data = getRequestBody();
         $error = validateRequired($data, ['first_name', 'last_name']);
         if ($error) {
@@ -136,8 +209,8 @@ switch ($method) {
         }
 
         $stmt = $db->prepare("
-            INSERT INTO members (first_name, last_name, email, phone, address, city, state, zip, gender, date_of_birth, family_group, household_id, household_role, membership_date, status, notes, photo_url, baptism_date, salvation_date, first_visit_date, membership_class_date, dedication_date, wedding_date)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO members (first_name, last_name, email, phone, address, city, state, zip, gender, date_of_birth, family_group, household_id, household_role, membership_date, status, notes, photo_url, baptism_date, salvation_date, first_visit_date, membership_class_date, dedication_date, wedding_date, person_type)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ");
         $stmt->execute([
             trim($data['first_name']),
@@ -163,6 +236,7 @@ switch ($method) {
             $data['membership_class_date'] ?? null,
             $data['dedication_date'] ?? null,
             $data['wedding_date'] ?? null,
+            $data['person_type'] ?? 'church_member',
         ]);
 
         $newId = $db->lastInsertId();
@@ -195,7 +269,8 @@ switch ($method) {
             'household_id', 'household_role',
             'membership_date', 'status', 'notes', 'photo_url',
             'baptism_date', 'salvation_date', 'first_visit_date',
-            'membership_class_date', 'dedication_date', 'wedding_date'
+            'membership_class_date', 'dedication_date', 'wedding_date',
+            'person_type'
         ];
 
         foreach ($allowedFields as $field) {

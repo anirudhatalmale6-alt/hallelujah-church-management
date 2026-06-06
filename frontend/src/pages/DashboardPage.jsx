@@ -86,11 +86,21 @@ export default function DashboardPage() {
         {hasPermission('members') && (
           <StatCard
             icon={Users}
-            label="Total Members"
+            label="Church Members"
             value={data.members.total}
             sub={`${data.members.active} active`}
             color="bg-blue-100 text-blue-600"
-            to="/system/public/members"
+            to="/system/public/members?person_type=church_member"
+          />
+        )}
+        {hasPermission('members') && data.members.community > 0 && (
+          <StatCard
+            icon={UserPlus}
+            label="Community"
+            value={data.members.community}
+            sub="contacts"
+            color="bg-amber-100 text-amber-600"
+            to="/system/public/members?person_type=community"
           />
         )}
         {hasPermission('members') && (
