@@ -9,41 +9,46 @@ if ($secret !== 'hitc-migrate-2026') {
 $db = getDB();
 $results = [];
 
+// Include the calcAccountBalance function
+function calcBal($db, $accountId) {
+    $accStmt = $db->prepare("SELECT opening_balance FROM accounts WHERE id = ?");
+    $accStmt->execute([$accountId]);
+    $opening = (float)$accStmt->fetchColumn();
+
+    $donations = (float)$db->query("SELECT COALESCE(SUM(amount), 0) FROM donations WHERE routed_account_id = $accountId")->fetchColumn();
+
+    $expenses = 0;
+    try { $expenses = (float)$db->query("SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE source_account_id = $accountId")->fetchColumn(); } catch (Exception $e) {}
+
+    $ledger = 0;
+    try { $ledger = (float)$db->query("SELECT COALESCE(SUM(amount), 0) FROM account_ledger WHERE account_id = $accountId AND entry_type != 'opening' AND reference_type != 'donation' AND reference_type != 'expense'")->fetchColumn(); } catch (Exception $e) {}
+
+    return $opening + $donations - $expenses + $ledger;
+}
+
 try {
-    // Reconcile all asset/liability leaf account balances
     $accounts = $db->query("
-        SELECT a.id, a.name, a.account_type, a.opening_balance, a.current_balance
+        SELECT a.id, a.name, a.opening_balance, a.current_balance
         FROM accounts a
         WHERE a.account_type IN ('asset', 'liability')
         AND (SELECT COUNT(*) FROM accounts c WHERE c.parent_id = a.id) = 0
+        AND a.parent_id IS NOT NULL
     ")->fetchAll();
 
     foreach ($accounts as $acc) {
-        $accId = (int)$acc['id'];
+        $correct = calcBal($db, (int)$acc['id']);
+        $old = (float)$acc['current_balance'];
         $opening = (float)$acc['opening_balance'];
 
-        // Sum ALL non-opening ledger entries (includes transfers, withdrawals, deposits)
-        $ledgerSum = (float)$db->query("SELECT COALESCE(SUM(amount), 0) FROM account_ledger WHERE account_id = $accId AND entry_type != 'opening'")->fetchColumn();
+        $db->prepare("UPDATE accounts SET current_balance = ? WHERE id = ?")->execute([$correct, $acc['id']]);
 
-        // Find routed donations that DON'T have a corresponding ledger entry
-        // (old donations recorded before the ledger system)
-        $unledgeredDonations = (float)$db->query("
-            SELECT COALESCE(SUM(d.amount), 0) FROM donations d
-            WHERE d.routed_account_id = $accId
-            AND NOT EXISTS (SELECT 1 FROM account_ledger al WHERE al.reference_type = 'donation' AND al.reference_id = d.id AND al.account_id = $accId)
-        ")->fetchColumn();
+        // Count transactions
+        $donCount = (int)$db->query("SELECT COUNT(*) FROM donations WHERE routed_account_id = {$acc['id']}")->fetchColumn();
+        $expCount = 0;
+        try { $expCount = (int)$db->query("SELECT COUNT(*) FROM expenses WHERE source_account_id = {$acc['id']}")->fetchColumn(); } catch (Exception $e) {}
 
-        $correctBalance = $opening + $ledgerSum + $unledgeredDonations;
-        $oldBalance = (float)$acc['current_balance'];
-
-        if (abs($correctBalance - $oldBalance) > 0.001) {
-            $db->prepare("UPDATE accounts SET current_balance = ? WHERE id = ?")->execute([$correctBalance, $accId]);
-            $results[] = "{$acc['name']}: \${$oldBalance} -> \${$correctBalance} (opening: {$opening}, ledger: {$ledgerSum}, unledgered donations: {$unledgeredDonations})";
-        } else {
-            $results[] = "{$acc['name']}: \${$oldBalance} OK";
-        }
+        $results[] = "{$acc['name']}: opening={$opening}, donations={$donCount}, expenses={$expCount}, old_bal={$old}, new_bal={$correct}";
     }
-
 } catch (Exception $e) {
     $results[] = 'Error: ' . $e->getMessage();
 }

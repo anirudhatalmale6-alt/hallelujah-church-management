@@ -8,6 +8,26 @@ $action = $_GET['action'] ?? '';
 $id = isset($_GET['id']) ? (int)$_GET['id'] : null;
 $db = getDB();
 
+// Calculate account balance from actual transactions (single source of truth)
+function calcAccountBalance($db, $accountId, $upToDate = null) {
+    $accStmt = $db->prepare("SELECT opening_balance FROM accounts WHERE id = ?");
+    $accStmt->execute([$accountId]);
+    $opening = (float)$accStmt->fetchColumn();
+
+    $dateCond = $upToDate ? " AND donation_date <= '$upToDate'" : "";
+    $donations = (float)$db->query("SELECT COALESCE(SUM(amount), 0) FROM donations WHERE routed_account_id = $accountId $dateCond")->fetchColumn();
+
+    $dateCond2 = $upToDate ? " AND expense_date <= '$upToDate'" : "";
+    $expenses = 0;
+    try { $expenses = (float)$db->query("SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE source_account_id = $accountId $dateCond2")->fetchColumn(); } catch (Exception $e) {}
+
+    $dateCond3 = $upToDate ? " AND entry_date <= '$upToDate'" : "";
+    $ledger = 0;
+    try { $ledger = (float)$db->query("SELECT COALESCE(SUM(amount), 0) FROM account_ledger WHERE account_id = $accountId AND entry_type != 'opening' AND reference_type != 'donation' AND reference_type != 'expense' $dateCond3")->fetchColumn(); } catch (Exception $e) {}
+
+    return $opening + $donations - $expenses + $ledger;
+}
+
 switch ($method) {
     case 'GET':
         // --- CHART OF ACCOUNTS ---
@@ -29,6 +49,15 @@ switch ($method) {
             ");
             $stmt->execute($params);
             $accounts = $stmt->fetchAll();
+
+            // Recalculate balances for asset/liability leaf accounts
+            foreach ($accounts as &$acc) {
+                if (in_array($acc['account_type'], ['asset', 'liability']) && (int)$acc['child_count'] === 0 && $acc['parent_id']) {
+                    $acc['current_balance'] = calcAccountBalance($db, (int)$acc['id']);
+                }
+            }
+            unset($acc);
+
             jsonResponse(['accounts' => $accounts]);
         }
 
@@ -56,34 +85,12 @@ switch ($method) {
             $account = $stmt->fetch();
             if (!$account) jsonResponse(['error' => 'Account not found'], 404);
 
+            // Calculate balance from formula
+            $account['current_balance'] = calcAccountBalance($db, $id);
+
             $transactions = [];
 
-            // Ledger entries (exclude donation refs to avoid duplicates)
-            try {
-                $ledgerStmt = $db->prepare("
-                    SELECT al.*, u.name as created_by_name
-                    FROM account_ledger al
-                    LEFT JOIN users u ON u.id = al.created_by
-                    WHERE al.account_id = ?
-                    AND al.entry_date BETWEEN ? AND ?
-                    AND al.reference_type != 'donation'
-                    ORDER BY al.entry_date DESC, al.id DESC
-                ");
-                $ledgerStmt->execute([$id, $dateFrom, $dateTo]);
-                foreach ($ledgerStmt->fetchAll() as $entry) {
-                    $transactions[] = [
-                        'type' => $entry['entry_type'],
-                        'date' => $entry['entry_date'],
-                        'description' => $entry['description'],
-                        'amount' => (float)$entry['amount'],
-                        'reference' => $entry['reference_type'] . ($entry['reference_id'] ? '#' . $entry['reference_id'] : ''),
-                        'notes' => '',
-                        'created_by' => $entry['created_by_name'] ?? '',
-                    ];
-                }
-            } catch (Exception $e) {}
-
-            // Routed donations (with donor names)
+            // Routed donations
             try {
                 $routedStmt = $db->prepare("
                     SELECT d.donation_date, d.amount,
@@ -109,6 +116,56 @@ switch ($method) {
                 }
             } catch (Exception $e) {}
 
+            // Expenses paid from this account
+            try {
+                $expStmt = $db->prepare("
+                    SELECT e.expense_date as donation_date, -e.amount as amount,
+                        CONCAT(ec.name, ' - ', COALESCE(e.vendor, 'Expense')) as description
+                    FROM expenses e
+                    JOIN expense_categories ec ON ec.id = e.category_id
+                    WHERE e.source_account_id = ? AND e.expense_date BETWEEN ? AND ?
+                    ORDER BY e.expense_date DESC
+                ");
+                $expStmt->execute([$id, $dateFrom, $dateTo]);
+                foreach ($expStmt->fetchAll() as $d) {
+                    $transactions[] = [
+                        'type' => 'withdrawal',
+                        'date' => $d['donation_date'],
+                        'description' => $d['description'],
+                        'amount' => (float)$d['amount'],
+                        'reference' => '',
+                        'notes' => '',
+                        'created_by' => '',
+                    ];
+                }
+            } catch (Exception $e) {}
+
+            // Transfer ledger entries (exclude donation/expense refs)
+            try {
+                $ledgerStmt = $db->prepare("
+                    SELECT al.*, u.name as created_by_name
+                    FROM account_ledger al
+                    LEFT JOIN users u ON u.id = al.created_by
+                    WHERE al.account_id = ?
+                    AND al.entry_date BETWEEN ? AND ?
+                    AND al.entry_type != 'opening'
+                    AND al.reference_type NOT IN ('donation', 'expense')
+                    ORDER BY al.entry_date DESC
+                ");
+                $ledgerStmt->execute([$id, $dateFrom, $dateTo]);
+                foreach ($ledgerStmt->fetchAll() as $entry) {
+                    $transactions[] = [
+                        'type' => $entry['entry_type'],
+                        'date' => $entry['entry_date'],
+                        'description' => $entry['description'],
+                        'amount' => (float)$entry['amount'],
+                        'reference' => '',
+                        'notes' => '',
+                        'created_by' => $entry['created_by_name'] ?? '',
+                    ];
+                }
+            } catch (Exception $e) {}
+
             usort($transactions, function($a, $b) { return strcmp($b['date'], $a['date']); });
 
             jsonResponse([
@@ -127,9 +184,6 @@ switch ($method) {
                 $dateFrom = substr($dateTo, 0, 4) . '-01-01';
             }
 
-            $isCurrentDate = ($dateTo >= date('Y-m-d'));
-            $balanceStmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) FROM account_ledger WHERE account_id = ? AND entry_date <= ?");
-
             $fetchAccounts = function($type) use ($db) {
                 return $db->query("
                     SELECT a.*, (SELECT COUNT(*) FROM accounts c WHERE c.parent_id = a.id) as child_count
@@ -142,14 +196,12 @@ switch ($method) {
             $liabilities = $fetchAccounts('liability');
             $equity = $fetchAccounts('equity');
 
-            $calcBalance = function(&$accounts) use ($balanceStmt, $dateTo, $isCurrentDate) {
+            $calcBalance = function(&$accounts) use ($db, $dateTo) {
                 foreach ($accounts as &$acc) {
-                    if ($isCurrentDate) {
-                        $acc['calculated_balance'] = (float)$acc['current_balance'];
+                    if ((int)$acc['child_count'] === 0 && $acc['parent_id']) {
+                        $acc['calculated_balance'] = calcAccountBalance($db, (int)$acc['id'], $dateTo);
                     } else {
-                        $balanceStmt->execute([$acc['id'], $dateTo]);
-                        $ledgerBal = (float)$balanceStmt->fetchColumn();
-                        $acc['calculated_balance'] = $ledgerBal != 0 ? $ledgerBal : (float)$acc['current_balance'];
+                        $acc['calculated_balance'] = 0;
                     }
                 }
                 unset($acc);
@@ -266,33 +318,13 @@ switch ($method) {
                 }
             } else {
                 // For asset/liability/equity accounts
-                // Opening balance = account's opening_balance + any pre-period non-opening, non-donation ledger entries + pre-period routed donations
-                $openingBalance = (float)$account['opening_balance'];
-                $preLedger = $db->prepare("SELECT COALESCE(SUM(amount), 0) FROM account_ledger WHERE account_id = ? AND entry_date < ? AND entry_type != 'opening' AND reference_type != 'donation'");
-                $preLedger->execute([$id, $dateFrom]);
-                $openingBalance += (float)$preLedger->fetchColumn();
-                try {
-                    $preDonStmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) FROM donations WHERE routed_account_id = ? AND donation_date < ?");
-                    $preDonStmt->execute([$id, $dateFrom]);
-                    $openingBalance += (float)$preDonStmt->fetchColumn();
-                } catch (Exception $e) {}
+                // Opening balance = calculated balance as of day before period start
+                $dayBefore = date('Y-m-d', strtotime($dateFrom . ' -1 day'));
+                $openingBalance = calcAccountBalance($db, $id, $dayBefore);
 
-                // Period entries: exclude opening entries AND donation refs (donations shown from routed query)
-                $entriesStmt = $db->prepare("
-                    SELECT al.id, al.entry_date, al.entry_type, al.amount, al.description,
-                        al.reference_type, al.reference_id, u.name as created_by_name,
-                        'ledger' as source
-                    FROM account_ledger al
-                    LEFT JOIN users u ON u.id = al.created_by
-                    WHERE al.account_id = ? AND al.entry_date BETWEEN ? AND ?
-                    AND al.entry_type != 'opening'
-                    AND al.reference_type != 'donation'
-                    ORDER BY al.entry_date ASC, al.id ASC
-                ");
-                $entriesStmt->execute([$id, $dateFrom, $dateTo]);
-                $entries = $entriesStmt->fetchAll();
+                $entries = [];
 
-                // Also add donations routed to this account
+                // Routed donations in period
                 try {
                     $routedStmt = $db->prepare("
                         SELECT d.id, d.donation_date as entry_date, 'deposit' as entry_type, d.amount,
@@ -308,8 +340,41 @@ switch ($method) {
                         ORDER BY d.donation_date ASC
                     ");
                     $routedStmt->execute([$id, $dateFrom, $dateTo]);
-                    $routed = $routedStmt->fetchAll();
-                    if (!empty($routed)) $entries = array_merge($entries, $routed);
+                    $entries = array_merge($entries, $routedStmt->fetchAll());
+                } catch (Exception $e) {}
+
+                // Expenses paid from this account in period
+                try {
+                    $expFromStmt = $db->prepare("
+                        SELECT e.id, e.expense_date as entry_date, 'withdrawal' as entry_type, -e.amount as amount,
+                            CONCAT(COALESCE(e.vendor, ''), ' - ', ec.name) as description,
+                            u.name as created_by_name,
+                            'expense' as source, 'expense' as reference_type, e.id as reference_id
+                        FROM expenses e
+                        JOIN expense_categories ec ON ec.id = e.category_id
+                        LEFT JOIN users u ON u.id = e.recorded_by
+                        WHERE e.source_account_id = ? AND e.expense_date BETWEEN ? AND ?
+                        ORDER BY e.expense_date ASC
+                    ");
+                    $expFromStmt->execute([$id, $dateFrom, $dateTo]);
+                    $entries = array_merge($entries, $expFromStmt->fetchAll());
+                } catch (Exception $e) {}
+
+                // Transfer ledger entries (exclude donation/expense refs - already covered above)
+                try {
+                    $ledgerStmt = $db->prepare("
+                        SELECT al.id, al.entry_date, al.entry_type, al.amount, al.description,
+                            al.reference_type, al.reference_id, u.name as created_by_name,
+                            'ledger' as source
+                        FROM account_ledger al
+                        LEFT JOIN users u ON u.id = al.created_by
+                        WHERE al.account_id = ? AND al.entry_date BETWEEN ? AND ?
+                        AND al.entry_type != 'opening'
+                        AND al.reference_type NOT IN ('donation', 'expense')
+                        ORDER BY al.entry_date ASC, al.id ASC
+                    ");
+                    $ledgerStmt->execute([$id, $dateFrom, $dateTo]);
+                    $entries = array_merge($entries, $ledgerStmt->fetchAll());
                 } catch (Exception $e) {}
 
                 usort($entries, function($a, $b) { return strcmp($a['entry_date'], $b['entry_date']); });
@@ -1458,19 +1523,14 @@ switch ($method) {
 
             $accountId = (int)$data['account_id'];
             $amount = (float)$data['amount'];
-            $asOfDate = $data['as_of_date'] ?? date('Y-m-d');
 
             try {
-                // Directly set both opening_balance and current_balance
-                $db->prepare("UPDATE accounts SET opening_balance = ?, current_balance = ? WHERE id = ?")
-                    ->execute([$amount, $amount, $accountId]);
+                // Set opening_balance only, then recalculate current_balance from transactions
+                $db->prepare("UPDATE accounts SET opening_balance = ? WHERE id = ?")->execute([$amount, $accountId]);
+                $newBalance = calcAccountBalance($db, $accountId);
+                $db->prepare("UPDATE accounts SET current_balance = ? WHERE id = ?")->execute([$newBalance, $accountId]);
 
-                // Also update/create ledger entry for historical tracking
-                $db->prepare("DELETE FROM account_ledger WHERE account_id = ? AND entry_type = 'opening'")->execute([$accountId]);
-                $db->prepare("INSERT INTO account_ledger (account_id, entry_date, entry_type, amount, description, reference_type, created_by) VALUES (?, ?, 'opening', ?, 'Opening balance', 'opening', ?)")
-                    ->execute([$accountId, $asOfDate, $amount, $currentUser['user_id']]);
-
-                jsonResponse(['message' => 'Balance set to ' . number_format($amount, 2), 'current_balance' => $amount], 201);
+                jsonResponse(['message' => 'Opening balance set to ' . number_format($amount, 2) . '. Current balance: ' . number_format($newBalance, 2), 'current_balance' => $newBalance], 201);
             } catch (Exception $e) {
                 jsonResponse(['error' => 'Failed: ' . $e->getMessage()], 500);
             }
