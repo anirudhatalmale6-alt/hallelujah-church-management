@@ -336,4 +336,15 @@ export const messaging = {
   testEmail: (email) => request('messaging.php', { method: 'POST', body: { email }, params: { action: 'test_email' } }),
 };
 
+// Surveys
+export const surveys = {
+  list: () => request('surveys.php'),
+  get: (id) => request('surveys.php', { params: { action: 'public', id } }),
+  create: (data) => request('surveys.php', { method: 'POST', body: data }),
+  update: (id, data) => request('surveys.php', { method: 'PUT', body: data, params: { id } }),
+  delete: (id) => request('surveys.php', { method: 'DELETE', params: { id } }),
+  responses: (id) => request('surveys.php', { params: { action: 'responses', id } }),
+  respond: (data) => request('surveys.php', { method: 'POST', body: data, params: { action: 'respond' } }),
+};
+
 export { getToken, setToken, removeToken, getUser, setUser, ApiError };

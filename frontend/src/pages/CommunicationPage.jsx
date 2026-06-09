@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { messaging as msgApi, members as membersApi, groups as groupsApi } from '../utils/api';
+import { messaging as msgApi, members as membersApi, groups as groupsApi, surveys as surveyApi } from '../utils/api';
 import { useAuth } from '../contexts/AuthContext';
 import Modal from '../components/Modal';
 import Pagination from '../components/Pagination';
 import {
-  Send, Mail, MessageSquare, Settings, Plus, Trash2, Eye, Check, X,
-  AlertCircle, Search, Users, Clock, CheckCircle, XCircle, Filter
+  Send, Mail, MessageSquare, Settings, Plus, Trash2, Eye, Check, X, Edit2,
+  AlertCircle, Search, Users, Clock, CheckCircle, XCircle, Filter,
+  QrCode, ClipboardList, BarChart3
 } from 'lucide-react';
 
 const typeColors = { sent: 'bg-green-100 text-green-700', draft: 'bg-gray-100 text-gray-700', queued: 'bg-blue-100 text-blue-700', sending: 'bg-amber-100 text-amber-700', failed: 'bg-red-100 text-red-700' };
@@ -19,6 +20,8 @@ export default function CommunicationPage() {
   const tabs = [
     { key: 'compose', label: 'Compose', icon: Send },
     { key: 'sent', label: 'Sent Messages', icon: Mail },
+    { key: 'surveys', label: 'Surveys', icon: ClipboardList },
+    { key: 'qrcode', label: 'QR Codes', icon: QrCode },
     ...(isAdmin ? [{ key: 'settings', label: 'Settings', icon: Settings }] : []),
   ];
 
@@ -55,6 +58,8 @@ export default function CommunicationPage() {
 
       {tab === 'compose' && <ComposeTab setError={setError} setMessage={setMessage} />}
       {tab === 'sent' && <SentTab setError={setError} />}
+      {tab === 'surveys' && <SurveysTab setError={setError} setMessage={setMessage} />}
+      {tab === 'qrcode' && <QRCodeTab />}
       {tab === 'settings' && isAdmin && <SettingsTab setError={setError} setMessage={setMessage} />}
     </div>
   );
@@ -482,5 +487,248 @@ function SettingsTab({ setError, setMessage }) {
         Save Configuration
       </button>
     </div>
+  );
+}
+
+/* ─── Surveys Tab ─── */
+function SurveysTab({ setError, setMessage }) {
+  const [surveysList, setSurveysList] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showCreate, setShowCreate] = useState(false);
+  const [editSurvey, setEditSurvey] = useState(null);
+  const [form, setForm] = useState({ title: '', description: '', questions: [{ text: '', type: 'text' }] });
+  const [saving, setSaving] = useState(false);
+  const [viewResponses, setViewResponses] = useState(null);
+  const [responses, setResponses] = useState([]);
+
+  const loadSurveys = async () => {
+    setLoading(true);
+    try { const d = await surveyApi.list(); setSurveysList(d.surveys || []); }
+    catch (err) { setError(err.message); }
+    setLoading(false);
+  };
+
+  useEffect(() => { loadSurveys(); }, []);
+
+  const addQuestion = () => setForm(f => ({ ...f, questions: [...f.questions, { text: '', type: 'text' }] }));
+  const updateQuestion = (idx, field, val) => setForm(f => ({ ...f, questions: f.questions.map((q, i) => i === idx ? { ...q, [field]: val } : q) }));
+  const removeQuestion = (idx) => setForm(f => ({ ...f, questions: f.questions.filter((_, i) => i !== idx) }));
+
+  const handleSave = async () => {
+    if (!form.title.trim() || form.questions.filter(q => q.text.trim()).length === 0) { setError('Title and at least one question required'); return; }
+    setSaving(true);
+    try {
+      const cleanQ = form.questions.filter(q => q.text.trim());
+      if (editSurvey) { await surveyApi.update(editSurvey.id, { ...form, questions: cleanQ }); }
+      else { await surveyApi.create({ ...form, questions: cleanQ, status: 'active' }); }
+      setMessage(editSurvey ? 'Survey updated' : 'Survey created');
+      setShowCreate(false); setEditSurvey(null);
+      setForm({ title: '', description: '', questions: [{ text: '', type: 'text' }] });
+      loadSurveys();
+    } catch (err) { setError(err.message); }
+    setSaving(false);
+  };
+
+  const toggleStatus = async (s) => {
+    try { await surveyApi.update(s.id, { status: s.status === 'active' ? 'closed' : 'active' }); loadSurveys(); }
+    catch (err) { setError(err.message); }
+  };
+
+  const handleDelete = async (id) => {
+    if (!confirm('Delete this survey and all responses?')) return;
+    try { await surveyApi.delete(id); setMessage('Deleted'); loadSurveys(); }
+    catch (err) { setError(err.message); }
+  };
+
+  const viewSurveyResponses = async (s) => {
+    setViewResponses(s);
+    try { const d = await surveyApi.responses(s.id); setResponses(d.responses || []); }
+    catch (err) { setResponses([]); }
+  };
+
+  const getSurveyLink = (s) => `${window.location.origin}/system/public/survey/${s.id}`;
+
+  return (
+    <>
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-lg font-semibold text-gray-900">Surveys</h2>
+        <button onClick={() => { setEditSurvey(null); setForm({ title: '', description: '', questions: [{ text: '', type: 'text' }] }); setShowCreate(true); }} className="btn-primary"><Plus size={16} /> Create Survey</button>
+      </div>
+
+      {loading ? (
+        <div className="flex items-center justify-center py-16"><div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary-700"></div></div>
+      ) : surveysList.length === 0 ? (
+        <div className="card text-center py-16"><ClipboardList size={48} className="text-gray-300 mx-auto mb-3" /><p className="text-gray-500">No surveys yet</p></div>
+      ) : (
+        <div className="space-y-3">
+          {surveysList.map(s => (
+            <div key={s.id} className="card">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="font-semibold text-gray-900">{s.title}</h3>
+                  {s.description && <p className="text-sm text-gray-500">{s.description}</p>}
+                  <div className="flex items-center gap-3 mt-2">
+                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${s.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>{s.status}</span>
+                    <span className="text-sm text-gray-500">{s.response_count || 0} responses</span>
+                    <span className="text-sm text-gray-400">{(s.questions || []).length} questions</span>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1">
+                  <button onClick={() => viewSurveyResponses(s)} className="p-2 text-gray-400 hover:text-primary-700 hover:bg-primary-50 rounded-lg" title="View Responses"><BarChart3 size={16} /></button>
+                  <button onClick={() => { navigator.clipboard.writeText(getSurveyLink(s)); setMessage('Survey link copied!'); }} className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg" title="Copy Link"><QrCode size={16} /></button>
+                  <button onClick={() => toggleStatus(s)} className="p-2 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg" title={s.status === 'active' ? 'Close' : 'Reopen'}>{s.status === 'active' ? <XCircle size={16} /> : <CheckCircle size={16} />}</button>
+                  <button onClick={() => { setEditSurvey(s); setForm({ title: s.title, description: s.description || '', questions: s.questions || [] }); setShowCreate(true); }} className="p-2 text-gray-400 hover:text-primary-700 hover:bg-primary-50 rounded-lg" title="Edit"><Edit2 size={16} /></button>
+                  <button onClick={() => handleDelete(s.id)} className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg" title="Delete"><Trash2 size={16} /></button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Create/Edit Survey Modal */}
+      <Modal isOpen={showCreate} onClose={() => setShowCreate(false)} title={editSurvey ? 'Edit Survey' : 'Create Survey'} size="lg">
+        <div className="space-y-4">
+          <div><label className="label">Title *</label><input className="input" placeholder="Survey title" value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} /></div>
+          <div><label className="label">Description</label><input className="input" placeholder="Optional description" value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} /></div>
+          <div>
+            <label className="label">Questions</label>
+            <div className="space-y-2">
+              {form.questions.map((q, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <span className="text-xs text-gray-400 w-6">{i + 1}.</span>
+                  <input className="input flex-1 py-1.5 text-sm" placeholder="Question text" value={q.text} onChange={e => updateQuestion(i, 'text', e.target.value)} />
+                  <select className="input w-28 py-1.5 text-sm" value={q.type} onChange={e => updateQuestion(i, 'type', e.target.value)}>
+                    <option value="text">Text</option>
+                    <option value="yes_no">Yes/No</option>
+                    <option value="rating">Rating 1-5</option>
+                    <option value="choice">Multiple Choice</option>
+                  </select>
+                  {form.questions.length > 1 && <button onClick={() => removeQuestion(i)} className="p-1 text-gray-400 hover:text-red-500"><X size={14} /></button>}
+                </div>
+              ))}
+            </div>
+            <button onClick={addQuestion} className="btn-secondary text-sm mt-2"><Plus size={14} /> Add Question</button>
+          </div>
+          <div className="flex justify-end gap-3 pt-2">
+            <button onClick={() => setShowCreate(false)} className="btn-secondary">Cancel</button>
+            <button onClick={handleSave} disabled={saving} className="btn-primary">{saving ? <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" /> : <Check size={16} />} {editSurvey ? 'Save' : 'Create'}</button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* View Responses Modal */}
+      <Modal isOpen={!!viewResponses} onClose={() => setViewResponses(null)} title={`Responses - ${viewResponses?.title || ''}`} size="lg">
+        {responses.length === 0 ? (
+          <div className="text-center py-12 text-gray-400">No responses yet</div>
+        ) : (
+          <div className="space-y-3 max-h-96 overflow-y-auto">
+            {responses.map((r, i) => (
+              <div key={r.id} className="border rounded-lg p-3">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm font-medium text-gray-900">{r.first_name ? `${r.first_name} ${r.last_name}` : (r.respondent_name || 'Anonymous')}</span>
+                  <span className="text-xs text-gray-400">{new Date(r.created_at).toLocaleDateString()}</span>
+                </div>
+                {(viewResponses?.questions || []).map((q, qi) => (
+                  <div key={qi} className="mb-1">
+                    <span className="text-xs text-gray-500">{q.text}:</span>
+                    <span className="text-sm text-gray-700 ml-2">{r.answers?.[qi] || '-'}</span>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        )}
+      </Modal>
+    </>
+  );
+}
+
+/* ─── QR Code Tab ─── */
+function QRCodeTab() {
+  const [qrText, setQrText] = useState('');
+  const [qrLabel, setQrLabel] = useState('');
+  const [qrSize, setQrSize] = useState(300);
+  const [generated, setGenerated] = useState([]);
+
+  const generateQR = () => {
+    if (!qrText.trim()) return;
+    const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=${qrSize}x${qrSize}&data=${encodeURIComponent(qrText)}`;
+    setGenerated(prev => [{ url: qrUrl, text: qrText, label: qrLabel || qrText, size: qrSize, id: Date.now() }, ...prev]);
+    setQrText('');
+    setQrLabel('');
+  };
+
+  const downloadQR = (qr) => {
+    const link = document.createElement('a');
+    link.href = qr.url;
+    link.download = `qr-${qr.label.replace(/\s+/g, '-').substring(0, 30)}.png`;
+    link.click();
+  };
+
+  const presets = [
+    { label: 'Church Website', value: 'https://hallelujahinthecity.org' },
+    { label: 'Church System', value: 'https://hallelujahinthecity.org/system/public/' },
+    { label: 'Google Maps', value: '' },
+    { label: 'Giving Page', value: '' },
+  ];
+
+  return (
+    <>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="card">
+          <h3 className="text-lg font-semibold text-gray-900 mb-4">Generate QR Code</h3>
+          <div className="space-y-4">
+            <div>
+              <label className="label">URL or Text *</label>
+              <input className="input" placeholder="https://example.com or any text" value={qrText} onChange={e => setQrText(e.target.value)} />
+            </div>
+            <div>
+              <label className="label">Label (for your reference)</label>
+              <input className="input" placeholder="e.g. Sunday Service Sign-Up" value={qrLabel} onChange={e => setQrLabel(e.target.value)} />
+            </div>
+            <div>
+              <label className="label">Size</label>
+              <select className="input w-auto" value={qrSize} onChange={e => setQrSize(parseInt(e.target.value))}>
+                <option value={200}>Small (200px)</option>
+                <option value={300}>Medium (300px)</option>
+                <option value={500}>Large (500px)</option>
+                <option value={800}>Extra Large (800px)</option>
+              </select>
+            </div>
+            <div>
+              <label className="label text-xs text-gray-400">Quick Presets</label>
+              <div className="flex gap-2 flex-wrap">
+                {presets.filter(p => p.value).map(p => (
+                  <button key={p.label} onClick={() => { setQrText(p.value); setQrLabel(p.label); }} className="px-3 py-1 text-xs bg-gray-100 text-gray-600 rounded-full hover:bg-gray-200">{p.label}</button>
+                ))}
+              </div>
+            </div>
+            <button onClick={generateQR} disabled={!qrText.trim()} className="btn-primary w-full"><QrCode size={16} /> Generate QR Code</button>
+          </div>
+        </div>
+
+        <div>
+          {generated.length === 0 ? (
+            <div className="card text-center py-16"><QrCode size={48} className="text-gray-300 mx-auto mb-3" /><p className="text-gray-500">Generate a QR code to see it here</p></div>
+          ) : (
+            <div className="space-y-4">
+              {generated.map(qr => (
+                <div key={qr.id} className="card text-center">
+                  <img src={qr.url} alt={qr.label} className="mx-auto mb-3 border rounded" style={{ width: Math.min(qr.size, 300), height: Math.min(qr.size, 300) }} />
+                  <p className="font-medium text-gray-900 mb-1">{qr.label}</p>
+                  <p className="text-xs text-gray-400 mb-3 break-all">{qr.text}</p>
+                  <div className="flex gap-2 justify-center">
+                    <button onClick={() => downloadQR(qr)} className="btn-secondary text-sm">Download PNG</button>
+                    <button onClick={() => { navigator.clipboard.writeText(qr.text); }} className="btn-secondary text-sm">Copy Link</button>
+                    <button onClick={() => setGenerated(prev => prev.filter(g => g.id !== qr.id))} className="btn-secondary text-sm text-red-600"><Trash2 size={14} /></button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </>
   );
 }
