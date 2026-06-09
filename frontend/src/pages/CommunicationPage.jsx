@@ -416,10 +416,13 @@ function SettingsTab({ setError, setMessage }) {
   }, []);
 
   const handleSave = async () => {
+    const toSave = {};
+    Object.entries(config).forEach(([k, v]) => { if (v && v.trim()) toSave[k] = v.trim(); });
+    if (Object.keys(toSave).length === 0) { setError('Please fill in at least one field'); return; }
     setSaving(true);
     try {
-      await msgApi.saveConfig(config);
-      setMessage('Configuration saved!');
+      const result = await msgApi.saveConfig(toSave);
+      setMessage(result.message || 'Configuration saved!');
     } catch (err) { setError(err.message); }
     setSaving(false);
   };
@@ -428,8 +431,8 @@ function SettingsTab({ setError, setMessage }) {
     if (!testEmail) { setError('Enter an email to test'); return; }
     try {
       const result = await msgApi.testEmail(testEmail);
-      if (result.success) setMessage('Test email sent! Check your inbox.');
-      else setError('Failed to send test email. Check your API key.');
+      if (result.success) setMessage(result.message || 'Test email sent! Check your inbox.');
+      else setError(result.message || 'Failed to send test email.');
     } catch (err) { setError(err.message); }
   };
 

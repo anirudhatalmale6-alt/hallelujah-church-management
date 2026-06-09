@@ -9,7 +9,7 @@ $id = isset($_GET['id']) ? (int)$_GET['id'] : null;
 $db = getDB();
 
 // SendGrid email sending
-function sendEmail($to, $toName, $from, $fromName, $subject, $htmlBody, $apiKey, $attachmentPath = null) {
+function sendEmail($to, $toName, $from, $fromName, $subject, $htmlBody, $apiKey, $attachmentPath = null, $returnDetails = false) {
     $data = [
         'personalizations' => [['to' => [['email' => $to, 'name' => $toName]]]],
         'from' => ['email' => $from, 'name' => $fromName],
@@ -34,8 +34,13 @@ function sendEmail($to, $toName, $from, $fromName, $subject, $htmlBody, $apiKey,
     ]);
     $response = curl_exec($ch);
     $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $curlError = curl_error($ch);
     curl_close($ch);
-    return $httpCode >= 200 && $httpCode < 300;
+    $success = $httpCode >= 200 && $httpCode < 300;
+    if ($returnDetails) {
+        return ['success' => $success, 'http_code' => $httpCode, 'response' => $response, 'curl_error' => $curlError];
+    }
+    return $success;
 }
 
 // Twilio SMS sending
@@ -59,8 +64,8 @@ function sendSMS($to, $body, $accountSid, $authToken, $fromNumber) {
 function getMessagingSettings($db) {
     $settings = [];
     try {
-        $rows = $db->query("SELECT setting_key, setting_value FROM settings WHERE setting_key LIKE 'msg_%'")->fetchAll();
-        foreach ($rows as $r) $settings[$r['setting_key']] = $r['setting_value'];
+        $rows = $db->query("SELECT `key` as k, `value` as v FROM settings WHERE `key` LIKE 'msg_%'")->fetchAll();
+        foreach ($rows as $r) $settings[$r['k']] = $r['v'];
     } catch (Exception $e) {}
     return $settings;
 }
@@ -122,13 +127,19 @@ switch ($method) {
             requireRole($currentUser, ['pastor', 'admin']);
             $data = getRequestBody();
             $keys = ['msg_sendgrid_key', 'msg_from_email', 'msg_from_name', 'msg_twilio_sid', 'msg_twilio_token', 'msg_twilio_number'];
+            $saved = [];
             foreach ($keys as $key) {
-                if (isset($data[$key])) {
-                    $db->prepare("INSERT INTO settings (setting_key, setting_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)")
-                        ->execute([$key, $data[$key]]);
+                if (isset($data[$key]) && $data[$key] !== '') {
+                    try {
+                        $db->prepare("DELETE FROM settings WHERE `key` = ?")->execute([$key]);
+                        $db->prepare("INSERT INTO settings (`key`, `value`) VALUES (?, ?)")->execute([$key, $data[$key]]);
+                        $saved[] = $key;
+                    } catch (Exception $e) {
+                        jsonResponse(['error' => "Failed to save $key: " . $e->getMessage()], 500);
+                    }
                 }
             }
-            jsonResponse(['message' => 'Configuration saved']);
+            jsonResponse(['message' => 'Configuration saved (' . count($saved) . ' settings)', 'saved' => $saved]);
         }
 
         // Create and send message
@@ -267,16 +278,30 @@ switch ($method) {
             $testEmail = $data['email'] ?? $currentUser['email'] ?? '';
             if (!$testEmail) jsonResponse(['error' => 'Email address required'], 400);
 
-            $success = sendEmail(
+            $result = sendEmail(
                 $testEmail, 'Test',
                 $settings['msg_from_email'] ?? 'noreply@hallelujahinthecity.org',
                 $settings['msg_from_name'] ?? 'Hallelujah In The City',
                 'Test Email from Church Management',
                 '<h2>Test Email</h2><p>This is a test email from your Church Management System. If you received this, email is configured correctly!</p>',
-                $settings['msg_sendgrid_key']
+                $settings['msg_sendgrid_key'],
+                null, true
             );
 
-            jsonResponse(['success' => $success, 'message' => $success ? 'Test email sent!' : 'Failed to send test email']);
+            if ($result['success']) {
+                jsonResponse(['success' => true, 'message' => 'Test email sent! Check your inbox.']);
+            } else {
+                $errMsg = 'Failed to send.';
+                $body = json_decode($result['response'], true);
+                if (!empty($body['errors'])) {
+                    $errMsg = implode('; ', array_map(fn($e) => $e['message'] ?? '', $body['errors']));
+                } elseif ($result['curl_error']) {
+                    $errMsg = 'Connection error: ' . $result['curl_error'];
+                } else {
+                    $errMsg = 'SendGrid returned HTTP ' . $result['http_code'] . '. ' . ($result['response'] ?: 'Check your API key and from email.');
+                }
+                jsonResponse(['success' => false, 'message' => $errMsg]);
+            }
         }
 
         break;
