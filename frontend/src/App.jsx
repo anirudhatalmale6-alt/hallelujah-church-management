@@ -83,12 +83,35 @@ function AppRoutes() {
   );
 }
 
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { hasError: false, error: null }; }
+  static getDerivedStateFromError(error) { return { hasError: true, error }; }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen flex items-center justify-center bg-gray-50">
+          <div className="text-center p-8">
+            <h2 className="text-xl font-bold text-gray-900 mb-2">Something went wrong</h2>
+            <p className="text-gray-500 mb-4">{this.state.error?.message || 'An unexpected error occurred'}</p>
+            <button onClick={() => { this.setState({ hasError: false, error: null }); window.location.href = '/system/public/'; }} className="px-4 py-2 bg-primary-700 text-white rounded-lg">
+              Go to Dashboard
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export default function App() {
   return (
-    <BrowserRouter>
-      <AuthProvider>
-        <AppRoutes />
-      </AuthProvider>
-    </BrowserRouter>
+    <ErrorBoundary>
+      <BrowserRouter>
+        <AuthProvider>
+          <AppRoutes />
+        </AuthProvider>
+      </BrowserRouter>
+    </ErrorBoundary>
   );
 }

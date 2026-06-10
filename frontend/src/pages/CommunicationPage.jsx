@@ -132,34 +132,34 @@ function ComposeTab({ setError, setMessage }) {
     setSending(true);
     setError('');
     try {
-      const data = {
+      const sendData = {
         message_type: messageType,
         send_type: sendType,
-        subject,
-        body: messageType === 'email' ? body.replace(/\n/g, '<br>') : body,
+        subject: subject || '',
+        body: messageType === 'email' ? (body || '').replace(/\n/g, '<br>') : (body || ''),
         recipient_type: recipientType,
-        recipient_ids: recipientType === 'direct' ? [] : recipientIds,
-        group_name: groupName,
-        person_type: personType,
+        recipient_ids: recipientType === 'individual' ? recipientIds : [],
+        group_name: groupName || '',
+        person_type: personType || '',
         scheduled_at: sendType === 'scheduled' ? scheduledAt : null,
         recurring_pattern: sendType === 'recurring' ? recurringPattern : null,
         attachment_name: attachmentName || null,
       };
       if (recipientType === 'direct') {
-        data.direct_contacts = finalDirectContacts.map(c => {
+        sendData.direct_contacts = (finalDirectContacts || []).map(c => {
           if (typeof c === 'string') {
             return c.includes('@') ? { email: c, phone: null, name: c } : { email: null, phone: c, name: c };
           }
-          return c;
+          return { email: c?.email || null, phone: c?.phone || null, name: c?.name || 'Unknown' };
         });
-        if (saveToContacts && saveContactName.trim()) {
-          data.save_to_contacts = true;
-          data.save_contact_name = saveContactName.trim();
-          data.save_contact_type = saveContactType;
+        if (saveToContacts && saveContactName && saveContactName.trim()) {
+          sendData.save_to_contacts = true;
+          sendData.save_contact_name = saveContactName.trim();
+          sendData.save_contact_type = saveContactType;
         }
       }
-      const result = await msgApi.send(data);
-      setMessage(result.message || 'Message sent!');
+      const result = await msgApi.send(sendData);
+      setMessage((result && result.message) ? result.message : 'Message sent!');
       setSubject('');
       setBody('');
       setRecipientIds([]);
@@ -170,7 +170,7 @@ function ComposeTab({ setError, setMessage }) {
       setAttachmentName('');
       setRecurringPattern('');
     } catch (err) {
-      setError(err.message);
+      setError(err && err.message ? err.message : 'Failed to send. Please try again.');
     }
     setSending(false);
   };
