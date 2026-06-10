@@ -167,6 +167,8 @@ export const reports = {
   directory: () => request('reports.php', { params: { action: 'directory' } }),
   attendanceSummary: (params) => request('reports.php', { params: { action: 'attendance_summary', ...params } }),
   departmentHealth: (params) => request('reports.php', { params: { action: 'department_health', ...params } }),
+  engagementByService: (params) => request('reports.php', { params: { action: 'engagement_by_service', ...params } }),
+  memberGrowthDetailed: (params) => request('reports.php', { params: { action: 'member_growth_detailed', ...params } }),
 };
 
 // Periods (closed months)

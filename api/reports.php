@@ -220,6 +220,127 @@ switch ($action) {
         ]);
         break;
 
+    case 'engagement_by_service':
+        $from = $_GET['from'] ?? date('Y-m-01', strtotime('-6 months'));
+        $to = $_GET['to'] ?? date('Y-m-d');
+        $serviceType = $_GET['service_type'] ?? '';
+
+        $typeWhere = $serviceType ? "AND s.type = ?" : "";
+        $typeParams = $serviceType ? [$from, $to, $serviceType] : [$from, $to];
+
+        // Summary by service type
+        $typeSummary = $db->prepare("
+            SELECT s.type,
+                COUNT(DISTINCT s.id) as service_count,
+                COALESCE(AVG(sub.attended), 0) as avg_attendance,
+                COALESCE(MAX(sub.attended), 0) as max_attendance,
+                COALESCE(MIN(sub.attended), 0) as min_attendance
+            FROM services s
+            LEFT JOIN (
+                SELECT a.service_id, COUNT(*) as attended
+                FROM attendance a WHERE a.status IN ('present', 'late')
+                GROUP BY a.service_id
+            ) sub ON sub.service_id = s.id
+            WHERE s.date BETWEEN ? AND ? $typeWhere
+            GROUP BY s.type
+            ORDER BY service_count DESC
+        ");
+        $typeSummary->execute($typeParams);
+        $byType = $typeSummary->fetchAll();
+
+        // Detailed services
+        $detailParams = $serviceType ? [$from, $to, $serviceType] : [$from, $to];
+        $detailStmt = $db->prepare("
+            SELECT s.id, s.name, s.date, s.time, s.type, s.visitor_count, s.head_count,
+                COUNT(CASE WHEN a.status IN ('present','late') THEN 1 END) as attended,
+                COUNT(a.id) as total_marked,
+                COALESCE(s.visitor_count, 0) as visitors
+            FROM services s
+            LEFT JOIN attendance a ON a.service_id = s.id
+            WHERE s.date BETWEEN ? AND ? $typeWhere
+            GROUP BY s.id
+            ORDER BY s.date DESC, s.time ASC
+        ");
+        $detailStmt->execute($detailParams);
+        $details = $detailStmt->fetchAll();
+
+        // People who attend multiple service types
+        $crossAttendance = $db->prepare("
+            SELECT m.id, m.first_name, m.last_name,
+                GROUP_CONCAT(DISTINCT s.type) as service_types,
+                COUNT(DISTINCT s.type) as type_count,
+                COUNT(CASE WHEN a.status IN ('present','late') THEN 1 END) as total_attended
+            FROM attendance a
+            JOIN members m ON m.id = a.member_id
+            JOIN services s ON s.id = a.service_id
+            WHERE s.date BETWEEN ? AND ? AND a.status IN ('present','late')
+            GROUP BY m.id
+            HAVING type_count > 1
+            ORDER BY type_count DESC, total_attended DESC
+            LIMIT 50
+        ");
+        $crossAttendance->execute([$from, $to]);
+        $crossAttenders = $crossAttendance->fetchAll();
+
+        // Top attenders per service type
+        $topByType = [];
+        foreach ($byType as $bt) {
+            $topStmt = $db->prepare("
+                SELECT m.id, m.first_name, m.last_name,
+                    COUNT(CASE WHEN a.status IN ('present','late') THEN 1 END) as times_attended
+                FROM attendance a
+                JOIN members m ON m.id = a.member_id
+                JOIN services s ON s.id = a.service_id
+                WHERE s.date BETWEEN ? AND ? AND s.type = ? AND a.status IN ('present','late')
+                GROUP BY m.id
+                ORDER BY times_attended DESC
+                LIMIT 10
+            ");
+            $topStmt->execute([$from, $to, $bt['type']]);
+            $topByType[$bt['type']] = $topStmt->fetchAll();
+        }
+
+        jsonResponse([
+            'by_type' => $byType,
+            'details' => $details,
+            'cross_attenders' => $crossAttenders,
+            'top_by_type' => $topByType,
+            'from' => $from,
+            'to' => $to,
+        ]);
+        break;
+
+    case 'member_growth_detailed':
+        $from = $_GET['from'] ?? date('Y-m-01', strtotime('-12 months'));
+        $to = $_GET['to'] ?? date('Y-m-d');
+
+        $growth = $db->prepare("
+            SELECT DATE_FORMAT(created_at, '%Y-%m') as month,
+                COUNT(*) as total_new,
+                COUNT(CASE WHEN person_type = 'church_member' THEN 1 END) as new_members,
+                COUNT(CASE WHEN person_type = 'community' THEN 1 END) as new_community,
+                COUNT(CASE WHEN person_type = 'companion' THEN 1 END) as new_companions
+            FROM members
+            WHERE created_at BETWEEN ? AND ?
+            GROUP BY DATE_FORMAT(created_at, '%Y-%m')
+            ORDER BY month ASC
+        ");
+        $growth->execute([$from, $to . ' 23:59:59']);
+
+        $totalsByType = $db->query("
+            SELECT person_type, status, COUNT(*) as count
+            FROM members
+            GROUP BY person_type, status
+        ")->fetchAll();
+
+        jsonResponse([
+            'monthly' => $growth->fetchAll(),
+            'totals_by_type' => $totalsByType,
+            'from' => $from,
+            'to' => $to,
+        ]);
+        break;
+
     default:
-        jsonResponse(['error' => 'Invalid action. Use: member_growth, engagement, inactive, directory, attendance_summary, department_health'], 400);
+        jsonResponse(['error' => 'Invalid action'], 400);
 }
