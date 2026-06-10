@@ -77,9 +77,17 @@ function ComposeTab({ setError, setMessage }) {
   const [body, setBody] = useState('');
   const [sendType, setSendType] = useState('now');
   const [scheduledAt, setScheduledAt] = useState('');
+  const [recurringPattern, setRecurringPattern] = useState('');
   const [sending, setSending] = useState(false);
   const [memberSearch, setMemberSearch] = useState('');
   const [configStatus, setConfigStatus] = useState(null);
+  const [directContacts, setDirectContacts] = useState([]);
+  const [directInput, setDirectInput] = useState('');
+  const [saveToContacts, setSaveToContacts] = useState(false);
+  const [saveContactName, setSaveContactName] = useState('');
+  const [saveContactType, setSaveContactType] = useState('community');
+  const [attachmentName, setAttachmentName] = useState('');
+  const [attachmentUploading, setAttachmentUploading] = useState(false);
 
   useEffect(() => {
     membersApi.list({ limit: 9999, sort: 'last_name' }).then(d => setMembersList(d.members || []));
@@ -101,6 +109,7 @@ function ComposeTab({ setError, setMessage }) {
     if (recipientType === 'individual') return recipientIds.length;
     if (recipientType === 'group') return membersList.filter(m => m.family_group && m.family_group.includes(groupName) && m.status === 'active').length;
     if (recipientType === 'person_type') return membersList.filter(m => m.person_type === personType && m.status === 'active').length;
+    if (recipientType === 'direct') return directContacts.length;
     if (recipientType === 'all') return membersList.filter(m => m.status === 'active').length;
     return 0;
   };
@@ -109,6 +118,8 @@ function ComposeTab({ setError, setMessage }) {
     if (!body.trim()) { setError('Message body is required'); return; }
     if (messageType === 'email' && !subject.trim()) { setError('Subject is required for email'); return; }
     if (recipientType === 'individual' && recipientIds.length === 0) { setError('Select at least one recipient'); return; }
+    if (recipientType === 'direct' && directContacts.length === 0) { setError('Add at least one email or phone number'); return; }
+    if (sendType === 'recurring' && !recurringPattern) { setError('Select a recurring pattern'); return; }
 
     setSending(true);
     setError('');
@@ -119,16 +130,32 @@ function ComposeTab({ setError, setMessage }) {
         subject,
         body: messageType === 'email' ? body.replace(/\n/g, '<br>') : body,
         recipient_type: recipientType,
-        recipient_ids: recipientIds,
+        recipient_ids: recipientType === 'direct' ? [] : recipientIds,
         group_name: groupName,
         person_type: personType,
         scheduled_at: sendType === 'scheduled' ? scheduledAt : null,
+        recurring_pattern: sendType === 'recurring' ? recurringPattern : null,
+        attachment_name: attachmentName || null,
       };
+      if (recipientType === 'direct') {
+        data.direct_contacts = directContacts;
+        if (saveToContacts && saveContactName.trim()) {
+          data.save_to_contacts = true;
+          data.save_contact_name = saveContactName.trim();
+          data.save_contact_type = saveContactType;
+        }
+      }
       const result = await msgApi.send(data);
       setMessage(result.message || 'Message sent!');
       setSubject('');
       setBody('');
       setRecipientIds([]);
+      setDirectContacts([]);
+      setDirectInput('');
+      setSaveToContacts(false);
+      setSaveContactName('');
+      setAttachmentName('');
+      setRecurringPattern('');
     } catch (err) {
       setError(err.message);
     }
@@ -164,6 +191,7 @@ function ComposeTab({ setError, setMessage }) {
                   <option value="individual">Select People</option>
                   <option value="group">Group</option>
                   <option value="person_type">By Type</option>
+                  <option value="direct">Direct (email/phone)</option>
                   <option value="all">Everyone (Active)</option>
                 </select>
               </div>
@@ -172,6 +200,7 @@ function ComposeTab({ setError, setMessage }) {
                 <select className="input" value={sendType} onChange={e => setSendType(e.target.value)}>
                   <option value="now">Send Now</option>
                   <option value="scheduled">Schedule</option>
+                  <option value="recurring">Recurring</option>
                 </select>
               </div>
             </div>
@@ -198,10 +227,70 @@ function ComposeTab({ setError, setMessage }) {
               </div>
             )}
 
+            {recipientType === 'direct' && (
+              <div className="mb-4 space-y-3">
+                <div>
+                  <label className="label">Enter Email or Phone</label>
+                  <div className="flex gap-2">
+                    <input className="input flex-1" placeholder="email@example.com or +1234567890" value={directInput} onChange={e => setDirectInput(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter' && directInput.trim()) { e.preventDefault(); setDirectContacts(prev => [...prev, directInput.trim()]); setDirectInput(''); } }} />
+                    <button type="button" className="btn-secondary" disabled={!directInput.trim()}
+                      onClick={() => { if (directInput.trim()) { setDirectContacts(prev => [...prev, directInput.trim()]); setDirectInput(''); } }}>
+                      <Plus size={14} /> Add
+                    </button>
+                  </div>
+                </div>
+                {directContacts.length > 0 && (
+                  <div className="flex flex-wrap gap-2">
+                    {directContacts.map((c, i) => (
+                      <span key={i} className="inline-flex items-center gap-1 px-2 py-1 bg-primary-50 text-primary-700 text-sm rounded-full">
+                        {c}
+                        <button type="button" onClick={() => setDirectContacts(prev => prev.filter((_, idx) => idx !== i))} className="hover:text-red-500"><X size={12} /></button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <div className="border border-gray-200 rounded-lg p-3 bg-gray-50">
+                  <label className="flex items-center gap-2 text-sm cursor-pointer">
+                    <input type="checkbox" checked={saveToContacts} onChange={e => setSaveToContacts(e.target.checked)} className="rounded" />
+                    Save to contacts
+                  </label>
+                  {saveToContacts && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
+                      <div>
+                        <label className="label text-xs">Name</label>
+                        <input className="input py-1.5 text-sm" placeholder="Contact name" value={saveContactName} onChange={e => setSaveContactName(e.target.value)} />
+                      </div>
+                      <div>
+                        <label className="label text-xs">Type</label>
+                        <select className="input py-1.5 text-sm" value={saveContactType} onChange={e => setSaveContactType(e.target.value)}>
+                          <option value="community">Community Contact</option>
+                          <option value="church_member">Church Member</option>
+                          <option value="companion">Companion</option>
+                        </select>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
             {sendType === 'scheduled' && (
               <div className="mb-4">
                 <label className="label">Schedule Date & Time</label>
                 <input type="datetime-local" className="input" value={scheduledAt} onChange={e => setScheduledAt(e.target.value)} />
+              </div>
+            )}
+
+            {sendType === 'recurring' && (
+              <div className="mb-4">
+                <label className="label">Recurring Pattern</label>
+                <select className="input" value={recurringPattern} onChange={e => setRecurringPattern(e.target.value)}>
+                  <option value="">-- Select pattern --</option>
+                  <option value="daily">Daily</option>
+                  <option value="weekly">Weekly</option>
+                  <option value="monthly">Monthly</option>
+                </select>
               </div>
             )}
 
@@ -216,6 +305,46 @@ function ComposeTab({ setError, setMessage }) {
               <label className="label">Message</label>
               <textarea className="input min-h-[200px]" placeholder={messageType === 'sms' ? 'Type your text message...' : 'Type your message...'} value={body} onChange={e => setBody(e.target.value)} />
               {messageType === 'sms' && <p className="text-xs text-gray-400 mt-1">{body.length}/160 characters {body.length > 160 ? `(${Math.ceil(body.length / 160)} segments)` : ''}</p>}
+            </div>
+
+            <div className="mb-4">
+              <label className="label">Attach File (JPEG, PDF)</label>
+              <div className="flex items-center gap-3">
+                <input type="file" accept=".jpg,.jpeg,.png,.pdf"
+                  className="input py-1.5 text-sm file:mr-3 file:py-1 file:px-3 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-primary-50 file:text-primary-700 hover:file:bg-primary-100"
+                  onChange={async (e) => {
+                    const file = e.target.files[0];
+                    if (!file) return;
+                    setAttachmentUploading(true);
+                    try {
+                      const formData = new FormData();
+                      formData.append('file', file);
+                      const resp = await fetch('/system/api/messaging.php?action=upload&_t=' + Date.now(), {
+                        method: 'POST',
+                        headers: { 'Authorization': 'Bearer ' + localStorage.getItem('hitc_token') },
+                        body: formData
+                      });
+                      const result = await resp.json();
+                      if (result.filename) {
+                        setAttachmentName(result.filename);
+                      } else {
+                        setError(result.error || 'Upload failed');
+                      }
+                    } catch (err) {
+                      setError('File upload failed: ' + err.message);
+                    }
+                    setAttachmentUploading(false);
+                  }}
+                />
+                {attachmentUploading && <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary-700" />}
+              </div>
+              {attachmentName && (
+                <div className="flex items-center gap-2 mt-2 text-sm text-green-700 bg-green-50 px-3 py-1.5 rounded-lg">
+                  <CheckCircle size={14} />
+                  <span className="truncate">{attachmentName}</span>
+                  <button type="button" onClick={() => setAttachmentName('')} className="ml-auto text-gray-400 hover:text-red-500"><X size={14} /></button>
+                </div>
+              )}
             </div>
 
             <div className="flex items-center justify-between">

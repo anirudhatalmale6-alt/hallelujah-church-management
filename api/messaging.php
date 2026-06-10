@@ -43,10 +43,21 @@ function sendEmail($to, $toName, $from, $fromName, $subject, $htmlBody, $apiKey,
     return $success;
 }
 
-// Twilio SMS sending
-function sendSMS($to, $body, $accountSid, $authToken, $fromNumber) {
+// Format phone to E.164
+function formatPhone($phone) {
+    $digits = preg_replace('/[^0-9]/', '', $phone);
+    if (strlen($digits) === 10) return '+1' . $digits;
+    if (strlen($digits) === 11 && $digits[0] === '1') return '+' . $digits;
+    if (strpos($phone, '+') === 0) return $phone;
+    return '+1' . $digits;
+}
+
+// Twilio SMS/MMS sending
+function sendSMS($to, $body, $accountSid, $authToken, $fromNumber, $mediaUrl = null, $returnDetails = false) {
+    $to = formatPhone($to);
     $url = "https://api.twilio.com/2010-04-01/Accounts/$accountSid/Messages.json";
     $data = ['To' => $to, 'From' => $fromNumber, 'Body' => $body];
+    if ($mediaUrl) $data['MediaUrl'] = $mediaUrl;
     $ch = curl_init($url);
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
@@ -56,8 +67,13 @@ function sendSMS($to, $body, $accountSid, $authToken, $fromNumber) {
     ]);
     $response = curl_exec($ch);
     $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $curlError = curl_error($ch);
     curl_close($ch);
-    return $httpCode >= 200 && $httpCode < 300;
+    $success = $httpCode >= 200 && $httpCode < 300;
+    if ($returnDetails) {
+        return ['success' => $success, 'http_code' => $httpCode, 'response' => $response, 'curl_error' => $curlError];
+    }
+    return $success;
 }
 
 // Get messaging settings
@@ -184,6 +200,18 @@ switch ($method) {
                 $stmt = $db->prepare("SELECT id, first_name, last_name, email, phone FROM members WHERE id IN ($placeholders)");
                 $stmt->execute($recipientIds);
                 $recipients = $stmt->fetchAll();
+            } elseif ($recipientType === 'direct') {
+                // Direct email/phone entry
+                $directContacts = $data['direct_contacts'] ?? [];
+                foreach ($directContacts as $dc) {
+                    $recipients[] = [
+                        'id' => null,
+                        'first_name' => $dc['name'] ?? 'Unknown',
+                        'last_name' => '',
+                        'email' => $dc['email'] ?? null,
+                        'phone' => $dc['phone'] ?? null,
+                    ];
+                }
             } elseif ($recipientType === 'group' && !empty($data['group_name'])) {
                 $stmt = $db->prepare("SELECT id, first_name, last_name, email, phone FROM members WHERE FIND_IN_SET(?, REPLACE(family_group, ', ', ',')) AND status = 'active'");
                 $stmt->execute([$data['group_name']]);
@@ -234,12 +262,23 @@ switch ($method) {
                     } elseif ($recp['channel'] === 'sms' && !empty($settings['msg_twilio_sid'])) {
                         $smsBody = strip_tags($body);
                         if (strlen($smsBody) > 1600) $smsBody = substr($smsBody, 0, 1597) . '...';
-                        $success = sendSMS(
+                        $mediaUrl = null;
+                        if ($attachmentPath && file_exists($attachmentPath)) {
+                            $mediaUrl = 'https://hallelujahinthecity.org/system/api/uploads/' . basename($attachmentPath);
+                        }
+                        $smsResult = sendSMS(
                             $recp['phone'], $smsBody,
                             $settings['msg_twilio_sid'],
                             $settings['msg_twilio_token'],
-                            $settings['msg_twilio_number']
+                            $settings['msg_twilio_number'],
+                            $mediaUrl, true
                         );
+                        $success = $smsResult['success'];
+                        if (!$success) {
+                            $errBody = json_decode($smsResult['response'], true);
+                            $errMsg = $errBody['message'] ?? ($smsResult['curl_error'] ?: 'Unknown error');
+                            $db->prepare("UPDATE message_recipients SET error_message = ? WHERE id = ?")->execute([$errMsg, $recp['id']]);
+                        }
                     }
 
                     $newStatus = $success ? 'sent' : 'failed';
