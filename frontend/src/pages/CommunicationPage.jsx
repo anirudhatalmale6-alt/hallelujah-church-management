@@ -146,7 +146,12 @@ function ComposeTab({ setError, setMessage }) {
         attachment_name: attachmentName || null,
       };
       if (recipientType === 'direct') {
-        data.direct_contacts = finalDirectContacts;
+        data.direct_contacts = finalDirectContacts.map(c => {
+          if (typeof c === 'string') {
+            return c.includes('@') ? { email: c, phone: null, name: c } : { email: null, phone: c, name: c };
+          }
+          return c;
+        });
         if (saveToContacts && saveContactName.trim()) {
           data.save_to_contacts = true;
           data.save_contact_name = saveContactName.trim();
