@@ -121,8 +121,7 @@ function ComposeTab({ setError, setMessage }) {
     // Auto-add direct input if user typed something but didn't click Add
     let finalDirectContacts = [...directContacts];
     if (recipientType === 'direct' && directInput.trim()) {
-      const val = directInput.trim();
-      finalDirectContacts.push(val.includes('@') ? { email: val, phone: null } : { email: null, phone: val });
+      finalDirectContacts.push(directInput.trim());
       setDirectContacts(finalDirectContacts);
       setDirectInput('');
     }
