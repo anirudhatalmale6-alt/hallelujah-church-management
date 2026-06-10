@@ -118,7 +118,15 @@ function ComposeTab({ setError, setMessage }) {
     if (!body.trim()) { setError('Message body is required'); return; }
     if (messageType === 'email' && !subject.trim()) { setError('Subject is required for email'); return; }
     if (recipientType === 'individual' && recipientIds.length === 0) { setError('Select at least one recipient'); return; }
-    if (recipientType === 'direct' && directContacts.length === 0) { setError('Add at least one email or phone number'); return; }
+    // Auto-add direct input if user typed something but didn't click Add
+    let finalDirectContacts = [...directContacts];
+    if (recipientType === 'direct' && directInput.trim()) {
+      const val = directInput.trim();
+      finalDirectContacts.push(val.includes('@') ? { email: val, phone: null } : { email: null, phone: val });
+      setDirectContacts(finalDirectContacts);
+      setDirectInput('');
+    }
+    if (recipientType === 'direct' && finalDirectContacts.length === 0) { setError('Add at least one email or phone number'); return; }
     if (sendType === 'recurring' && !recurringPattern) { setError('Select a recurring pattern'); return; }
 
     setSending(true);
@@ -138,7 +146,7 @@ function ComposeTab({ setError, setMessage }) {
         attachment_name: attachmentName || null,
       };
       if (recipientType === 'direct') {
-        data.direct_contacts = directContacts;
+        data.direct_contacts = finalDirectContacts;
         if (saveToContacts && saveContactName.trim()) {
           data.save_to_contacts = true;
           data.save_contact_name = saveContactName.trim();
@@ -283,14 +291,28 @@ function ComposeTab({ setError, setMessage }) {
             )}
 
             {sendType === 'recurring' && (
-              <div className="mb-4">
-                <label className="label">Recurring Pattern</label>
-                <select className="input" value={recurringPattern} onChange={e => setRecurringPattern(e.target.value)}>
-                  <option value="">-- Select pattern --</option>
-                  <option value="daily">Daily</option>
-                  <option value="weekly">Weekly</option>
-                  <option value="monthly">Monthly</option>
-                </select>
+              <div className="mb-4 space-y-3">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="label">Frequency</label>
+                    <select className="input" value={recurringPattern} onChange={e => setRecurringPattern(e.target.value)}>
+                      <option value="">-- Select --</option>
+                      <option value="daily">Daily</option>
+                      <option value="weekly">Weekly</option>
+                      <option value="biweekly">Every 2 Weeks</option>
+                      <option value="monthly">Monthly</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="label">Start Date</label>
+                    <input type="date" className="input" value={scheduledAt?.split('T')[0] || ''} onChange={e => setScheduledAt(e.target.value + 'T09:00')} />
+                  </div>
+                  <div>
+                    <label className="label">Send Time</label>
+                    <input type="time" className="input" value={scheduledAt?.split('T')[1] || '09:00'} onChange={e => setScheduledAt((scheduledAt?.split('T')[0] || new Date().toISOString().split('T')[0]) + 'T' + e.target.value)} />
+                  </div>
+                </div>
+                <p className="text-xs text-gray-400">The message will be sent automatically at the specified time on each occurrence.</p>
               </div>
             )}
 
