@@ -136,6 +136,7 @@ function handleLogin(): void {
     ]);
 
     $permissions = [];
+    $financeSections = [];
     if (in_array($user['role'], ['leader', 'volunteer'])) {
         try {
             $permStmt = $db->prepare("SELECT permission FROM user_permissions WHERE user_id = ?");
@@ -143,6 +144,20 @@ function handleLogin(): void {
             $permissions = array_column($permStmt->fetchAll(), 'permission');
         } catch (Exception $e) {}
     }
+    try {
+        $fsStmt = $db->prepare("SELECT section FROM user_finance_sections WHERE user_id = ?");
+        $fsStmt->execute([$user['id']]);
+        $financeSections = array_column($fsStmt->fetchAll(), 'section');
+    } catch (Exception $e) {}
+
+    $sectionAccess = [];
+    try {
+        $saStmt = $db->prepare("SELECT section, sub_permission FROM user_section_access WHERE user_id = ?");
+        $saStmt->execute([$user['id']]);
+        foreach ($saStmt->fetchAll() as $row) {
+            $sectionAccess[$row['section']][] = $row['sub_permission'];
+        }
+    } catch (Exception $e) {}
 
     jsonResponse([
         'token' => $token,
@@ -152,6 +167,8 @@ function handleLogin(): void {
             'name' => $user['name'],
             'role' => $user['role'],
             'permissions' => $permissions,
+            'finance_sections' => $financeSections,
+            'section_access' => $sectionAccess,
         ]
     ]);
 }
@@ -301,6 +318,31 @@ if (basename($_SERVER['SCRIPT_FILENAME']) === 'auth.php') {
         if (!$userData) {
             jsonResponse(['error' => 'User not found'], 404);
         }
+        $perms = [];
+        $fSections = [];
+        if (in_array($userData['role'], ['leader', 'volunteer'])) {
+            try {
+                $permStmt = $db->prepare("SELECT permission FROM user_permissions WHERE user_id = ?");
+                $permStmt->execute([$userData['id']]);
+                $perms = array_column($permStmt->fetchAll(), 'permission');
+            } catch (Exception $e) {}
+        }
+        try {
+            $fsStmt = $db->prepare("SELECT section FROM user_finance_sections WHERE user_id = ?");
+            $fsStmt->execute([$userData['id']]);
+            $fSections = array_column($fsStmt->fetchAll(), 'section');
+        } catch (Exception $e) {}
+        $userData['permissions'] = $perms;
+        $userData['finance_sections'] = $fSections;
+        $sAccess = [];
+        try {
+            $saStmt = $db->prepare("SELECT section, sub_permission FROM user_section_access WHERE user_id = ?");
+            $saStmt->execute([$userData['id']]);
+            foreach ($saStmt->fetchAll() as $row) {
+                $sAccess[$row['section']][] = $row['sub_permission'];
+            }
+        } catch (Exception $e) {}
+        $userData['section_access'] = $sAccess;
         jsonResponse(['user' => $userData]);
     } else {
         jsonResponse(['error' => 'Invalid auth action'], 400);

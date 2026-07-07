@@ -3,11 +3,12 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { members as membersApi, groups as groupsApi, households as householdsApi } from '../utils/api';
 import { useAuth } from '../contexts/AuthContext';
 import { downloadCSV } from '../utils/format';
+import { loadPersonTypes, labelFor, colorFor, DEFAULT_PERSON_TYPES } from '../utils/personTypes';
 import Modal from '../components/Modal';
 import Pagination from '../components/Pagination';
 import {
   Search, Plus, Edit2, Trash2, Eye, Filter, Users,
-  UserPlus, AlertCircle, Check, X, ArrowDownAZ, Download, Upload
+  UserPlus, AlertCircle, Check, X, ArrowDownAZ, Download, Upload, RefreshCw
 } from 'lucide-react';
 
 const emptyMember = {
@@ -18,22 +19,28 @@ const emptyMember = {
   membership_date: '', status: 'active', person_type: 'church_member', notes: '',
   baptism_date: '', salvation_date: '', first_visit_date: '',
   membership_class_date: '', dedication_date: '', wedding_date: '',
+  card_title: '', card_expiry_date: '',
 };
 
 const personTypeLabels = {
   church_member: 'Church Member',
-  community: 'Community',
+  non_member_attendee: 'Non-Member Attendee',
+  community: 'Community Contact',
   companion: 'Companion',
+  other: 'Other',
 };
 const personTypeColors = {
   church_member: 'bg-primary-50 text-primary-700',
+  non_member_attendee: 'bg-yellow-50 text-yellow-700',
   community: 'bg-amber-50 text-amber-700',
   companion: 'bg-purple-50 text-purple-700',
+  other: 'bg-gray-50 text-gray-600',
 };
 
 export default function MembersPage() {
   const { isAdmin } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
+  const [personTypes, setPersonTypes] = useState(DEFAULT_PERSON_TYPES);
   const [members, setMembers] = useState([]);
   const [total, setTotal] = useState(0);
   const [pages, setPages] = useState(1);
@@ -57,10 +64,14 @@ export default function MembersPage() {
   const [deleteId, setDeleteId] = useState(null);
   const [availableGroups, setAvailableGroups] = useState([]);
   const [availableHouseholds, setAvailableHouseholds] = useState([]);
+  const [typeCounts, setTypeCounts] = useState({});
+  const [autoStatusRunning, setAutoStatusRunning] = useState(false);
+  const [autoStatusResult, setAutoStatusResult] = useState(null);
 
   useEffect(() => {
     groupsApi.list().then(d => setAvailableGroups(d.groups || [])).catch(() => {});
     householdsApi.list().then(d => setAvailableHouseholds(d.households || [])).catch(() => {});
+    loadPersonTypes().then(setPersonTypes).catch(() => {});
   }, []);
 
   const loadMembers = useCallback(async () => {
@@ -75,6 +86,7 @@ export default function MembersPage() {
       setTotal(data.total);
       setPages(data.pages);
       setFamilyGroups(data.family_groups || []);
+      if (data.type_counts) setTypeCounts(data.type_counts);
     } catch (err) {
       setError(err.message);
     }
@@ -91,6 +103,20 @@ export default function MembersPage() {
       setSearchParams({});
     }
   }, [searchParams]);
+
+  const handleAutoStatus = async () => {
+    setAutoStatusRunning(true);
+    setAutoStatusResult(null);
+    try {
+      const res = await membersApi.autoStatus();
+      setAutoStatusResult(res);
+      if (res.changes?.length > 0) loadMembers();
+      setTimeout(() => setAutoStatusResult(null), 10000);
+    } catch (err) {
+      setAutoStatusResult({ error: err.message });
+    }
+    setAutoStatusRunning(false);
+  };
 
   const openNew = () => {
     setEditMember(null);
@@ -124,6 +150,9 @@ export default function MembersPage() {
       membership_class_date: member.membership_class_date || '',
       dedication_date: member.dedication_date || '',
       wedding_date: member.wedding_date || '',
+      card_title: member.card_title || '',
+      card_expiry_date: member.card_expiry_date || '',
+      photo_url: member.photo_url || '',
     });
     setError('');
     setShowModal(true);
@@ -162,8 +191,9 @@ export default function MembersPage() {
     switch (status) {
       case 'active': return <span className="badge-green">Active</span>;
       case 'inactive': return <span className="badge-red">Inactive</span>;
-      case 'visitor': return <span className="badge-blue">Visitor</span>;
-      case 'non_member_attendee': return <span className="badge-yellow">Non-Member Attendee</span>;
+      case 'revoked': return <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">Revoked</span>;
+      case 'forsaking': return <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-800">Forsaking</span>;
+      case 'restored': return <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-teal-100 text-teal-700">Restored</span>;
       default: return <span className="badge-gray">{status}</span>;
     }
   };
@@ -199,9 +229,19 @@ export default function MembersPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">People</h1>
-          <p className="text-gray-500 mt-1">{total} people</p>
+          <div className="flex flex-wrap items-center gap-2 text-sm mt-1">
+            <span className="font-bold text-gray-700 bg-gray-100 px-2 py-0.5 rounded">Total: {total}</span>
+            {personTypes.filter(t => (typeCounts[t.value] || 0) > 0).map(t => (
+              <span key={t.value} className={`${colorFor(t.value)} px-2 py-0.5 rounded font-medium`}>{t.label}: {typeCounts[t.value] || 0}</span>
+            ))}
+          </div>
         </div>
         <div className="flex gap-2 flex-wrap">
+          {isAdmin && (
+            <button onClick={handleAutoStatus} disabled={autoStatusRunning} className="btn-secondary" title="Auto-update statuses based on attendance">
+              <RefreshCw size={18} className={autoStatusRunning ? 'animate-spin' : ''} /> Auto-Status
+            </button>
+          )}
           <button onClick={() => setShowImport(true)} className="btn-secondary">
             <Upload size={18} /> Import
           </button>
@@ -213,6 +253,29 @@ export default function MembersPage() {
           </button>
         </div>
       </div>
+
+      {/* Auto-Status Result */}
+      {autoStatusResult && (
+        <div className={`mb-4 p-3 rounded-lg text-sm ${autoStatusResult.error ? 'bg-red-50 text-red-700 border border-red-200' : 'bg-green-50 text-green-700 border border-green-200'}`}>
+          {autoStatusResult.error ? autoStatusResult.error : (
+            <>
+              <span className="font-medium">{autoStatusResult.message}</span>
+              {autoStatusResult.summary && (
+                <span className="ml-2">
+                  ({autoStatusResult.summary.to_inactive} marked inactive, {autoStatusResult.summary.to_forsaking || autoStatusResult.summary.to_revoked || 0} forsaking, {autoStatusResult.summary.to_restored} restored)
+                </span>
+              )}
+              {autoStatusResult.changes?.length > 0 && (
+                <div className="mt-2 space-y-1">
+                  {autoStatusResult.changes.map((c, i) => (
+                    <div key={i} className="text-xs">{c.name}: {c.from} → {c.to}</div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
 
       {/* Filters */}
       <div className="card mb-6">
@@ -242,9 +305,9 @@ export default function MembersPage() {
             className="input w-auto"
           >
             <option value="">All People</option>
-            <option value="church_member">Church Members</option>
-            <option value="community">Community</option>
-            <option value="companion">Companions</option>
+            {personTypes.map(t => (
+              <option key={t.value} value={t.value}>{t.label}</option>
+            ))}
           </select>
           <select
             value={statusFilter}
@@ -254,7 +317,9 @@ export default function MembersPage() {
             <option value="">All Status</option>
             <option value="active">Active</option>
             <option value="inactive">Inactive</option>
-            <option value="visitor">Visitor</option>
+            <option value="forsaking">Forsaking</option>
+            <option value="revoked">Revoked</option>
+            <option value="restored">Restored</option>
           </select>
           {familyGroups.length > 0 && (
             <select
@@ -320,7 +385,7 @@ export default function MembersPage() {
                       <td className="px-4 py-3 hidden lg:table-cell text-sm text-gray-600">
                         {m.family_group || '-'}
                       </td>
-                      <td className="px-4 py-3"><span className={`px-2 py-0.5 rounded-full text-xs font-medium ${personTypeColors[m.person_type] || personTypeColors.church_member}`}>{personTypeLabels[m.person_type] || 'Member'}</span></td>
+                      <td className="px-4 py-3"><span className={`px-2 py-0.5 rounded-full text-xs font-medium ${colorFor(m.person_type)}`}>{labelFor(personTypes, m.person_type)}</span></td>
                       <td className="px-4 py-3">{statusBadge(m.status)}</td>
                       <td className="px-4 py-3">
                         <div className="flex items-center justify-end gap-1">
@@ -419,7 +484,30 @@ export default function MembersPage() {
             </div>
             <div>
               <label className="label">Date of Birth</label>
-              <input type="date" className="input" value={form.date_of_birth} onChange={e => updateField('date_of_birth', e.target.value)} />
+              <div className="flex gap-1">
+                <select className="input flex-1" value={form.date_of_birth ? new Date(form.date_of_birth + 'T00:00:00').getMonth() + 1 : ''} onChange={e => {
+                  const m = e.target.value, parts = form.date_of_birth ? form.date_of_birth.split('-') : ['', '', ''];
+                  if (m && parts[0] && parts[2]) updateField('date_of_birth', `${parts[0]}-${m.padStart(2,'0')}-${parts[2]}`);
+                  else if (m) updateField('date_of_birth', `2000-${m.padStart(2,'0')}-01`);
+                }}>
+                  <option value="">Month</option>
+                  {['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'].map((n,i) => <option key={i} value={i+1}>{n}</option>)}
+                </select>
+                <select className="input w-16" value={form.date_of_birth ? parseInt(form.date_of_birth.split('-')[2]) : ''} onChange={e => {
+                  const d = e.target.value, parts = form.date_of_birth ? form.date_of_birth.split('-') : ['2000', '01', ''];
+                  if (d) updateField('date_of_birth', `${parts[0]}-${parts[1]}-${d.padStart(2,'0')}`);
+                }}>
+                  <option value="">Day</option>
+                  {Array.from({length:31},(_,i)=>i+1).map(d => <option key={d} value={d}>{d}</option>)}
+                </select>
+                <select className="input w-20" value={form.date_of_birth ? form.date_of_birth.split('-')[0] : ''} onChange={e => {
+                  const y = e.target.value, parts = form.date_of_birth ? form.date_of_birth.split('-') : ['', '01', '01'];
+                  if (y) updateField('date_of_birth', `${y}-${parts[1]}-${parts[2]}`);
+                }}>
+                  <option value="">Year</option>
+                  {Array.from({length: new Date().getFullYear() - 1919}, (_, i) => new Date().getFullYear() - i).map(y => <option key={y} value={y}>{y}</option>)}
+                </select>
+              </div>
             </div>
             <div className="sm:col-span-2">
               <label className="label">Groups</label>
@@ -451,9 +539,9 @@ export default function MembersPage() {
             <div>
               <label className="label">Person Type</label>
               <select className="input" value={form.person_type || 'church_member'} onChange={e => updateField('person_type', e.target.value)}>
-                <option value="church_member">Church Member</option>
-                <option value="community">Community Contact</option>
-                <option value="companion">Companion</option>
+                {personTypes.map(t => (
+                  <option key={t.value} value={t.value}>{t.label}</option>
+                ))}
               </select>
             </div>
             <div>
@@ -461,7 +549,9 @@ export default function MembersPage() {
               <select className="input" value={form.status} onChange={e => updateField('status', e.target.value)}>
                 <option value="active">Active</option>
                 <option value="inactive">Inactive</option>
-                <option value="visitor">Visitor</option>
+                <option value="forsaking">Forsaking</option>
+                <option value="revoked">Revoked</option>
+                <option value="restored">Restored</option>
               </select>
             </div>
 
@@ -518,6 +608,55 @@ export default function MembersPage() {
               <input type="date" className="input" value={form.wedding_date} onChange={e => updateField('wedding_date', e.target.value)} />
             </div>
 
+            {/* Photo & Card Title */}
+            <div className="sm:col-span-2 pt-2">
+              <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Photo & ID Card</div>
+            </div>
+            <div className="sm:col-span-2">
+              <label className="label">Photo</label>
+              <div className="flex items-center gap-4">
+                {(form.photo_url) ? (
+                  <img src={form.photo_url} alt="" className="w-16 h-16 rounded-lg object-cover border" />
+                ) : (
+                  <div className="w-16 h-16 rounded-lg bg-gray-100 flex items-center justify-center text-gray-400 text-lg font-medium border">
+                    {form.first_name?.[0]}{form.last_name?.[0]}
+                  </div>
+                )}
+                <div className="flex-1">
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp,image/gif"
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0];
+                      if (!file || !editMember) return;
+                      try {
+                        const res = await membersApi.uploadPhoto(editMember.id, file);
+                        updateField('photo_url', res.photo_url);
+                      } catch (err) {
+                        alert(err.message || 'Upload failed');
+                      }
+                    }}
+                    className="input text-sm"
+                    disabled={!editMember}
+                  />
+                  {!editMember && <p className="text-xs text-gray-400 mt-1">Save the person first, then edit to upload photo</p>}
+                  {editMember && form.photo_url && (
+                    <button type="button" onClick={() => updateField('photo_url', '')} className="text-xs text-red-500 mt-1 hover:underline">Remove photo</button>
+                  )}
+                </div>
+              </div>
+            </div>
+            <div>
+              <label className="label">Card Title</label>
+              <input className="input" value={form.card_title || ''} onChange={e => updateField('card_title', e.target.value)} placeholder="e.g., Deacon, Elder, Usher" />
+              <p className="text-xs text-gray-400 mt-1">Title shown on ID card</p>
+            </div>
+            <div>
+              <label className="label">Card Expiry Date</label>
+              <input type="date" className="input" value={form.card_expiry_date || ''} onChange={e => updateField('card_expiry_date', e.target.value)} />
+              <p className="text-xs text-gray-400 mt-1">Expiration date on ID card</p>
+            </div>
+
             <div className="sm:col-span-2">
               <label className="label">Notes</label>
               <textarea className="input" rows="3" value={form.notes} onChange={e => updateField('notes', e.target.value)} />
@@ -553,9 +692,9 @@ export default function MembersPage() {
             <div>
               <label className="label">Import As</label>
               <select className="input" value={importPersonType} onChange={e => setImportPersonType(e.target.value)}>
-                <option value="community">Community Contact</option>
-                <option value="companion">Companion</option>
-                <option value="church_member">Church Member</option>
+                {personTypes.map(t => (
+                  <option key={t.value} value={t.value}>{t.label}</option>
+                ))}
               </select>
             </div>
             <div>

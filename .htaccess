@@ -1,6 +1,11 @@
 RewriteEngine On
 RewriteBase /system/
 
+# Disable LiteSpeed cache
+<IfModule LiteSpeed>
+CacheLookup off
+</IfModule>
+
 # Force HTTPS (uncomment for production)
 # RewriteCond %{HTTPS} off
 # RewriteRule ^(.*)$ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
@@ -39,5 +44,5 @@ RewriteRule ^api/departments/([0-9]+)$ api/departments.php?id=$1 [L,QSA]
 RewriteCond %{REQUEST_FILENAME} !-f
 RewriteCond %{REQUEST_FILENAME} !-d
 
-# Route everything else to index.html (React SPA)
-RewriteRule ^(.*)$ public/index.html [L]
+# Route everything else to PHP wrapper (bypasses LiteSpeed cache)
+RewriteRule ^(.*)$ public/index.php [L]

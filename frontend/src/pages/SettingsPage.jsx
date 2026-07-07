@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { settings as settingsApi, backups } from '../utils/api';
+import { loadPersonTypes } from '../utils/personTypes';
 import { useAuth } from '../contexts/AuthContext';
 import {
   Settings, Save, AlertCircle, Check, X, RefreshCw,
-  Database, Download, Trash2, Plus, Clock
+  Database, Download, Trash2, Plus, Clock, Users
 } from 'lucide-react';
 
 const settingsFields = [
@@ -28,11 +29,48 @@ export default function SettingsPage() {
   const [backupsList, setBackupsList] = useState([]);
   const [backupsLoading, setBackupsLoading] = useState(false);
   const [backupCreating, setBackupCreating] = useState(false);
+  const [personTypes, setPersonTypes] = useState([]);
+  const [ptSaving, setPtSaving] = useState(false);
+  const [ptMsg, setPtMsg] = useState('');
 
   useEffect(() => {
     loadSettings();
     loadBackups();
+    loadPersonTypes(true).then(setPersonTypes).catch(() => {});
   }, []);
+
+  const addPersonType = () => {
+    setPersonTypes([...personTypes, { value: '', label: '', auto_absent: false, builtin: false }]);
+  };
+  const updatePersonType = (idx, field, val) => {
+    setPersonTypes(personTypes.map((t, i) => i === idx ? { ...t, [field]: val } : t));
+  };
+  const removePersonType = (idx) => {
+    setPersonTypes(personTypes.filter((_, i) => i !== idx));
+  };
+  const savePersonTypes = async () => {
+    setPtSaving(true);
+    setPtMsg('');
+    setError('');
+    try {
+      const payload = personTypes
+        .filter(t => (t.label || '').trim() !== '')
+        .map(t => ({
+          value: t.value || t.label.trim().toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, ''),
+          label: t.label.trim(),
+          auto_absent: !!t.auto_absent,
+          builtin: !!t.builtin,
+        }));
+      const res = await settingsApi.savePersonTypes(payload);
+      setPersonTypes(res.person_types || payload);
+      await loadPersonTypes(true);
+      setPtMsg('Person types saved');
+      setTimeout(() => setPtMsg(''), 3000);
+    } catch (err) {
+      setError(err.message);
+    }
+    setPtSaving(false);
+  };
 
   const loadSettings = async () => {
     setLoading(true);
@@ -184,6 +222,71 @@ export default function SettingsPage() {
           </div>
         </div>
       </form>
+
+      {/* Person Types */}
+      <div className="card mt-6">
+        <div className="flex items-center gap-2 mb-1">
+          <Users size={20} className="text-primary-700" />
+          <h2 className="text-lg font-semibold text-gray-900">Person Types</h2>
+        </div>
+        <p className="text-sm text-gray-500 mb-4">
+          Categories you can assign to people (e.g. Church Member, Non-Member Attendee, Visitor, Ministry Partner).
+          Turn on "Auto-absent" for a type if people of that type should be automatically marked absent when a
+          service ends without a check-in. You can add your own custom types below.
+        </p>
+
+        <div className="space-y-2">
+          <div className="hidden sm:grid grid-cols-12 gap-2 text-xs font-semibold text-gray-500 uppercase px-1">
+            <div className="col-span-6">Type name</div>
+            <div className="col-span-4 text-center">Auto-mark absent</div>
+            <div className="col-span-2"></div>
+          </div>
+          {personTypes.map((t, idx) => (
+            <div key={idx} className="grid grid-cols-12 gap-2 items-center">
+              <div className="col-span-12 sm:col-span-6">
+                <input
+                  type="text"
+                  className="input"
+                  value={t.label}
+                  placeholder="Type name"
+                  onChange={e => updatePersonType(idx, 'label', e.target.value)}
+                />
+              </div>
+              <div className="col-span-8 sm:col-span-4 flex items-center justify-start sm:justify-center gap-2">
+                <label className="inline-flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4"
+                    checked={!!t.auto_absent}
+                    onChange={e => updatePersonType(idx, 'auto_absent', e.target.checked)}
+                  />
+                  Auto-absent
+                </label>
+              </div>
+              <div className="col-span-4 sm:col-span-2 flex justify-end">
+                {(t.value === 'church_member' || t.value === 'non_member_attendee') ? (
+                  <span className="text-[11px] text-gray-400 px-2">Required</span>
+                ) : (
+                  <button type="button" onClick={() => removePersonType(idx)} className="text-red-600 hover:bg-red-50 p-2 rounded-lg" title="Remove type">
+                    <Trash2 size={16} />
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3 mt-4">
+          <button type="button" onClick={addPersonType} className="btn-secondary">
+            <Plus size={16} /> Add Type
+          </button>
+          <button type="button" onClick={savePersonTypes} disabled={ptSaving} className="btn-primary">
+            {ptSaving ? <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" /> : <Save size={16} />}
+            Save Person Types
+          </button>
+          {ptMsg && <span className="text-sm text-green-600 flex items-center gap-1"><Check size={14} /> {ptMsg}</span>}
+        </div>
+      </div>
 
       {/* System Info */}
       <div className="card mt-6">

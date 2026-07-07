@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { messaging as msgApi, members as membersApi, groups as groupsApi, surveys as surveyApi } from '../utils/api';
+import { loadPersonTypes, DEFAULT_PERSON_TYPES } from '../utils/personTypes';
 import { useAuth } from '../contexts/AuthContext';
 import Modal from '../components/Modal';
 import Pagination from '../components/Pagination';
@@ -86,13 +87,15 @@ function ComposeTab({ setError, setMessage }) {
   const [saveToContacts, setSaveToContacts] = useState(false);
   const [saveContactName, setSaveContactName] = useState('');
   const [saveContactType, setSaveContactType] = useState('community');
-  const [attachmentName, setAttachmentName] = useState('');
+  const [attachmentNames, setAttachmentNames] = useState([]);
   const [attachmentUploading, setAttachmentUploading] = useState(false);
+  const [personTypes, setPersonTypes] = useState(DEFAULT_PERSON_TYPES);
 
   useEffect(() => {
     membersApi.list({ limit: 9999, sort: 'last_name' }).then(d => setMembersList(d.members || []));
     groupsApi.list().then(d => setGroupsList(d.groups || [])).catch(() => {});
     msgApi.config().then(d => setConfigStatus(d)).catch(() => {});
+    loadPersonTypes().then(setPersonTypes).catch(() => {});
   }, []);
 
   const filteredMembers = membersList.filter(m => {
@@ -142,7 +145,8 @@ function ComposeTab({ setError, setMessage }) {
         person_type: personType || '',
         scheduled_at: sendType === 'scheduled' ? scheduledAt : null,
         recurring_pattern: sendType === 'recurring' ? recurringPattern : null,
-        attachment_name: attachmentName || null,
+        attachment_name: attachmentNames.length > 0 ? attachmentNames[0] : null,
+        attachment_names: attachmentNames.length > 0 ? attachmentNames : null,
       };
       if (recipientType === 'direct') {
         sendData.direct_contacts = (finalDirectContacts || []).map(c => {
@@ -166,7 +170,7 @@ function ComposeTab({ setError, setMessage }) {
       setDirectInput('');
       setSaveToContacts(false);
       setSaveContactName('');
-      setAttachmentName('');
+      setAttachmentNames([]);
       setRecurringPattern('');
     } catch (err) {
       setError(err && err.message ? err.message : 'Failed to send. Please try again.');
@@ -232,9 +236,9 @@ function ComposeTab({ setError, setMessage }) {
                 <label className="label">Select Type</label>
                 <select className="input" value={personType} onChange={e => setPersonType(e.target.value)}>
                   <option value="">-- Choose --</option>
-                  <option value="church_member">Church Members</option>
-                  <option value="community">Community Contacts</option>
-                  <option value="companion">Companions</option>
+                  {personTypes.map(t => (
+                    <option key={t.value} value={t.value}>{t.label}</option>
+                  ))}
                 </select>
               </div>
             )}
@@ -276,9 +280,9 @@ function ComposeTab({ setError, setMessage }) {
                       <div>
                         <label className="label text-xs">Type</label>
                         <select className="input py-1.5 text-sm" value={saveContactType} onChange={e => setSaveContactType(e.target.value)}>
-                          <option value="community">Community Contact</option>
-                          <option value="church_member">Church Member</option>
-                          <option value="companion">Companion</option>
+                          {personTypes.map(t => (
+                            <option key={t.value} value={t.value}>{t.label}</option>
+                          ))}
                         </select>
                       </div>
                     </div>
@@ -334,41 +338,50 @@ function ComposeTab({ setError, setMessage }) {
             </div>
 
             <div className="mb-4">
-              <label className="label">Attach File (JPEG, PDF)</label>
+              <label className="label">Attach Files (JPEG, PNG, PDF - multiple allowed)</label>
               <div className="flex items-center gap-3">
-                <input type="file" accept=".jpg,.jpeg,.png,.pdf"
+                <input type="file" accept=".jpg,.jpeg,.png,.pdf" multiple
                   className="input py-1.5 text-sm file:mr-3 file:py-1 file:px-3 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-primary-50 file:text-primary-700 hover:file:bg-primary-100"
                   onChange={async (e) => {
-                    const file = e.target.files[0];
-                    if (!file) return;
+                    const files = Array.from(e.target.files || []);
+                    if (files.length === 0) return;
                     setAttachmentUploading(true);
-                    try {
-                      const formData = new FormData();
-                      formData.append('file', file);
-                      const resp = await fetch('/system/api/messaging.php?action=upload&_t=' + Date.now(), {
-                        method: 'POST',
-                        headers: { 'Authorization': 'Bearer ' + localStorage.getItem('hitc_token') },
-                        body: formData
-                      });
-                      const result = await resp.json();
-                      if (result.filename) {
-                        setAttachmentName(result.filename);
-                      } else {
-                        setError(result.error || 'Upload failed');
+                    const uploaded = [];
+                    for (const file of files) {
+                      try {
+                        const formData = new FormData();
+                        formData.append('file', file);
+                        const resp = await fetch('/system/api/messaging.php?action=upload&_t=' + Date.now(), {
+                          method: 'POST',
+                          headers: { 'Authorization': 'Bearer ' + localStorage.getItem('hitc_token') },
+                          body: formData
+                        });
+                        const result = await resp.json();
+                        if (result.filename) {
+                          uploaded.push(result.filename);
+                        } else {
+                          setError(result.error || `Upload failed for ${file.name}`);
+                        }
+                      } catch (err) {
+                        setError(`File upload failed: ${err.message}`);
                       }
-                    } catch (err) {
-                      setError('File upload failed: ' + err.message);
                     }
+                    if (uploaded.length > 0) setAttachmentNames(prev => [...prev, ...uploaded]);
                     setAttachmentUploading(false);
+                    e.target.value = '';
                   }}
                 />
                 {attachmentUploading && <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary-700" />}
               </div>
-              {attachmentName && (
-                <div className="flex items-center gap-2 mt-2 text-sm text-green-700 bg-green-50 px-3 py-1.5 rounded-lg">
-                  <CheckCircle size={14} />
-                  <span className="truncate">{attachmentName}</span>
-                  <button type="button" onClick={() => setAttachmentName('')} className="ml-auto text-gray-400 hover:text-red-500"><X size={14} /></button>
+              {attachmentNames.length > 0 && (
+                <div className="space-y-1 mt-2">
+                  {attachmentNames.map((name, i) => (
+                    <div key={i} className="flex items-center gap-2 text-sm text-green-700 bg-green-50 px-3 py-1.5 rounded-lg">
+                      <CheckCircle size={14} />
+                      <span className="truncate">{name}</span>
+                      <button type="button" onClick={() => setAttachmentNames(prev => prev.filter((_, idx) => idx !== i))} className="ml-auto text-gray-400 hover:text-red-500"><X size={14} /></button>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>

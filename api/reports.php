@@ -14,7 +14,12 @@ switch ($action) {
                 DATE_FORMAT(created_at, '%Y-%m') as month,
                 COUNT(*) as new_members,
                 COUNT(CASE WHEN status = 'active' THEN 1 END) as active_new,
-                COUNT(CASE WHEN status = 'visitor' THEN 1 END) as visitor_new
+                COUNT(CASE WHEN status = 'visitor' OR person_type = 'non_member_attendee' THEN 1 END) as visitor_new,
+                COUNT(CASE WHEN person_type = 'church_member' THEN 1 END) as type_church_member,
+                COUNT(CASE WHEN person_type = 'non_member_attendee' THEN 1 END) as type_non_member,
+                COUNT(CASE WHEN person_type = 'companion' THEN 1 END) as type_companion,
+                COUNT(CASE WHEN person_type = 'community' THEN 1 END) as type_community,
+                COUNT(CASE WHEN person_type NOT IN ('church_member','non_member_attendee','companion','community') OR person_type IS NULL THEN 1 END) as type_other
             FROM members
             WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL ? MONTH)
             GROUP BY DATE_FORMAT(created_at, '%Y-%m')
@@ -36,40 +41,70 @@ switch ($action) {
         $totalMembers = $db->query("SELECT COUNT(*) FROM members")->fetchColumn();
         $activeMembers = $db->query("SELECT COUNT(*) FROM members WHERE status = 'active'")->fetchColumn();
 
+        // Type breakdown
+        $typeBreakdown = $db->query("
+            SELECT person_type, COUNT(*) as total,
+                COUNT(CASE WHEN status = 'active' THEN 1 END) as active_count,
+                COUNT(CASE WHEN status = 'inactive' THEN 1 END) as inactive_count,
+                COUNT(CASE WHEN status = 'forsaking' THEN 1 END) as forsaking_count,
+                COUNT(CASE WHEN status = 'revoked' THEN 1 END) as revoked_count,
+                COUNT(CASE WHEN status = 'restored' THEN 1 END) as restored_count
+            FROM members
+            GROUP BY person_type
+            ORDER BY total DESC
+        ")->fetchAll();
+
+        // Status breakdown
+        $statusBreakdown = $db->query("
+            SELECT status, COUNT(*) as count FROM members GROUP BY status ORDER BY count DESC
+        ")->fetchAll();
+
         jsonResponse([
             'growth' => $growth,
             'cumulative' => $cumulative,
             'total_members' => (int)$totalMembers,
             'active_members' => (int)$activeMembers,
+            'type_breakdown' => $typeBreakdown,
+            'status_breakdown' => $statusBreakdown,
         ]);
         break;
 
     case 'engagement':
         $period = $_GET['period'] ?? '3';
         $months = max(1, min(12, (int)$period));
+        // Optional: measure engagement against a specific service type only (e.g. Sunday services).
+        // Empty = count every service type (default).
+        $svcType = trim($_GET['service_type'] ?? '');
+        $typeJoin = $svcType ? " AND s.type = ?" : "";
+        $typeWhere = $svcType ? " AND type = ?" : "";
 
+        $memberParams = $svcType ? [$months, $svcType] : [$months];
         $stmt = $db->prepare("
             SELECT
                 m.id, m.first_name, m.last_name, m.status as member_status, m.family_group,
                 COUNT(DISTINCT s.id) as total_services,
-                COUNT(CASE WHEN a.status = 'present' OR a.status = 'late' THEN 1 END) as attended,
-                COUNT(CASE WHEN a.status = 'absent' THEN 1 END) as absent,
-                MAX(CASE WHEN a.status = 'present' OR a.status = 'late' THEN s.date END) as last_attended
+                COUNT(CASE WHEN (a.status = 'present' OR a.status = 'late') AND s.id IS NOT NULL THEN 1 END) as attended,
+                COUNT(CASE WHEN a.status = 'absent' AND s.id IS NOT NULL THEN 1 END) as absent,
+                MAX(CASE WHEN (a.status = 'present' OR a.status = 'late') AND s.id IS NOT NULL THEN s.date END) as last_attended
             FROM members m
             LEFT JOIN attendance a ON a.member_id = m.id
-            LEFT JOIN services s ON a.service_id = s.id AND s.date >= DATE_SUB(CURDATE(), INTERVAL ? MONTH)
-            WHERE m.status IN ('active', 'non_member_attendee')
+            LEFT JOIN services s ON a.service_id = s.id AND s.date >= DATE_SUB(CURDATE(), INTERVAL ? MONTH) AND s.date <= CURDATE()$typeJoin
+            WHERE m.status IN ('active', 'restored')
             GROUP BY m.id
             ORDER BY attended DESC, m.last_name ASC
         ");
-        $stmt->execute([$months]);
+        $stmt->execute($memberParams);
         $members = $stmt->fetchAll();
 
+        // Denominator: only services that have already occurred (exclude future-dated services)
         $totalServices = $db->prepare("
-            SELECT COUNT(*) FROM services WHERE date >= DATE_SUB(CURDATE(), INTERVAL ? MONTH)
+            SELECT COUNT(*) FROM services WHERE date >= DATE_SUB(CURDATE(), INTERVAL ? MONTH) AND date <= CURDATE()$typeWhere
         ");
-        $totalServices->execute([$months]);
+        $totalServices->execute($memberParams);
         $svcCount = (int)$totalServices->fetchColumn();
+
+        // List of service types available for the filter dropdown
+        $svcTypes = $db->query("SELECT DISTINCT type FROM services WHERE type IS NOT NULL AND type != '' ORDER BY type")->fetchAll(PDO::FETCH_COLUMN);
 
         foreach ($members as &$m) {
             $m['attendance_rate'] = $svcCount > 0
@@ -82,6 +117,8 @@ switch ($action) {
             'members' => $members,
             'total_services' => $svcCount,
             'period_months' => $months,
+            'service_type' => $svcType,
+            'service_types' => $svcTypes,
         ]);
         break;
 
@@ -96,7 +133,7 @@ switch ($action) {
             FROM members m
             LEFT JOIN attendance a ON a.member_id = m.id
             LEFT JOIN services s ON a.service_id = s.id
-            WHERE m.status IN ('active', 'non_member_attendee')
+            WHERE m.status IN ('active', 'restored')
             GROUP BY m.id
             HAVING last_attended IS NULL OR days_absent >= ?
             ORDER BY days_absent DESC
@@ -127,7 +164,7 @@ switch ($action) {
                 COUNT(CASE WHEN a.status = 'absent' THEN 1 END) as absent,
                 COUNT(a.id) as total_marked,
                 COUNT(CASE WHEN (a.status = 'present' OR a.status = 'late') AND m.status = 'active' THEN 1 END) as members_attended,
-                COUNT(CASE WHEN (a.status = 'present' OR a.status = 'late') AND m.status = 'non_member_attendee' THEN 1 END) as non_members_attended
+                COUNT(CASE WHEN (a.status = 'present' OR a.status = 'late') AND m.person_type = 'non_member_attendee' THEN 1 END) as non_members_attended
             FROM services s
             LEFT JOIN attendance a ON a.service_id = s.id
             LEFT JOIN members m ON a.member_id = m.id

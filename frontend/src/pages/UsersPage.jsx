@@ -18,7 +18,7 @@ const roleColorMap = Object.fromEntries(roles.map(r => [r.value, r.color]));
 const roleLabelMap = Object.fromEntries(roles.map(r => [r.value, r.label]));
 
 const emptyUser = {
-  email: '', password: '', name: '', role: 'volunteer', status: 'active', display_title: '',
+  email: '', password: '', name: '', phone: '', role: 'volunteer', status: 'active', display_title: '',
 };
 
 export default function UsersPage() {
@@ -39,6 +39,55 @@ export default function UsersPage() {
   const [permUser, setPermUser] = useState(null);
   const [permList, setPermList] = useState([]);
   const [permSaving, setPermSaving] = useState(false);
+  const [docFolders, setDocFolders] = useState([]);
+  const [financeSections, setFinanceSections] = useState([]);
+  const [sectionAccess, setSectionAccess] = useState({});
+
+  const SECTION_SUB_PERMS = {
+    members: [
+      { key: 'view', label: 'View Members' },
+      { key: 'add_edit', label: 'Add / Edit' },
+      { key: 'delete', label: 'Delete' },
+    ],
+    households: [
+      { key: 'view', label: 'View Households' },
+      { key: 'add_edit', label: 'Add / Edit' },
+      { key: 'delete', label: 'Delete' },
+    ],
+    groups: [
+      { key: 'view', label: 'View Groups' },
+      { key: 'manage', label: 'Create / Edit / Delete' },
+    ],
+    attendance: [
+      { key: 'view', label: 'View Attendance' },
+      { key: 'mark_edit', label: 'Mark / Edit' },
+    ],
+    services: [
+      { key: 'view', label: 'View Services' },
+      { key: 'manage', label: 'Create / Edit / Delete' },
+    ],
+    checklist: [
+      { key: 'view', label: 'View Checklist' },
+      { key: 'manage', label: 'Create / Edit / Delete' },
+    ],
+    communication: [
+      { key: 'view', label: 'View Messages' },
+      { key: 'send', label: 'Send Messages' },
+    ],
+    checkin: [
+      { key: 'kiosk', label: 'Check-In Kiosk' },
+      { key: 'manual', label: 'Manual Check-In' },
+      { key: 'today_log', label: "Today's Log" },
+      { key: 'hours_report', label: 'Hours Report' },
+      { key: 'manage_codes', label: 'Manage Codes' },
+      { key: 'print_cards', label: 'Print Cards' },
+      { key: 'offline', label: 'Offline Check-In' },
+    ],
+    followup: [
+      { key: 'view', label: 'View Follow-Ups' },
+      { key: 'manage', label: 'Create / Edit / Delete' },
+    ],
+  };
 
   const allPermissions = [
     { key: 'dashboard', label: 'Dashboard' },
@@ -55,6 +104,9 @@ export default function UsersPage() {
     { key: 'finance_expenses', label: 'Finance: Expenses Only' },
     { key: 'finance_reports', label: 'Finance: Reports Only' },
     { key: 'communication', label: 'Communication' },
+    { key: 'checkin', label: 'Check-In' },
+    { key: 'followup', label: 'Follow-Up' },
+    { key: 'documents', label: 'Documents' },
   ];
 
   const loadUsers = useCallback(async () => {
@@ -86,6 +138,7 @@ export default function UsersPage() {
       email: user.email || '',
       password: '',
       name: user.name || '',
+      phone: user.phone || '',
       role: user.role || 'volunteer',
       status: user.status || 'active',
       display_title: user.display_title || '',
@@ -165,8 +218,14 @@ export default function UsersPage() {
     try {
       const data = await permissionsApi.get(user.id);
       setPermList(data.permissions || []);
+      setDocFolders(data.document_folders || []);
+      setFinanceSections(data.finance_sections || []);
+      setSectionAccess(data.section_access || {});
     } catch {
       setPermList([]);
+      setDocFolders([]);
+      setFinanceSections([]);
+      setSectionAccess({});
     }
   };
 
@@ -174,11 +233,55 @@ export default function UsersPage() {
     setPermList(prev => prev.includes(key) ? prev.filter(p => p !== key) : [...prev, key]);
   };
 
+  const toggleDocFolder = (folder) => {
+    setDocFolders(prev => prev.includes(folder) ? prev.filter(f => f !== folder) : [...prev, folder]);
+  };
+
+  const toggleFinanceSection = (section) => {
+    setFinanceSections(prev => prev.includes(section) ? prev.filter(s => s !== section) : [...prev, section]);
+  };
+
+  const toggleSectionAccess = (section, sub) => {
+    setSectionAccess(prev => {
+      const current = prev[section] || [];
+      const updated = current.includes(sub) ? current.filter(s => s !== sub) : [...current, sub];
+      return { ...prev, [section]: updated };
+    });
+  };
+
+  const DOC_FOLDER_OPTIONS = [
+    { key: 'sermon', label: 'Sermons' },
+    { key: 'meeting_notes', label: 'Meeting Notes' },
+    { key: 'policy', label: 'Policies' },
+    { key: 'form', label: 'Forms' },
+    { key: 'other', label: 'Other' },
+  ];
+
+  const FINANCE_SECTION_OPTIONS = [
+    { key: 'record', label: 'Record Giving' },
+    { key: 'expenses', label: 'Expenses' },
+    { key: 'history', label: 'History' },
+    { key: 'statements', label: 'Statements' },
+    { key: 'reports', label: 'Reports' },
+    { key: 'budgets', label: 'Budgets' },
+    { key: 'budget_actual', label: 'Budget vs Actual' },
+    { key: 'balance_sheet', label: 'Balance Sheet' },
+    { key: 'income_statement', label: 'Income Statement' },
+    { key: 'pledges', label: 'Pledges' },
+    { key: 'accounts', label: 'Chart of Accounts' },
+    { key: 'categories', label: 'Categories' },
+  ];
+
   const savePermissions = async () => {
     if (!permUser) return;
     setPermSaving(true);
     try {
-      await permissionsApi.update(permUser.id, permList);
+      const hasFinancePerm = permList.some(p => p.startsWith('finance'));
+      const filteredAccess = {};
+      for (const [sec, subs] of Object.entries(sectionAccess)) {
+        if (permList.includes(sec) && subs.length > 0) filteredAccess[sec] = subs;
+      }
+      await permissionsApi.update(permUser.id, permList, permList.includes('documents') ? docFolders : [], hasFinancePerm ? financeSections : [], filteredAccess);
       setPermUser(null);
     } catch (err) {
       setError(err.message);
@@ -324,6 +427,10 @@ export default function UsersPage() {
               <input type="email" className="input" value={form.email} onChange={e => updateField('email', e.target.value)} required />
             </div>
             <div>
+              <label className="label">Phone (for text reminders)</label>
+              <input type="tel" className="input" value={form.phone} onChange={e => updateField('phone', e.target.value)} placeholder="+1 (555) 000-0000" />
+            </div>
+            <div>
               <label className="label">{editUser ? 'New Password (leave blank to keep current)' : 'Password *'}</label>
               <div className="relative">
                 <input
@@ -398,17 +505,73 @@ export default function UsersPage() {
         <p className="text-sm text-gray-600 mb-4">
           Select which sections this user can access. If none are selected, they can access everything.
         </p>
-        <div className="space-y-2 mb-6">
+        <div className="space-y-2 mb-4">
           {allPermissions.map(p => (
-            <label key={p.key} className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-50 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={permList.includes(p.key)}
-                onChange={() => togglePerm(p.key)}
-                className="w-4 h-4 text-primary-700 rounded border-gray-300 focus:ring-primary-500"
-              />
-              <span className="text-sm font-medium text-gray-700">{p.label}</span>
-            </label>
+            <div key={p.key}>
+              <label className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-50 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={permList.includes(p.key)}
+                  onChange={() => togglePerm(p.key)}
+                  className="w-4 h-4 text-primary-700 rounded border-gray-300 focus:ring-primary-500"
+                />
+                <span className="text-sm font-medium text-gray-700">{p.label}</span>
+              </label>
+              {SECTION_SUB_PERMS[p.key] && permList.includes(p.key) && (
+                <div className="ml-9 mt-1 mb-2 p-3 bg-amber-50 rounded-lg border border-amber-100">
+                  <p className="text-xs font-medium text-amber-700 mb-2">What can this user do? (Leave all unchecked = full access)</p>
+                  <div className="grid grid-cols-2 gap-1">
+                    {SECTION_SUB_PERMS[p.key].map(sp => (
+                      <label key={sp.key} className="flex items-center gap-2 p-1 rounded hover:bg-amber-100 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={(sectionAccess[p.key] || []).includes(sp.key)}
+                          onChange={() => toggleSectionAccess(p.key, sp.key)}
+                          className="w-3.5 h-3.5 text-amber-600 rounded border-gray-300 focus:ring-amber-500"
+                        />
+                        <span className="text-xs font-medium text-amber-800">{sp.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {p.key === 'documents' && permList.includes('documents') && (
+                <div className="ml-9 mt-1 mb-2 p-3 bg-blue-50 rounded-lg border border-blue-100">
+                  <p className="text-xs font-medium text-blue-700 mb-2">Which folders can this user access? (Leave all unchecked = all folders)</p>
+                  <div className="grid grid-cols-2 gap-1">
+                    {DOC_FOLDER_OPTIONS.map(f => (
+                      <label key={f.key} className="flex items-center gap-2 p-1 rounded hover:bg-blue-100 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={docFolders.includes(f.key)}
+                          onChange={() => toggleDocFolder(f.key)}
+                          className="w-3.5 h-3.5 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
+                        />
+                        <span className="text-xs font-medium text-blue-800">{f.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {(p.key === 'finance' || p.key === 'finance_giving' || p.key === 'finance_expenses' || p.key === 'finance_reports') && permList.some(pp => pp.startsWith('finance')) && p.key === 'finance' && (
+                <div className="ml-9 mt-1 mb-2 p-3 bg-emerald-50 rounded-lg border border-emerald-100">
+                  <p className="text-xs font-medium text-emerald-700 mb-2">Which finance sections can this user access? (Leave all unchecked = all sections)</p>
+                  <div className="grid grid-cols-2 gap-1">
+                    {FINANCE_SECTION_OPTIONS.map(s => (
+                      <label key={s.key} className="flex items-center gap-2 p-1 rounded hover:bg-emerald-100 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={financeSections.includes(s.key)}
+                          onChange={() => toggleFinanceSection(s.key)}
+                          className="w-3.5 h-3.5 text-emerald-600 rounded border-gray-300 focus:ring-emerald-500"
+                        />
+                        <span className="text-xs font-medium text-emerald-800">{s.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
           ))}
         </div>
         <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-100">

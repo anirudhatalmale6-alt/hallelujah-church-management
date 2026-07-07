@@ -45,6 +45,7 @@ export default function ReportsPage() {
 
   // Engagement state
   const [engagementPeriod, setEngagementPeriod] = useState(3);
+  const [engagementType, setEngagementType] = useState('');
   const [engagementData, setEngagementData] = useState(null);
 
   // Inactive state
@@ -74,13 +75,13 @@ export default function ReportsPage() {
     setLoading(true);
     setError('');
     try {
-      const data = await reports.engagement(engagementPeriod);
+      const data = await reports.engagement(engagementPeriod, engagementType);
       setEngagementData(data);
     } catch (err) {
       setError(err.message);
     }
     setLoading(false);
-  }, [engagementPeriod]);
+  }, [engagementPeriod, engagementType]);
 
   const loadInactive = useCallback(async () => {
     setLoading(true);
@@ -139,26 +140,29 @@ export default function ReportsPage() {
     if (!growthData) return;
     const doc = new jsPDF('landscape');
     doc.setFontSize(18);
-    doc.text('Member Growth Report', 14, 20);
+    doc.text('People Growth Report', 14, 20);
     doc.setFontSize(10);
     doc.text(`Generated: ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`, 14, 28);
     doc.text(`Period: Last ${growthPeriod} months`, 14, 34);
-    doc.text(`Total Members: ${growthData.total_members}  |  Active Members: ${growthData.active_members}`, 14, 40);
+    doc.text(`Total People: ${growthData.total_members}  |  Active: ${growthData.active_members}`, 14, 40);
 
     autoTable(doc, {
       startY: 48,
-      head: [['Month', 'New Members', 'Active New', 'Visitor New']],
+      head: [['Month', 'New People', 'Church Members', 'Non-Member', 'Companions', 'Community', 'Active']],
       body: growthData.growth.map(g => [
         formatMonth(g.month),
         g.new_members,
+        g.type_church_member || 0,
+        g.type_non_member || 0,
+        g.type_companion || 0,
+        g.type_community || 0,
         g.active_new,
-        g.visitor_new,
       ]),
       styles: { fontSize: 10 },
       headStyles: { fillColor: [59, 80, 120] },
     });
 
-    doc.save('member-growth-report.pdf');
+    doc.save('people-growth-report.pdf');
   };
 
   const downloadEngagementPDF = () => {
@@ -217,9 +221,9 @@ export default function ReportsPage() {
   const downloadGrowthCSV = () => {
     if (!growthData) return;
     downloadCSV(
-      ['Month', 'New Members', 'Active New', 'Visitor New'],
-      growthData.growth.map(g => [formatMonth(g.month), g.new_members, g.active_new, g.visitor_new]),
-      'member-growth.csv'
+      ['Month', 'New People', 'Church Members', 'Non-Member Attendees', 'Companions', 'Community', 'Active'],
+      growthData.growth.map(g => [formatMonth(g.month), g.new_members, g.type_church_member || 0, g.type_non_member || 0, g.type_companion || 0, g.type_community || 0, g.active_new]),
+      'people-growth.csv'
     );
   };
 
@@ -367,14 +371,14 @@ export default function ReportsPage() {
           {growthData && (
             <>
               {/* Summary Cards */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-6">
                 <div className="card flex items-center gap-4">
                   <div className="w-12 h-12 rounded-xl flex items-center justify-center bg-blue-100 text-blue-600">
                     <Users size={24} />
                   </div>
                   <div>
                     <div className="text-2xl font-bold text-gray-900">{growthData.total_members}</div>
-                    <div className="text-sm text-gray-500">Total Members</div>
+                    <div className="text-sm text-gray-500">Total People</div>
                   </div>
                 </div>
                 <div className="card flex items-center gap-4">
@@ -383,7 +387,7 @@ export default function ReportsPage() {
                   </div>
                   <div>
                     <div className="text-2xl font-bold text-gray-900">{growthData.active_members}</div>
-                    <div className="text-sm text-gray-500">Active Members</div>
+                    <div className="text-sm text-gray-500">Active</div>
                   </div>
                 </div>
                 <div className="card flex items-center gap-4">
@@ -394,22 +398,116 @@ export default function ReportsPage() {
                     <div className="text-2xl font-bold text-gray-900">
                       {growthData.growth.length > 0 ? growthData.growth[0].new_members : 0}
                     </div>
-                    <div className="text-sm text-gray-500">New This Month</div>
+                    <div className="text-sm text-gray-500">New People This Month</div>
                   </div>
                 </div>
               </div>
+
+              {/* Type Breakdown Cards */}
+              {growthData.type_breakdown && growthData.type_breakdown.length > 0 && (
+                <div className="flex flex-wrap gap-3 mb-6">
+                  {(() => {
+                    const typeConfig = [
+                      { key: 'church_member', label: 'Church Members', bg: 'bg-primary-50', text: 'text-primary-700' },
+                      { key: 'non_member_attendee', label: 'Non-Member Attendees', bg: 'bg-yellow-50', text: 'text-yellow-700' },
+                      { key: 'community', label: 'Community', bg: 'bg-amber-50', text: 'text-amber-700' },
+                      { key: 'companion', label: 'Companions', bg: 'bg-purple-50', text: 'text-purple-700' },
+                      { key: 'other', label: 'Other', bg: 'bg-gray-100', text: 'text-gray-600' },
+                    ];
+                    const typeMap = {};
+                    growthData.type_breakdown.forEach(t => { typeMap[t.person_type] = t; });
+                    return typeConfig.map(tc => {
+                      const data = typeMap[tc.key];
+                      return (
+                        <div key={tc.key} className={`${tc.bg} ${tc.text} px-4 py-2 rounded-lg text-center`}>
+                          <div className="text-xl font-bold">{data ? data.total : 0}</div>
+                          <div className="text-xs font-medium">{tc.label}</div>
+                        </div>
+                      );
+                    });
+                  })()}
+                </div>
+              )}
+
+              {/* Type Breakdown */}
+              {growthData.type_breakdown && growthData.type_breakdown.length > 0 && (
+                <div className="card mb-6">
+                  <h2 className="text-lg font-semibold text-gray-900 mb-4">Members by Type & Status</h2>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="bg-gray-50 border-b">
+                          <th className="text-left px-4 py-3 font-medium text-gray-600">Type</th>
+                          <th className="text-right px-4 py-3 font-medium text-gray-600">Total</th>
+                          <th className="text-right px-4 py-3 font-medium text-green-600">Active</th>
+                          <th className="text-right px-4 py-3 font-medium text-yellow-600">Inactive</th>
+                          <th className="text-right px-4 py-3 font-medium text-orange-600">Forsaking</th>
+                          <th className="text-right px-4 py-3 font-medium text-red-600">Revoked</th>
+                          <th className="text-right px-4 py-3 font-medium text-teal-600">Restored</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {growthData.type_breakdown.map(t => {
+                          const typeLabels = { church_member: 'Church Members', non_member_attendee: 'Non-Member Attendees', community: 'Community Contacts', companion: 'Companions', other: 'Other' };
+                          return (
+                            <tr key={t.person_type} className="border-b hover:bg-gray-50">
+                              <td className="px-4 py-3 font-medium">{typeLabels[t.person_type] || t.person_type || 'Unknown'}</td>
+                              <td className="px-4 py-3 text-right font-bold">{t.total}</td>
+                              <td className="px-4 py-3 text-right text-green-700">{t.active_count || 0}</td>
+                              <td className="px-4 py-3 text-right text-yellow-700">{t.inactive_count || 0}</td>
+                              <td className="px-4 py-3 text-right text-orange-700">{t.forsaking_count || 0}</td>
+                              <td className="px-4 py-3 text-right text-red-700">{t.revoked_count || 0}</td>
+                              <td className="px-4 py-3 text-right text-teal-700">{t.restored_count || 0}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* Status Summary */}
+              {growthData.status_breakdown && (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
+                  {growthData.status_breakdown.map(s => {
+                    const colors = { active: 'text-green-600', inactive: 'text-yellow-600', forsaking: 'text-orange-600', revoked: 'text-red-600', restored: 'text-teal-600' };
+                    const labels = { active: 'Active', inactive: 'Inactive', forsaking: 'Forsaking', revoked: 'Revoked', restored: 'Restored' };
+                    return (
+                      <div key={s.status} className="card text-center">
+                        <div className={`text-2xl font-bold ${colors[s.status] || 'text-gray-600'}`}>{s.count}</div>
+                        <div className="text-xs text-gray-500">{labels[s.status] || s.status}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
 
               {/* Growth Bars */}
               <div className="card">
                 <h2 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
                   <FileText size={20} className="text-primary-700" />
-                  Monthly New Members
+                  Monthly New People
                 </h2>
+                <div className="flex flex-wrap gap-3 mb-4 text-xs">
+                  <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-primary-700"></span> Church Members</span>
+                  <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-yellow-500"></span> Non-Member Attendees</span>
+                  <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-purple-500"></span> Companions</span>
+                  <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-amber-500"></span> Community</span>
+                </div>
                 {growthData.growth.length > 0 ? (
                   <div className="space-y-3">
                     {growthData.growth.map(g => {
+                      const total = Number(g.new_members) || 0;
                       const maxNew = Math.max(...growthData.growth.map(x => Number(x.new_members) || 1), 1);
-                      const pct = ((Number(g.new_members) || 0) / maxNew) * 100;
+                      const barWidth = Math.max((total / maxNew) * 100, 10);
+                      const segments = [
+                        { count: Number(g.type_church_member) || 0, color: 'bg-primary-700' },
+                        { count: Number(g.type_non_member) || 0, color: 'bg-yellow-500' },
+                        { count: Number(g.type_companion) || 0, color: 'bg-purple-500' },
+                        { count: Number(g.type_community) || 0, color: 'bg-amber-500' },
+                        { count: Number(g.type_other) || 0, color: 'bg-gray-400' },
+                      ].filter(s => s.count > 0);
                       return (
                         <div key={g.month} className="flex items-center gap-3">
                           <div className="w-28 text-xs text-gray-500 shrink-0 text-right">
@@ -417,16 +515,18 @@ export default function ReportsPage() {
                           </div>
                           <div className="flex-1">
                             <div className="h-7 bg-gray-100 rounded-full overflow-hidden">
-                              <div
-                                className="h-full bg-gradient-to-r from-primary-700 to-gold-400 rounded-full flex items-center justify-end pr-2 transition-all duration-500"
-                                style={{ width: `${Math.max(pct, 8)}%` }}
-                              >
-                                <span className="text-xs font-medium text-white">{g.new_members}</span>
+                              <div className="h-full flex rounded-full overflow-hidden" style={{ width: `${barWidth}%` }}>
+                                {segments.map((s, i) => (
+                                  <div key={i} className={`h-full ${s.color} flex items-center justify-center transition-all duration-500`}
+                                    style={{ width: `${(s.count / total) * 100}%` }}
+                                    title={`${s.count}`}>
+                                  </div>
+                                ))}
                               </div>
                             </div>
                           </div>
-                          <div className="w-20 text-xs text-gray-400 shrink-0">
-                            {g.active_new} active
+                          <div className="w-16 text-xs font-bold text-gray-700 shrink-0 text-center">
+                            {total}
                           </div>
                         </div>
                       );
@@ -460,6 +560,19 @@ export default function ReportsPage() {
                   <option value={12}>Last 12 months</option>
                 </select>
               </div>
+              <div>
+                <label className="label">Service type</label>
+                <select
+                  className="input"
+                  value={engagementType}
+                  onChange={e => setEngagementType(e.target.value)}
+                >
+                  <option value="">All service types</option>
+                  {(engagementData?.service_types || []).map(t => (
+                    <option key={t} value={t}>{t}</option>
+                  ))}
+                </select>
+              </div>
               <button onClick={downloadEngagementPDF} className="btn-primary" disabled={!engagementData}>
                 <Download size={16} /> PDF
               </button>
@@ -477,6 +590,7 @@ export default function ReportsPage() {
                   <span><strong className="text-gray-900">{engagementData.members.length}</strong> members ranked</span>
                   <span><strong className="text-gray-900">{engagementData.total_services}</strong> services in period</span>
                   <span>Period: <strong className="text-gray-900">{engagementData.period_months} month(s)</strong></span>
+                  <span>Services counted: <strong className="text-gray-900">{engagementData.service_type || 'All types'}</strong></span>
                 </div>
               </div>
 

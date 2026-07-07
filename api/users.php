@@ -18,7 +18,23 @@ if ($method === 'GET' && $action === 'permissions' && $id) {
     $stmt = $db->prepare("SELECT permission FROM user_permissions WHERE user_id = ?");
     $stmt->execute([$id]);
     $perms = array_column($stmt->fetchAll(), 'permission');
-    jsonResponse(['user_id' => $id, 'permissions' => $perms]);
+
+    $fStmt = $db->prepare("SELECT folder FROM user_document_folders WHERE user_id = ?");
+    $fStmt->execute([$id]);
+    $docFolders = array_column($fStmt->fetchAll(), 'folder');
+
+    $fsStmt = $db->prepare("SELECT section FROM user_finance_sections WHERE user_id = ?");
+    $fsStmt->execute([$id]);
+    $financeSections = array_column($fsStmt->fetchAll(), 'section');
+
+    $saStmt = $db->prepare("SELECT section, sub_permission FROM user_section_access WHERE user_id = ?");
+    $saStmt->execute([$id]);
+    $sectionAccess = [];
+    foreach ($saStmt->fetchAll() as $row) {
+        $sectionAccess[$row['section']][] = $row['sub_permission'];
+    }
+
+    jsonResponse(['user_id' => $id, 'permissions' => $perms, 'document_folders' => $docFolders, 'finance_sections' => $financeSections, 'section_access' => $sectionAccess]);
 }
 
 if ($method === 'PUT' && $action === 'permissions') {
@@ -28,7 +44,7 @@ if ($method === 'PUT' && $action === 'permissions') {
     $permissions = $data['permissions'] ?? [];
     if (!$targetId) jsonResponse(['error' => 'user_id required'], 400);
 
-    $validPerms = ['dashboard', 'members', 'households', 'groups', 'attendance', 'services', 'reports', 'checklist', 'department_reports', 'finance', 'finance_giving', 'finance_expenses', 'finance_reports', 'communication'];
+    $validPerms = ['dashboard', 'members', 'households', 'groups', 'attendance', 'services', 'reports', 'checklist', 'department_reports', 'finance', 'finance_giving', 'finance_expenses', 'finance_reports', 'communication', 'checkin', 'followup', 'documents'];
     $permissions = array_filter($permissions, fn($p) => in_array($p, $validPerms));
 
     $db->prepare("DELETE FROM user_permissions WHERE user_id = ?")->execute([$targetId]);
@@ -36,7 +52,53 @@ if ($method === 'PUT' && $action === 'permissions') {
     foreach ($permissions as $perm) {
         $stmt->execute([$targetId, $perm]);
     }
-    jsonResponse(['message' => 'Permissions updated', 'permissions' => array_values($permissions)]);
+
+    $validFolders = ['sermon', 'meeting_notes', 'policy', 'form', 'other'];
+    $docFolders = isset($data['document_folders']) ? array_filter($data['document_folders'], fn($f) => in_array($f, $validFolders)) : [];
+    $db->prepare("DELETE FROM user_document_folders WHERE user_id = ?")->execute([$targetId]);
+    if (!empty($docFolders)) {
+        $fStmt = $db->prepare("INSERT INTO user_document_folders (user_id, folder) VALUES (?, ?)");
+        foreach ($docFolders as $folder) {
+            $fStmt->execute([$targetId, $folder]);
+        }
+    }
+
+    $validSections = ['record', 'expenses', 'history', 'statements', 'reports', 'budgets', 'financial_statements', 'income_statement', 'balance_sheet', 'budget_actual', 'pledges', 'accounts', 'categories', 'audit'];
+    $financeSections = isset($data['finance_sections']) ? array_filter($data['finance_sections'], fn($s) => in_array($s, $validSections)) : [];
+    $db->prepare("DELETE FROM user_finance_sections WHERE user_id = ?")->execute([$targetId]);
+    if (!empty($financeSections)) {
+        $fsStmt = $db->prepare("INSERT INTO user_finance_sections (user_id, section) VALUES (?, ?)");
+        foreach ($financeSections as $section) {
+            $fsStmt->execute([$targetId, $section]);
+        }
+    }
+
+    $validSubPerms = [
+        'members' => ['view', 'add_edit', 'delete'],
+        'households' => ['view', 'add_edit', 'delete'],
+        'groups' => ['view', 'manage'],
+        'attendance' => ['view', 'mark_edit'],
+        'services' => ['view', 'manage'],
+        'checklist' => ['view', 'manage'],
+        'reports' => ['view'],
+        'department_reports' => ['view'],
+        'communication' => ['view', 'send'],
+        'checkin' => ['kiosk', 'manual', 'today_log', 'hours_report', 'manage_codes', 'print_cards', 'offline'],
+        'followup' => ['view', 'manage'],
+    ];
+    $sectionAccess = $data['section_access'] ?? [];
+    $db->prepare("DELETE FROM user_section_access WHERE user_id = ?")->execute([$targetId]);
+    $saStmt = $db->prepare("INSERT INTO user_section_access (user_id, section, sub_permission) VALUES (?, ?, ?)");
+    foreach ($sectionAccess as $section => $subs) {
+        if (!isset($validSubPerms[$section]) || !is_array($subs)) continue;
+        foreach ($subs as $sub) {
+            if (in_array($sub, $validSubPerms[$section])) {
+                $saStmt->execute([$targetId, $section, $sub]);
+            }
+        }
+    }
+
+    jsonResponse(['message' => 'Permissions updated', 'permissions' => array_values($permissions), 'document_folders' => array_values($docFolders), 'finance_sections' => array_values($financeSections), 'section_access' => $sectionAccess]);
 }
 
 if ($method === 'POST' && $action === 'reset_password') {
@@ -65,7 +127,7 @@ switch ($method) {
     case 'GET':
         if ($id) {
             // Get single user
-            $stmt = $db->prepare("SELECT id, email, name, role, display_title, status, created_at, updated_at FROM users WHERE id = ?");
+            $stmt = $db->prepare("SELECT id, email, name, phone, role, display_title, status, created_at, updated_at FROM users WHERE id = ?");
             $stmt->execute([$id]);
             $user = $stmt->fetch();
             if (!$user) {
@@ -75,7 +137,7 @@ switch ($method) {
         } else {
             // List all users
             requireRole($currentUser, ['pastor', 'admin']);
-            $stmt = $db->query("SELECT id, email, name, role, display_title, status, created_at, updated_at FROM users ORDER BY name ASC");
+            $stmt = $db->query("SELECT id, email, name, phone, role, display_title, status, created_at, updated_at FROM users ORDER BY name ASC");
             $users = $stmt->fetchAll();
             jsonResponse(['users' => $users]);
         }
@@ -103,11 +165,12 @@ switch ($method) {
         }
 
         $passwordHash = password_hash($data['password'], PASSWORD_BCRYPT);
-        $stmt = $db->prepare("INSERT INTO users (email, password_hash, name, role, status) VALUES (?, ?, ?, ?, ?)");
+        $stmt = $db->prepare("INSERT INTO users (email, password_hash, name, phone, role, status) VALUES (?, ?, ?, ?, ?, ?)");
         $stmt->execute([
             $data['email'],
             $passwordHash,
             $data['name'],
+            !empty($data['phone']) ? trim($data['phone']) : null,
             $data['role'],
             $data['status'] ?? 'active'
         ]);
@@ -154,6 +217,10 @@ switch ($method) {
             $fields[] = "password_hash = ?";
             $params[] = password_hash($data['password'], PASSWORD_BCRYPT);
         }
+        if (array_key_exists('phone', $data)) {
+            $fields[] = "phone = ?";
+            $params[] = !empty($data['phone']) ? trim($data['phone']) : null;
+        }
         if (isset($data['role']) && in_array($currentUser['role'], ['pastor', 'admin'])) {
             $validRoles = ['pastor', 'admin', 'leader', 'volunteer'];
             if (in_array($data['role'], $validRoles)) {
@@ -179,7 +246,7 @@ switch ($method) {
         $stmt = $db->prepare($sql);
         $stmt->execute($params);
 
-        $stmt = $db->prepare("SELECT id, email, name, role, display_title, status, created_at, updated_at FROM users WHERE id = ?");
+        $stmt = $db->prepare("SELECT id, email, name, phone, role, display_title, status, created_at, updated_at FROM users WHERE id = ?");
         $stmt->execute([$id]);
         $user = $stmt->fetch();
 

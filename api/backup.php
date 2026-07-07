@@ -45,7 +45,7 @@ switch ($method) {
                 'date' => date('Y-m-d H:i:s', filemtime($f)),
             ];
         }
-        usort($backups, fn($a, $b) => strcmp($b['filename'], $a['filename']));
+        usort($backups, fn($a, $b) => strcmp($b['file'], $a['file']));
         jsonResponse(['backups' => $backups]);
         break;
 

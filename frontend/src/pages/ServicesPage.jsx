@@ -43,7 +43,7 @@ function getTypeColor(type) {
 }
 
 const emptyService = {
-  name: '', date: '', time: '10:00', type: 'sunday_1st', notes: '',
+  name: '', date: '', time: '10:00', type: 'sunday_1st', notes: '', duration_hours: '2',
 };
 
 const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -137,6 +137,7 @@ export default function ServicesPage() {
       time: service.time?.substring(0, 5) || '10:00',
       type: isDefault || isKnownCustom ? service.type : '__custom__',
       notes: service.notes || '',
+      duration_hours: service.duration_hours ?? '2',
     });
     setShowCustomType(!isDefault && !isKnownCustom);
     setCustomTypeName(!isDefault && !isKnownCustom ? (service.type || '') : '');
@@ -405,6 +406,9 @@ export default function ServicesPage() {
                           {new Date(s.date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
                         </span>
                       </div>
+                      {s.duration_hours && parseFloat(s.duration_hours) !== 2 && (
+                        <span className="text-xs text-gray-400 mt-1 inline-block">Duration: {s.duration_hours}h</span>
+                      )}
                       {s.notes && <p className="text-sm text-gray-500 mt-1">{s.notes}</p>}
                     </div>
 
@@ -693,6 +697,13 @@ export default function ServicesPage() {
                   required
                 />
               )}
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="label">Duration (hours)</label>
+                <input type="number" step="0.5" min="0.5" max="24" className="input" value={form.duration_hours} onChange={e => updateField('duration_hours', e.target.value)} />
+                <p className="text-xs text-gray-400 mt-1">Used for auto-marking absent after service ends</p>
+              </div>
             </div>
             <div>
               <label className="label">Notes</label>

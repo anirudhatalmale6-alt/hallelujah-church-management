@@ -3,13 +3,21 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/public/favicon.svg" />
+    <link rel="apple-touch-icon" href="/system/public/icon-192.png" />
+    <link rel="manifest" href="/system/public/manifest.json" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#5a3e1b" />
     <meta name="description" content="Hallelujah In The City - Church Management System" />
     <title>HITC Church Management</title>
-    <script type="module" crossorigin src="/system/public/assets/index-B9dpxJl-.js"></script>
-    <link rel="stylesheet" crossorigin href="/system/public/assets/index-CtyZPNh4.css">
+    <script type="module" crossorigin src="/system/public/assets/index-DRCG7JKV.js"></script>
+    <link rel="stylesheet" crossorigin href="/system/public/assets/index-UMiYC5pd.css">
   </head>
   <body class="bg-gray-50">
     <div id="root"></div>
+    <script>
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('/system/public/sw.js', { scope: '/system/' });
+      }
+    </script>
   </body>
 </html>

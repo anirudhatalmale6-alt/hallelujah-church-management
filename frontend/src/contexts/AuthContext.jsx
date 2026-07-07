@@ -1,11 +1,13 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { auth as authApi, getToken, setToken, removeToken, getUser, setUser } from '../utils/api';
 
 const AuthContext = createContext(null);
+const INACTIVITY_TIMEOUT = 15 * 60 * 1000; // 15 minutes
 
 export function AuthProvider({ children }) {
   const [user, setUserState] = useState(getUser());
   const [loading, setLoading] = useState(true);
+  const inactivityTimer = useRef(null);
 
   const checkAuth = useCallback(async () => {
     const token = getToken();
@@ -42,6 +44,29 @@ export function AuthProvider({ children }) {
     setUserState(null);
   };
 
+  const resetInactivityTimer = useCallback(() => {
+    if (inactivityTimer.current) clearTimeout(inactivityTimer.current);
+    if (getToken()) {
+      inactivityTimer.current = setTimeout(() => {
+        removeToken();
+        setUserState(null);
+        window.location.href = window.location.pathname.replace(/\/[^/]*$/, '/login') + '?expired=1';
+      }, INACTIVITY_TIMEOUT);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    const events = ['mousedown', 'keydown', 'scroll', 'touchstart'];
+    const handler = () => resetInactivityTimer();
+    events.forEach(e => window.addEventListener(e, handler, { passive: true }));
+    resetInactivityTimer();
+    return () => {
+      events.forEach(e => window.removeEventListener(e, handler));
+      if (inactivityTimer.current) clearTimeout(inactivityTimer.current);
+    };
+  }, [user, resetInactivityTimer]);
+
   const isAdmin = user && (user.role === 'admin' || user.role === 'pastor');
   const isLeader = user && (user.role === 'admin' || user.role === 'pastor' || user.role === 'leader');
 
@@ -56,8 +81,22 @@ export function AuthProvider({ children }) {
     return false;
   };
 
+  const hasFinanceSection = (section) => {
+    if (!user) return false;
+    if (isAdmin) return true;
+    if (!user.finance_sections || user.finance_sections.length === 0) return true;
+    return user.finance_sections.includes(section);
+  };
+
+  const hasSectionAccess = (section, subPermission) => {
+    if (!user) return false;
+    if (isAdmin) return true;
+    if (!user.section_access || !user.section_access[section] || user.section_access[section].length === 0) return true;
+    return user.section_access[section].includes(subPermission);
+  };
+
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout, isAdmin, isLeader, checkAuth, hasPermission }}>
+    <AuthContext.Provider value={{ user, loading, login, logout, isAdmin, isLeader, checkAuth, hasPermission, hasFinanceSection, hasSectionAccess }}>
       {children}
     </AuthContext.Provider>
   );

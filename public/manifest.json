@@ -1,0 +1,24 @@
+{
+  "name": "HITC Church Management",
+  "short_name": "HITC System",
+  "description": "Hallelujah In The City - Church Management System",
+  "start_url": "/system/public/",
+  "scope": "/system/",
+  "display": "standalone",
+  "background_color": "#f9fafb",
+  "theme_color": "#5a3e1b",
+  "icons": [
+    {
+      "src": "/system/public/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/system/public/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

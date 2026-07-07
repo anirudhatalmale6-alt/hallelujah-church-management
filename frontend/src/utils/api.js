@@ -115,6 +115,22 @@ export const members = {
   update: (id, data) => request('members.php', { method: 'PUT', body: data, params: { id } }),
   delete: (id) => request('members.php', { method: 'DELETE', params: { id } }),
   import: (contacts) => request('members.php', { method: 'POST', body: { contacts }, params: { action: 'import' } }),
+  autoStatus: () => request('members.php', { method: 'POST', params: { action: 'auto_status' } }),
+  uploadPhoto: async (memberId, file) => {
+    const formData = new FormData();
+    formData.append('photo', file);
+    formData.append('member_id', memberId);
+    const token = getToken();
+    const url = `${API_BASE}/members.php?action=upload_photo&id=${memberId}&_t=${Date.now()}`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: formData,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new ApiError(data.error || 'Upload failed', res.status, data);
+    return data;
+  },
 };
 
 // Services
@@ -162,7 +178,7 @@ export const households = {
 // Reports
 export const reports = {
   memberGrowth: (months) => request('reports.php', { params: { action: 'member_growth', months } }),
-  engagement: (period) => request('reports.php', { params: { action: 'engagement', period } }),
+  engagement: (period, serviceType) => request('reports.php', { params: { action: 'engagement', period, service_type: serviceType || '' } }),
   inactive: (days) => request('reports.php', { params: { action: 'inactive', days } }),
   directory: () => request('reports.php', { params: { action: 'directory' } }),
   attendanceSummary: (params) => request('reports.php', { params: { action: 'attendance_summary', ...params } }),
@@ -204,13 +220,15 @@ export const checklist = {
 // User Permissions
 export const permissions = {
   get: (userId) => request('users.php', { params: { action: 'permissions', id: userId } }),
-  update: (userId, perms) => request('users.php', { method: 'PUT', body: { user_id: userId, permissions: perms }, params: { action: 'permissions' } }),
+  update: (userId, perms, docFolders, financeSections, sectionAccess) => request('users.php', { method: 'PUT', body: { user_id: userId, permissions: perms, document_folders: docFolders || [], finance_sections: financeSections || [], section_access: sectionAccess || {} }, params: { action: 'permissions' } }),
 };
 
 // Settings
 export const settings = {
   get: () => request('settings.php'),
   update: (settingsData) => request('settings.php', { method: 'PUT', body: { settings: settingsData } }),
+  getPersonTypes: () => request('settings.php', { params: { action: 'person_types' } }),
+  savePersonTypes: (list) => request('settings.php', { method: 'PUT', params: { action: 'person_types' }, body: { person_types: list } }),
 };
 
 // Backups
@@ -269,6 +287,10 @@ export const finance = {
   summary: (params) => request('finance.php', { params: { action: 'summary', ...params } }),
   memberStatement: (memberId, dateFrom, dateTo) =>
     request('finance.php', { params: { action: 'member_statement', member_id: memberId, date_from: dateFrom, date_to: dateTo } }),
+  allMembersStatement: (dateFrom, dateTo, sortBy) =>
+    request('finance.php', { params: { action: 'all_members_statement', date_from: dateFrom, date_to: dateTo, sort_by: sortBy } }),
+  nonGivers: (dateFrom, dateTo) =>
+    request('finance.php', { params: { action: 'non_givers', date_from: dateFrom, date_to: dateTo } }),
   // Expense categories
   expenseCategories: () => request('finance.php', { params: { action: 'expense_categories' } }),
   addExpenseCategory: (data) => request('finance.php', { method: 'POST', body: data, params: { action: 'expense_category' } }),
@@ -280,6 +302,7 @@ export const finance = {
   updateExpense: (id, data) => request('finance.php', { method: 'PUT', body: data, params: { action: 'expense', id } }),
   deleteExpense: (id) => request('finance.php', { method: 'DELETE', params: { action: 'expense', id } }),
   approveExpense: (id) => request('finance.php', { method: 'PUT', params: { action: 'approve_expense', id } }),
+  vendors: (search) => request('finance.php', { params: { action: 'vendors', ...(search ? { search } : {}) } }),
   expenseSummary: (params) => request('finance.php', { params: { action: 'expense_summary', ...params } }),
   // Budgets
   budgets: (year) => request('finance.php', { params: { action: 'budgets', year } }),
@@ -313,8 +336,15 @@ export const finance = {
   loanTransaction: (data) => request('finance.php', { method: 'POST', body: data, params: { action: 'loan_transaction' } }),
   // Opening Balance
   setOpeningBalance: (data) => request('finance.php', { method: 'POST', body: data, params: { action: 'opening_balance' } }),
+  // Category transactions (for drill-down)
+  categoryTransactions: (params) => request('finance.php', { params: { action: 'category_transactions', ...params } }),
+  // Sync CoA accounts to categories
+  syncAccounts: () => request('finance.php', { method: 'POST', params: { action: 'sync_accounts' } }),
   // All transactions (unified)
   allTransactions: (params) => request('finance.php', { params: { action: 'all_transactions', ...params } }),
+  // Manual Journal Entries
+  createJournalEntry: (data) => request('finance.php', { method: 'POST', body: data, params: { action: 'journal_entry' } }),
+  deleteJournalEntry: (id) => request('finance.php', { method: 'POST', body: { id }, params: { action: 'delete_journal_entry' } }),
   // Delete from account report / journal
   deleteLedgerEntry: (id) => request('finance.php', { method: 'DELETE', params: { action: 'ledger_entry', id } }),
   deleteRoutedDonation: (id) => request('finance.php', { method: 'DELETE', params: { action: 'routed_donation', id } }),
@@ -347,6 +377,101 @@ export const surveys = {
   delete: (id) => request('surveys.php', { method: 'DELETE', params: { id } }),
   responses: (id) => request('surveys.php', { params: { action: 'responses', id } }),
   respond: (data) => request('surveys.php', { method: 'POST', body: data, params: { action: 'respond' } }),
+};
+
+// Check-in
+export const checkin = {
+  codes: () => request('checkin.php', { params: { action: 'codes' } }),
+  memberCode: (memberId) => request('checkin.php', { params: { action: 'member_code', member_id: memberId } }),
+  generateCodes: (memberIds) => request('checkin.php', { method: 'POST', body: { member_ids: memberIds }, params: { action: 'generate_codes' } }),
+  regenerateCode: (memberId) => request('checkin.php', { method: 'POST', body: { member_id: memberId }, params: { action: 'regenerate_code' } }),
+  qrCheckin: (qrCode, serviceId) => request('checkin.php', { method: 'POST', body: { qr_code: qrCode, service_id: serviceId }, params: { action: 'qr_checkin' } }),
+  pinCheckin: (pinCode, serviceId) => request('checkin.php', { method: 'POST', body: { pin_code: pinCode, service_id: serviceId }, params: { action: 'pin_checkin' } }),
+  manualCheckin: (data) => request('checkin.php', { method: 'POST', body: data, params: { action: 'manual_checkin' } }),
+  manualCheckout: (logId) => request('checkin.php', { method: 'POST', body: { log_id: logId }, params: { action: 'manual_checkout' } }),
+  logs: (params) => request('checkin.php', { params: { action: 'logs', ...params } }),
+  hoursReport: (params) => request('checkin.php', { params: { action: 'hours_report', ...params } }),
+  today: () => request('checkin.php', { params: { action: 'today' } }),
+  activeServices: () => request('checkin.php', { params: { action: 'active_services' } }),
+  editLog: (data) => request('checkin.php', { method: 'POST', body: data, params: { action: 'edit_log' } }),
+  quickRegister: (data) => request('checkin.php', { method: 'POST', body: data, params: { action: 'quick_register' } }),
+  deleteLog: (id) => request('checkin.php', { method: 'DELETE', params: { id } }),
+  deleteCode: (id) => request('checkin.php', { method: 'DELETE', params: { action: 'code', id } }),
+  markAbsent: () => request('checkin.php', { method: 'POST', body: {}, params: { action: 'mark_absent' } }),
+};
+
+// Follow-ups
+export const followups = {
+  list: (params) => request('followup.php', { params }),
+  stats: () => request('followup.php', { params: { action: 'stats' } }),
+  create: (data) => request('followup.php', { method: 'POST', body: data }),
+  update: (id, data) => request('followup.php', { method: 'PUT', body: data, params: { id } }),
+  delete: (id) => request('followup.php', { method: 'DELETE', params: { id } }),
+  autoGenerate: (days) => request('followup.php', { method: 'POST', body: { days }, params: { action: 'auto_generate' } }),
+  markDone: (id, completionNotes) => request('followup.php', { method: 'POST', body: { id, completion_notes: completionNotes }, params: { action: 'mark_done' } }),
+  approve: (id) => request('followup.php', { method: 'POST', body: { id }, params: { action: 'approve' } }),
+  rejectApproval: (id, revertTo) => request('followup.php', { method: 'POST', body: { id, revert_to: revertTo }, params: { action: 'reject_approval' } }),
+  toggleEdit: (id, canEdit) => request('followup.php', { method: 'POST', body: { id, can_edit: canEdit ? 1 : 0 }, params: { action: 'toggle_edit' } }),
+};
+
+// Documents
+export const documents = {
+  list: (params) => request('documents.php', { params }),
+  categories: () => request('documents.php', { params: { action: 'categories' } }),
+  upload: async (file, title, category, description) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('title', title || '');
+    formData.append('category', category || 'other');
+    formData.append('description', description || '');
+
+    const token = getToken();
+    const url = `${API_BASE}/documents.php?action=upload&_t=${Date.now()}`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+      body: formData,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new ApiError(data.error || 'Upload failed', res.status, data);
+    return data;
+  },
+  update: (id, data) => request('documents.php', { method: 'PUT', body: data, params: { id } }),
+  delete: (id) => request('documents.php', { method: 'DELETE', params: { id } }),
+  downloadUrl: (id) => `${API_BASE}/documents.php?action=download&id=${id}&token=${getToken()}`,
+};
+
+// Meeting Notes
+export const meetingNotes = {
+  list: (params) => request('meeting_notes.php', { params }),
+  view: (id) => request('meeting_notes.php', { params: { action: 'view', id } }),
+  create: (data) => request('meeting_notes.php', { method: 'POST', body: data }),
+  update: (id, data) => request('meeting_notes.php', { method: 'PUT', body: data, params: { id } }),
+  delete: (id) => request('meeting_notes.php', { method: 'DELETE', params: { id } }),
+  deleteAttachment: (id) => request('meeting_notes.php', { method: 'DELETE', params: { action: 'attachment', id } }),
+  uploadAttachment: async (noteId, file) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('note_id', noteId);
+
+    const token = getToken();
+    const url = `${API_BASE}/meeting_notes.php?action=upload_attachment&_t=${Date.now()}`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+      body: formData,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new ApiError(data.error || 'Upload failed', res.status, data);
+    return data;
+  },
+  attachmentDownloadUrl: (id) => `${API_BASE}/meeting_notes.php?action=download_attachment&id=${id}&token=${getToken()}`,
+};
+
+// Audit Log
+export const auditLog = {
+  list: (params) => request('audit_log.php', { params }),
+  delete: (id) => request('audit_log.php', { method: 'DELETE', params: { id } }),
 };
 
 export { getToken, setToken, removeToken, getUser, setUser, ApiError };

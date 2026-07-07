@@ -16,12 +16,20 @@ function sendEmail($to, $toName, $from, $fromName, $subject, $htmlBody, $apiKey,
         'subject' => $subject,
         'content' => [['type' => 'text/html', 'value' => $htmlBody]],
     ];
-    if ($attachmentPath && file_exists($attachmentPath)) {
-        $fileData = base64_encode(file_get_contents($attachmentPath));
-        $fileName = basename($attachmentPath);
-        $mime = mime_content_type($attachmentPath) ?: 'application/octet-stream';
-        $data['attachments'] = [['content' => $fileData, 'filename' => $fileName, 'type' => $mime]];
+    // Support multiple attachments (comma-separated paths)
+    $paths = $attachmentPath ? explode(',', $attachmentPath) : [];
+    $attachments = [];
+    foreach ($paths as $p) {
+        $p = trim($p);
+        if ($p && file_exists($p)) {
+            $attachments[] = [
+                'content' => base64_encode(file_get_contents($p)),
+                'filename' => basename($p),
+                'type' => mime_content_type($p) ?: 'application/octet-stream',
+            ];
+        }
     }
+    if (!empty($attachments)) $data['attachments'] = $attachments;
     $ch = curl_init('https://api.sendgrid.com/v3/mail/send');
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
@@ -171,10 +179,17 @@ switch ($method) {
             $recipientIds = $data['recipient_ids'] ?? [];
             $recipientFilter = $data['recipient_filter'] ?? null;
 
-            // Handle file attachment
+            // Handle file attachments (single or multiple)
             $attachmentPath = null;
-            if (!empty($data['attachment_name'])) {
+            $attachmentPaths = [];
+            if (!empty($data['attachment_names']) && is_array($data['attachment_names'])) {
+                foreach ($data['attachment_names'] as $aname) {
+                    $attachmentPaths[] = __DIR__ . '/uploads/' . $aname;
+                }
+                $attachmentPath = implode(',', $attachmentPaths);
+            } elseif (!empty($data['attachment_name'])) {
                 $attachmentPath = __DIR__ . '/uploads/' . $data['attachment_name'];
+                $attachmentPaths = [$attachmentPath];
             }
 
             // Create message record

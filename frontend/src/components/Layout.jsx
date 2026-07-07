@@ -4,7 +4,8 @@ import { useAuth } from '../contexts/AuthContext';
 import {
   LayoutDashboard, Users, UserCheck, Calendar, Church, Home,
   Settings, LogOut, Menu, X, ChevronDown, FileText, FolderOpen,
-  Lock, ClipboardCheck, ClipboardList, DollarSign, MessageSquare
+  Lock, ClipboardCheck, ClipboardList, DollarSign, MessageSquare,
+  QrCode, PhoneCall, FileArchive, Scissors
 } from 'lucide-react';
 
 const navItems = [
@@ -16,9 +17,13 @@ const navItems = [
   { path: '/system/public/services', icon: Calendar, label: 'Services', perm: 'services' },
   { path: '/system/public/checklist', icon: ClipboardList, label: 'Checklist', perm: 'checklist' },
   { path: '/system/public/department-reports', icon: ClipboardCheck, label: 'Dept. Reports', perm: 'department_reports' },
+  { path: '/system/public/reports', icon: FileText, label: 'Reports', perm: 'reports' },
   { path: '/system/public/finance', icon: DollarSign, label: 'Finance', perm: 'finance' },
   { path: '/system/public/communication', icon: MessageSquare, label: 'Communication', perm: 'communication' },
-  { path: '/system/public/reports', icon: FileText, label: 'Reports', perm: 'reports' },
+  { path: '/system/public/checkin', icon: QrCode, label: 'Check-In', perm: 'checkin' },
+  { path: '/system/public/followup', icon: PhoneCall, label: 'Follow-Up', perm: 'followup' },
+  { path: '/system/public/documents', icon: FileArchive, label: 'Documents', perm: 'documents' },
+  { path: '/system/public/clip-generator', icon: Scissors, label: 'Clip Generator', perm: 'documents' },
 ];
 
 const adminItems = [
@@ -65,13 +70,13 @@ export default function Layout({ children }) {
       )}
 
       {/* Sidebar */}
-      <aside className={`fixed top-0 left-0 z-50 h-full w-64 bg-white border-r border-gray-200 transform transition-transform duration-300 ease-in-out lg:translate-x-0 ${
+      <aside className={`fixed top-0 left-0 z-50 h-full w-64 border-r border-gray-200 transform transition-transform duration-300 ease-in-out lg:translate-x-0 ${
         sidebarOpen ? 'translate-x-0' : '-translate-x-full'
-      }`}>
+      }`} style={{ background: 'linear-gradient(180deg, #f0f4ff 0%, #faf5ff 40%, #fff7ed 80%, #f0fdf4 100%)' }}>
         {/* Logo */}
         <div className="h-16 flex items-center px-4 border-b border-gray-100">
           <Link to="/system/public/" className="flex items-center" onClick={() => setSidebarOpen(false)}>
-            <img src={import.meta.env.BASE_URL + 'logo.png'} alt="Hallelujah In The City" className="h-10" style={{ filter: 'brightness(0.3) sepia(1) hue-rotate(350deg) saturate(3)' }} />
+            <img src={import.meta.env.BASE_URL + 'logo-system.png'} alt="Hallelujah In The City" className="h-14 w-full max-w-[220px] object-contain" />
           </Link>
           <button
             onClick={() => setSidebarOpen(false)}
@@ -82,7 +87,7 @@ export default function Layout({ children }) {
         </div>
 
         {/* Navigation */}
-        <nav className="p-3 space-y-1">
+        <nav className="p-3 space-y-1 overflow-y-auto" style={{ maxHeight: 'calc(100vh - 130px)' }}>
           <div className="px-3 py-2 text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
             Main
           </div>

@@ -26,18 +26,71 @@ $hasPerm = function($section) use ($isAdmin, $userPerms) {
     return in_array($section, $userPerms);
 };
 
-// Total members by status (church_member only) + community count
-$memberStats = ['total' => 0, 'active' => 0, 'inactive' => 0, 'visitors' => 0, 'non_member_attendees' => 0, 'community' => 0];
+// Run auto-status once per day (on first dashboard load of the day)
+try {
+    $lastRun = $db->query("SELECT value FROM settings WHERE `key` = 'auto_status_last_run'")->fetchColumn();
+    $today = date('Y-m-d');
+    if ($lastRun !== $today) {
+        // Active -> Inactive (3 months no attendance)
+        $db->exec("
+            UPDATE members SET status = 'inactive'
+            WHERE status = 'active'
+            AND id NOT IN (
+                SELECT DISTINCT a.member_id FROM attendance a
+                JOIN services s ON s.id = a.service_id
+                WHERE (a.status = 'present' OR a.status = 'late')
+                AND s.date >= DATE_SUB(CURDATE(), INTERVAL 3 MONTH)
+            )
+            AND created_at < DATE_SUB(CURDATE(), INTERVAL 3 MONTH)
+        ");
+        // Inactive -> Forsaking (6 months no attendance)
+        $db->exec("
+            UPDATE members SET status = 'forsaking'
+            WHERE status = 'inactive'
+            AND id NOT IN (
+                SELECT DISTINCT a.member_id FROM attendance a
+                JOIN services s ON s.id = a.service_id
+                WHERE (a.status = 'present' OR a.status = 'late')
+                AND s.date >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH)
+            )
+            AND created_at < DATE_SUB(CURDATE(), INTERVAL 6 MONTH)
+        ");
+        // Forsaking -> Restored (3+ months of attendance)
+        $db->exec("
+            UPDATE members SET status = 'restored'
+            WHERE status = 'forsaking'
+            AND (
+                SELECT COUNT(DISTINCT DATE_FORMAT(s.date, '%Y-%m'))
+                FROM attendance a
+                JOIN services s ON s.id = a.service_id
+                WHERE a.member_id = members.id
+                AND (a.status = 'present' OR a.status = 'late')
+                AND s.date >= DATE_SUB(CURDATE(), INTERVAL 3 MONTH)
+            ) >= 3
+        ");
+        // Mark today as last run
+        $db->prepare("INSERT INTO settings (`key`, value) VALUES ('auto_status_last_run', ?) ON DUPLICATE KEY UPDATE value = ?")->execute([$today, $today]);
+    }
+} catch (Exception $e) {
+    error_log('Auto-status error: ' . $e->getMessage());
+}
+
+// Total members by status + community count
+$memberStats = ['total' => 0, 'active' => 0, 'inactive' => 0, 'revoked' => 0, 'restored' => 0, 'forsaking' => 0, 'community' => 0];
 $newThisMonth = 0;
 if ($hasPerm('members')) {
     $memberStats = $db->query("
         SELECT
-            COUNT(CASE WHEN person_type = 'church_member' OR person_type IS NULL THEN 1 END) as total,
-            COUNT(CASE WHEN (person_type = 'church_member' OR person_type IS NULL) AND status = 'active' THEN 1 END) as active,
-            COUNT(CASE WHEN (person_type = 'church_member' OR person_type IS NULL) AND status = 'inactive' THEN 1 END) as inactive,
-            COUNT(CASE WHEN (person_type = 'church_member' OR person_type IS NULL) AND status = 'visitor' THEN 1 END) as visitors,
-            COUNT(CASE WHEN (person_type = 'church_member' OR person_type IS NULL) AND status = 'non_member_attendee' THEN 1 END) as non_member_attendees,
-            COUNT(CASE WHEN person_type = 'community' THEN 1 END) as community
+            COUNT(*) as total,
+            COUNT(CASE WHEN status = 'active' THEN 1 END) as active,
+            COUNT(CASE WHEN status = 'inactive' THEN 1 END) as inactive,
+            COUNT(CASE WHEN status = 'revoked' THEN 1 END) as revoked,
+            COUNT(CASE WHEN status = 'restored' THEN 1 END) as restored,
+            COUNT(CASE WHEN status = 'forsaking' THEN 1 END) as forsaking,
+            COUNT(CASE WHEN person_type = 'community' THEN 1 END) as community,
+            COUNT(CASE WHEN person_type = 'church_member' OR person_type IS NULL THEN 1 END) as church_members,
+            COUNT(CASE WHEN person_type = 'non_member_attendee' THEN 1 END) as non_member_attendees,
+            COUNT(CASE WHEN person_type = 'companion' THEN 1 END) as companions
         FROM members
     ")->fetch();
 
@@ -101,7 +154,7 @@ if ($hasPerm('members')) {
     $birthdays = $db->query("
         SELECT id, first_name, last_name, date_of_birth
         FROM members
-        WHERE status IN ('active', 'non_member_attendee')
+        WHERE status IN ('active', 'restored')
         AND MONTH(date_of_birth) = MONTH(CURDATE())
         ORDER BY DAY(date_of_birth) ASC
         LIMIT 15
@@ -110,7 +163,7 @@ if ($hasPerm('members')) {
     $birthdaysThisWeek = $db->query("
         SELECT id, first_name, last_name, date_of_birth
         FROM members
-        WHERE status IN ('active', 'non_member_attendee')
+        WHERE status IN ('active', 'restored')
         AND date_of_birth IS NOT NULL
         AND DATE_FORMAT(date_of_birth, '%m-%d') BETWEEN DATE_FORMAT(CURDATE(), '%m-%d') AND DATE_FORMAT(DATE_ADD(CURDATE(), INTERVAL 7 DAY), '%m-%d')
         ORDER BY DATE_FORMAT(date_of_birth, '%m-%d') ASC
@@ -120,7 +173,7 @@ if ($hasPerm('members')) {
     $anniversaries = $db->query("
         SELECT id, first_name, last_name, wedding_date
         FROM members
-        WHERE status IN ('active', 'non_member_attendee')
+        WHERE status IN ('active', 'restored')
         AND wedding_date IS NOT NULL
         AND MONTH(wedding_date) = MONTH(CURDATE())
         ORDER BY DAY(wedding_date) ASC
@@ -188,9 +241,13 @@ jsonResponse([
         'total' => (int)($memberStats['total'] ?? 0),
         'active' => (int)($memberStats['active'] ?? 0),
         'inactive' => (int)($memberStats['inactive'] ?? 0),
-        'visitors' => (int)($memberStats['visitors'] ?? 0),
-        'non_member_attendees' => (int)($memberStats['non_member_attendees'] ?? 0),
+        'revoked' => (int)($memberStats['revoked'] ?? 0),
+        'restored' => (int)($memberStats['restored'] ?? 0),
+        'forsaking' => (int)($memberStats['forsaking'] ?? 0),
         'community' => (int)($memberStats['community'] ?? 0),
+        'church_members' => (int)($memberStats['church_members'] ?? 0),
+        'non_member_attendees' => (int)($memberStats['non_member_attendees'] ?? 0),
+        'companions' => (int)($memberStats['companions'] ?? 0),
         'new_this_month' => (int)$newThisMonth,
     ],
     'attendance' => [

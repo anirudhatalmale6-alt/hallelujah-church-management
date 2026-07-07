@@ -21,7 +21,11 @@ import ChecklistPage from './pages/ChecklistPage';
 import DepartmentReportsPage from './pages/DepartmentReportsPage';
 import FinancePage from './pages/FinancePage';
 import CommunicationPage from './pages/CommunicationPage';
+import CheckinPage from './pages/CheckinPage';
+import FollowupPage from './pages/FollowupPage';
+import DocumentsPage from './pages/DocumentsPage';
 import InstallPage from './pages/InstallPage';
+import ClipGeneratorPage from './pages/ClipGeneratorPage';
 
 function ProtectedRoute({ children, adminOnly = false }) {
   const { user, loading, isAdmin } = useAuth();
@@ -74,6 +78,10 @@ function AppRoutes() {
       <Route path="/system/public/department-reports" element={<ProtectedRoute><DepartmentReportsPage /></ProtectedRoute>} />
       <Route path="/system/public/finance" element={<ProtectedRoute><FinancePage /></ProtectedRoute>} />
       <Route path="/system/public/communication" element={<ProtectedRoute><CommunicationPage /></ProtectedRoute>} />
+      <Route path="/system/public/checkin" element={<ProtectedRoute><CheckinPage /></ProtectedRoute>} />
+      <Route path="/system/public/followup" element={<ProtectedRoute><FollowupPage /></ProtectedRoute>} />
+      <Route path="/system/public/documents" element={<ProtectedRoute><DocumentsPage /></ProtectedRoute>} />
+      <Route path="/system/public/clip-generator" element={<ProtectedRoute><ClipGeneratorPage /></ProtectedRoute>} />
       <Route path="/system/public/users" element={<ProtectedRoute adminOnly><UsersPage /></ProtectedRoute>} />
       <Route path="/system/public/periods" element={<ProtectedRoute adminOnly><PeriodsPage /></ProtectedRoute>} />
       <Route path="/system/public/pending" element={<ProtectedRoute adminOnly><PendingChangesPage /></ProtectedRoute>} />

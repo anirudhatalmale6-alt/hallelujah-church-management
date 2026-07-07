@@ -1,23 +1,26 @@
 RewriteEngine On
 RewriteBase /system/public/
 
-# Disable LiteSpeed cache for this directory
+# Use PHP wrapper as default (bypasses LiteSpeed cache)
+DirectoryIndex index.php index.html
+
+# Disable LiteSpeed cache completely
 <IfModule LiteSpeed>
 CacheLookup off
+CacheEnable none /
 </IfModule>
 
-# No cache on HTML - always serve fresh index.html
+# No cache on HTML - always serve fresh
 <IfModule mod_headers.c>
-<FilesMatch "\.html$">
-  Header set Cache-Control "no-cache, no-store, must-revalidate"
-  Header set Pragma "no-cache"
-  Header set Expires "0"
-</FilesMatch>
+Header set Cache-Control "no-store, no-cache, must-revalidate, max-age=0"
+Header set Pragma "no-cache"
+Header set Expires "Thu, 01 Jan 1970 00:00:00 GMT"
+Header set X-LiteSpeed-Cache-Control "no-cache"
 </IfModule>
 
-# Don't rewrite existing files
+# Don't rewrite existing files (except index pages)
 RewriteCond %{REQUEST_FILENAME} !-f
 RewriteCond %{REQUEST_FILENAME} !-d
 
-# SPA fallback
-RewriteRule ^(.*)$ index.html [L]
+# SPA fallback - use PHP wrapper to bypass cache
+RewriteRule ^(.*)$ index.php [L]

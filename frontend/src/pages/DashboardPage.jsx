@@ -75,7 +75,7 @@ export default function DashboardPage() {
   };
 
   return (
-    <div>
+    <div className="-m-4 lg:-m-6 p-4 lg:p-6 min-h-[calc(100vh-4rem)]" style={{ background: 'linear-gradient(135deg, #f0f4ff 0%, #faf5ff 40%, #fff7ed 80%, #f0fdf4 100%)' }}>
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
         <p className="text-gray-500 mt-1">Welcome to Hallelujah In The City Church Management</p>

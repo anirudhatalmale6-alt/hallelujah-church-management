@@ -2,9 +2,10 @@
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/auth.php';
 
-$currentUser = authenticate();
 $method = $_SERVER['REQUEST_METHOD'];
 $action = $_GET['action'] ?? '';
+
+$currentUser = authenticate();
 $id = isset($_GET['id']) ? (int)$_GET['id'] : null;
 $db = getDB();
 
@@ -382,13 +383,18 @@ switch ($method) {
 
             $periodIn = 0;
             $periodOut = 0;
-            foreach ($entries as $e) {
-                $amt = (float)$e['amount'];
+            $runningBal = $openingBalance;
+            for ($i = 0; $i < count($entries); $i++) {
+                $amt = (float)$entries[$i]['amount'];
                 if ($amt >= 0) $periodIn += $amt;
                 else $periodOut += $amt;
+                $runningBal += $amt;
+                $entries[$i]['running_balance'] = $runningBal;
             }
 
             $endingBalance = $openingBalance + $periodIn + $periodOut;
+
+            $entries = array_reverse($entries);
 
             jsonResponse([
                 'account' => $account,
@@ -756,6 +762,92 @@ switch ($method) {
                 }
             } catch (Exception $e) {}
 
+            // Loan and other ledger entries (loan_payment, loan, manual adjustments)
+            try {
+                $stmt = $db->prepare("
+                    SELECT al.id, al.entry_date as date, al.entry_type, al.amount, al.description,
+                        al.reference_type, al.account_id, a.name as account_name, u.name as recorded_by
+                    FROM account_ledger al
+                    LEFT JOIN accounts a ON a.id = al.account_id
+                    LEFT JOIN users u ON u.id = al.created_by
+                    WHERE al.entry_date BETWEEN ? AND ?
+                    AND al.entry_type != 'opening'
+                    AND al.reference_type IN ('loan', 'loan_payment')
+                    ORDER BY al.entry_date DESC
+                ");
+                $stmt->execute([$dateFrom, $dateTo]);
+                $seen = [];
+                foreach ($stmt->fetchAll() as $r) {
+                    $key = $r['reference_type'] . '_' . $r['date'] . '_' . abs((float)$r['amount']);
+                    if (isset($seen[$key])) continue;
+                    $seen[$key] = true;
+                    $amt = abs((float)$r['amount']);
+                    $isPayment = $r['reference_type'] === 'loan_payment';
+                    $entries[] = [
+                        'date' => $r['date'],
+                        'type' => $isPayment ? 'Loan Payment' : 'Loan Received',
+                        'source' => 'ledger',
+                        'record_id' => (int)$r['id'],
+                        'description' => $r['description'] ?: ($isPayment ? 'Loan Payment' : 'Loan Received') . ' - ' . $r['account_name'],
+                        'debit' => $isPayment ? $amt : 0,
+                        'credit' => $isPayment ? 0 : $amt,
+                        'method' => '',
+                        'recorded_by' => $r['recorded_by'],
+                    ];
+                }
+            } catch (Exception $e) {}
+
+            // Manual journal entries
+            try {
+                $stmt = $db->prepare("
+                    SELECT je.id, je.entry_date as date, je.description, je.reference_number, u.name as recorded_by,
+                        GROUP_CONCAT(CONCAT(a.name, ':', jel.debit, ':', jel.credit, ':', IFNULL(jel.contact_name, '')) SEPARATOR '||') as line_details
+                    FROM journal_entries je
+                    LEFT JOIN journal_entry_lines jel ON jel.journal_entry_id = je.id
+                    LEFT JOIN accounts a ON a.id = jel.account_id
+                    LEFT JOIN users u ON u.id = je.created_by
+                    WHERE je.entry_date BETWEEN ? AND ?
+                    GROUP BY je.id
+                    ORDER BY je.entry_date DESC
+                ");
+                $stmt->execute([$dateFrom, $dateTo]);
+                foreach ($stmt->fetchAll() as $r) {
+                    $totalDebit = 0;
+                    $totalCredit = 0;
+                    $lineInfo = [];
+                    if ($r['line_details']) {
+                        foreach (explode('||', $r['line_details']) as $ld) {
+                            $parts = explode(':', $ld);
+                            $acctName = $parts[0] ?? '';
+                            $dr = (float)($parts[1] ?? 0);
+                            $cr = (float)($parts[2] ?? 0);
+                            $contactName = $parts[3] ?? '';
+                            $totalDebit += $dr;
+                            $totalCredit += $cr;
+                            $detail = $acctName;
+                            if ($contactName) $detail .= ' (' . $contactName . ')';
+                            if ($dr > 0) $detail .= ' DR $' . number_format($dr, 2);
+                            if ($cr > 0) $detail .= ' CR $' . number_format($cr, 2);
+                            $lineInfo[] = $detail;
+                        }
+                    }
+                    $desc = $r['description'];
+                    if ($r['reference_number']) $desc .= ' (Ref: ' . $r['reference_number'] . ')';
+                    if (!empty($lineInfo)) $desc .= ' | ' . implode(', ', $lineInfo);
+                    $entries[] = [
+                        'date' => $r['date'],
+                        'type' => 'Journal',
+                        'source' => 'journal_entry',
+                        'record_id' => (int)$r['id'],
+                        'description' => $desc,
+                        'debit' => $totalDebit,
+                        'credit' => $totalCredit,
+                        'method' => '',
+                        'recorded_by' => $r['recorded_by'],
+                    ];
+                }
+            } catch (Exception $e) {}
+
             usort($entries, function($a, $b) { return strcmp($b['date'], $a['date']); });
 
             $totalDebit = array_sum(array_column($entries, 'debit'));
@@ -774,6 +866,25 @@ switch ($method) {
                 'date_to' => $dateTo,
             ]);
         }
+
+        // --- VENDORS LIST ---
+        if ($action === 'vendors') {
+            $search = $_GET['search'] ?? '';
+            $sql = "SELECT DISTINCT vendor FROM expenses WHERE vendor IS NOT NULL AND vendor != ''";
+            $params = [];
+            if ($search) {
+                $sql .= " AND vendor LIKE ?";
+                $params[] = "%$search%";
+            }
+            $sql .= " ORDER BY vendor ASC LIMIT 100";
+            $stmt = $db->prepare($sql);
+            $stmt->execute($params);
+            $vendors = $stmt->fetchAll(PDO::FETCH_COLUMN);
+            jsonResponse(['vendors' => $vendors]);
+        }
+
+        // --- SAVE VENDOR (for future autocomplete) ---
+        // Vendors are stored as distinct expense.vendor values - no separate table needed
 
         // --- TRANSFERS LIST ---
         if ($action === 'transfers') {
@@ -957,6 +1068,42 @@ switch ($method) {
             ]);
         }
 
+        // --- CATEGORY TRANSACTIONS (for drill-down in financial statements) ---
+        if ($action === 'category_transactions') {
+            $catId = (int)($_GET['category_id'] ?? 0);
+            $catType = $_GET['category_type'] ?? ''; // 'income' or 'expense'
+            $dateFrom = $_GET['date_from'] ?? date('Y-01-01');
+            $dateTo = $_GET['date_to'] ?? date('Y-m-d');
+            if (!$catId || !$catType) jsonResponse(['error' => 'category_id and category_type required'], 400);
+
+            $transactions = [];
+            if ($catType === 'income') {
+                $stmt = $db->prepare("
+                    SELECT d.id, d.donation_date as date, d.amount,
+                        COALESCE(CONCAT(m.first_name, ' ', m.last_name), d.donor_name, 'Anonymous') as description,
+                        d.payment_method, d.notes
+                    FROM donations d
+                    LEFT JOIN members m ON m.id = d.member_id
+                    WHERE d.category_id = ? AND d.donation_date BETWEEN ? AND ?
+                    ORDER BY d.donation_date DESC
+                ");
+                $stmt->execute([$catId, $dateFrom, $dateTo]);
+                $transactions = $stmt->fetchAll();
+            } elseif ($catType === 'expense') {
+                $stmt = $db->prepare("
+                    SELECT e.id, e.expense_date as date, e.amount,
+                        COALESCE(e.vendor, e.description, '-') as description,
+                        e.payment_method, e.description as notes
+                    FROM expenses e
+                    WHERE e.category_id = ? AND e.expense_date BETWEEN ? AND ?
+                    ORDER BY e.expense_date DESC
+                ");
+                $stmt->execute([$catId, $dateFrom, $dateTo]);
+                $transactions = $stmt->fetchAll();
+            }
+            jsonResponse(['transactions' => $transactions]);
+        }
+
         // --- BUDGET VS ACTUAL ---
         if ($action === 'budget_actual') {
             $year = (int)($_GET['year'] ?? date('Y'));
@@ -1107,6 +1254,85 @@ switch ($method) {
                 'grand_total' => $grandTotal,
                 'date_from' => $dateFrom,
                 'date_to' => $dateTo,
+            ]);
+        }
+
+        if ($action === 'all_members_statement') {
+            $dateFrom = $_GET['date_from'] ?? date('Y-01-01');
+            $dateTo = $_GET['date_to'] ?? date('Y-12-31');
+            $sortBy = $_GET['sort_by'] ?? 'name';
+
+            $stmt = $db->prepare("
+                SELECT m.id, m.first_name, m.last_name,
+                       dc.name as category_name,
+                       SUM(d.amount) as total_amount,
+                       COUNT(d.id) as donation_count
+                FROM donations d
+                JOIN members m ON m.id = d.member_id
+                JOIN donation_categories dc ON dc.id = d.category_id
+                WHERE d.donation_date BETWEEN ? AND ?
+                GROUP BY m.id, m.first_name, m.last_name, dc.name
+                ORDER BY m.last_name, m.first_name, dc.name
+            ");
+            $stmt->execute([$dateFrom, $dateTo]);
+            $rows = $stmt->fetchAll();
+
+            $memberTotals = [];
+            $grandTotal = 0;
+            foreach ($rows as $r) {
+                $key = $r['id'];
+                if (!isset($memberTotals[$key])) {
+                    $memberTotals[$key] = [
+                        'id' => $r['id'],
+                        'name' => $r['first_name'] . ' ' . $r['last_name'],
+                        'categories' => [],
+                        'total' => 0,
+                    ];
+                }
+                $memberTotals[$key]['categories'][$r['category_name']] = (float)$r['total_amount'];
+                $memberTotals[$key]['total'] += (float)$r['total_amount'];
+                $grandTotal += (float)$r['total_amount'];
+            }
+
+            $members = array_values($memberTotals);
+
+            if ($sortBy === 'amount') {
+                usort($members, fn($a, $b) => $b['total'] - $a['total']);
+            } elseif ($sortBy === 'type') {
+                // Already grouped by name+category from query
+            }
+
+            jsonResponse([
+                'members' => $members,
+                'grand_total' => $grandTotal,
+                'date_from' => $dateFrom,
+                'date_to' => $dateTo,
+                'count' => count($members),
+            ]);
+        }
+
+        if ($action === 'non_givers') {
+            $dateFrom = $_GET['date_from'] ?? date('Y-01-01');
+            $dateTo = $_GET['date_to'] ?? date('Y-12-31');
+
+            $stmt = $db->prepare("
+                SELECT m.id, m.first_name, m.last_name, m.email, m.phone, m.person_type, m.status
+                FROM members m
+                WHERE m.status = 'active'
+                  AND m.id NOT IN (
+                    SELECT DISTINCT d.member_id FROM donations d
+                    WHERE d.member_id IS NOT NULL AND d.donation_date BETWEEN ? AND ?
+                  )
+                ORDER BY m.last_name, m.first_name
+            ");
+            $stmt->execute([$dateFrom, $dateTo]);
+            $nonGivers = $stmt->fetchAll();
+
+            jsonResponse([
+                'members' => $nonGivers,
+                'date_from' => $dateFrom,
+                'date_to' => $dateTo,
+                'count' => count($nonGivers),
             ]);
         }
 
@@ -1301,6 +1527,40 @@ switch ($method) {
         break;
 
     case 'POST':
+        // --- SYNC ACCOUNTS TO CATEGORIES ---
+        if ($action === 'sync_accounts') {
+            requireRole($currentUser, ['pastor', 'admin']);
+            $synced = 0;
+
+            // Sync income accounts to donation_categories
+            $incAccounts = $db->query("SELECT name, description, fund_type FROM accounts WHERE account_type = 'income' AND parent_id IS NOT NULL AND is_active = 1")->fetchAll();
+            foreach ($incAccounts as $acc) {
+                $exists = $db->prepare("SELECT id FROM donation_categories WHERE name = ?");
+                $exists->execute([$acc['name']]);
+                if (!$exists->fetchColumn()) {
+                    $catOrder = (int)$db->query("SELECT COALESCE(MAX(sort_order), 0) FROM donation_categories")->fetchColumn() + 1;
+                    $db->prepare("INSERT INTO donation_categories (name, description, fund_type, sort_order) VALUES (?, ?, ?, ?)")
+                        ->execute([$acc['name'], $acc['description'], $acc['fund_type'] ?? 'general', $catOrder]);
+                    $synced++;
+                }
+            }
+
+            // Sync expense accounts to expense_categories
+            $expAccounts = $db->query("SELECT name, description, fund_type FROM accounts WHERE account_type = 'expense' AND parent_id IS NOT NULL AND is_active = 1")->fetchAll();
+            foreach ($expAccounts as $acc) {
+                $exists = $db->prepare("SELECT id FROM expense_categories WHERE name = ?");
+                $exists->execute([$acc['name']]);
+                if (!$exists->fetchColumn()) {
+                    $catOrder = (int)$db->query("SELECT COALESCE(MAX(sort_order), 0) FROM expense_categories")->fetchColumn() + 1;
+                    $db->prepare("INSERT INTO expense_categories (name, description, fund_type, sort_order) VALUES (?, ?, ?, ?)")
+                        ->execute([$acc['name'], $acc['description'], $acc['fund_type'] ?? 'general', $catOrder]);
+                    $synced++;
+                }
+            }
+
+            jsonResponse(['message' => "$synced account(s) synced to categories", 'synced' => $synced]);
+        }
+
         // --- CREATE PLEDGE ---
         if ($action === 'pledge') {
             $data = getRequestBody();
@@ -1387,6 +1647,117 @@ switch ($method) {
             }
         }
 
+        // --- MANUAL JOURNAL ENTRY ---
+        if ($action === 'journal_entry') {
+            requireRole($currentUser, ['pastor', 'admin']);
+            // Auto-create tables if they don't exist
+            try {
+                $db->exec("CREATE TABLE IF NOT EXISTS journal_entries (id INT AUTO_INCREMENT PRIMARY KEY, entry_date DATE NOT NULL, description VARCHAR(500) NOT NULL, reference_number VARCHAR(100) DEFAULT NULL, created_by INT DEFAULT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, INDEX idx_entry_date (entry_date)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+                $db->exec("CREATE TABLE IF NOT EXISTS journal_entry_lines (id INT AUTO_INCREMENT PRIMARY KEY, journal_entry_id INT NOT NULL, account_id INT NOT NULL, debit DECIMAL(12,2) DEFAULT 0.00, credit DECIMAL(12,2) DEFAULT 0.00, memo VARCHAR(255) DEFAULT NULL, contact_name VARCHAR(255) DEFAULT NULL, INDEX idx_journal_entry_id (journal_entry_id), INDEX idx_account_id (account_id), FOREIGN KEY (journal_entry_id) REFERENCES journal_entries(id) ON DELETE CASCADE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+                try { $db->exec("ALTER TABLE journal_entry_lines ADD COLUMN contact_name VARCHAR(255) DEFAULT NULL"); } catch (Exception $e) {}
+            } catch (Exception $e) {}
+            $data = getRequestBody();
+            if (empty($data['entry_date']) || empty($data['description']) || empty($data['lines']) || !is_array($data['lines'])) {
+                jsonResponse(['error' => 'entry_date, description, and lines are required'], 400);
+            }
+            $totalDebit = 0;
+            $totalCredit = 0;
+            foreach ($data['lines'] as $line) {
+                if (empty($line['account_id'])) jsonResponse(['error' => 'Each line must have an account_id'], 400);
+                $totalDebit += (float)($line['debit'] ?? 0);
+                $totalCredit += (float)($line['credit'] ?? 0);
+            }
+            if (abs($totalDebit - $totalCredit) > 0.01) {
+                jsonResponse(['error' => 'Total debits (' . number_format($totalDebit, 2) . ') must equal total credits (' . number_format($totalCredit, 2) . ')'], 400);
+            }
+            if ($totalDebit <= 0) {
+                jsonResponse(['error' => 'Entry must have amounts'], 400);
+            }
+
+            $db->beginTransaction();
+            try {
+                $stmt = $db->prepare("
+                    INSERT INTO journal_entries (entry_date, description, reference_number, created_by)
+                    VALUES (?, ?, ?, ?)
+                ");
+                $stmt->execute([
+                    $data['entry_date'],
+                    $data['description'],
+                    $data['reference_number'] ?? null,
+                    $currentUser['user_id'],
+                ]);
+                $entryId = (int)$db->lastInsertId();
+
+                $lineStmt = $db->prepare("
+                    INSERT INTO journal_entry_lines (journal_entry_id, account_id, debit, credit, memo, contact_name)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                ");
+                $ledgerStmt = $db->prepare("
+                    INSERT INTO account_ledger (account_id, entry_date, entry_type, amount, description, reference_type, reference_id, created_by)
+                    VALUES (?, ?, ?, ?, ?, 'journal', ?, ?)
+                ");
+
+                foreach ($data['lines'] as $line) {
+                    $accountId = (int)$line['account_id'];
+                    $debit = (float)($line['debit'] ?? 0);
+                    $credit = (float)($line['credit'] ?? 0);
+                    $memo = $line['memo'] ?? null;
+                    $contactName = !empty($line['contact_name']) ? $line['contact_name'] : null;
+
+                    $lineStmt->execute([$entryId, $accountId, $debit, $credit, $memo, $contactName]);
+
+                    $account = $db->query("SELECT account_type FROM accounts WHERE id = $accountId")->fetch();
+                    $accType = $account['account_type'] ?? '';
+
+                    // Determine balance impact: assets/expenses increase with debit, decrease with credit
+                    // Liabilities/income/equity increase with credit, decrease with debit
+                    if (in_array($accType, ['asset', 'expense'])) {
+                        $netAmount = $debit - $credit;
+                    } else {
+                        $netAmount = $credit - $debit;
+                    }
+
+                    if ($netAmount != 0) {
+                        $db->prepare("UPDATE accounts SET current_balance = current_balance + ? WHERE id = ?")->execute([$netAmount, $accountId]);
+                        $entryType = $netAmount > 0 ? 'deposit' : 'withdrawal';
+                        $ledgerStmt->execute([$accountId, $data['entry_date'], $entryType, $netAmount, $data['description'], $entryId, $currentUser['user_id']]);
+                    }
+                }
+
+                $db->commit();
+                jsonResponse(['message' => 'Journal entry recorded', 'id' => $entryId], 201);
+            } catch (Exception $e) {
+                $db->rollBack();
+                jsonResponse(['error' => 'Failed to record journal entry: ' . $e->getMessage()], 500);
+            }
+        }
+
+        // --- DELETE JOURNAL ENTRY ---
+        if ($action === 'delete_journal_entry') {
+            requireRole($currentUser, ['pastor', 'admin']);
+            $data = getRequestBody();
+            $entryId = (int)($data['id'] ?? $_GET['id'] ?? 0);
+            if (!$entryId) jsonResponse(['error' => 'Entry ID required'], 400);
+
+            $db->beginTransaction();
+            try {
+                // Reverse ledger entries and account balances
+                $ledgerEntries = $db->prepare("SELECT * FROM account_ledger WHERE reference_type = 'journal' AND reference_id = ?");
+                $ledgerEntries->execute([$entryId]);
+                foreach ($ledgerEntries->fetchAll() as $le) {
+                    $db->prepare("UPDATE accounts SET current_balance = current_balance - ? WHERE id = ?")->execute([(float)$le['amount'], (int)$le['account_id']]);
+                }
+                $db->prepare("DELETE FROM account_ledger WHERE reference_type = 'journal' AND reference_id = ?")->execute([$entryId]);
+                $db->prepare("DELETE FROM journal_entry_lines WHERE journal_entry_id = ?")->execute([$entryId]);
+                $db->prepare("DELETE FROM journal_entries WHERE id = ?")->execute([$entryId]);
+                $db->commit();
+                jsonResponse(['message' => 'Journal entry deleted and balances reversed']);
+            } catch (Exception $e) {
+                $db->rollBack();
+                jsonResponse(['error' => 'Failed to delete: ' . $e->getMessage()], 500);
+            }
+        }
+
         // --- CREATE ACCOUNT ---
         if ($action === 'account') {
             requireRole($currentUser, ['pastor', 'admin']);
@@ -1413,7 +1784,29 @@ switch ($method) {
                 $data['fund_type'] ?? 'general',
                 $maxOrder,
             ]);
-            jsonResponse(['message' => 'Account created', 'id' => (int)$db->lastInsertId()], 201);
+            $newAccountId = (int)$db->lastInsertId();
+
+            // Auto-create matching category for income/expense subaccounts
+            if ($parentId && $data['account_type'] === 'income') {
+                $exists = $db->prepare("SELECT id FROM donation_categories WHERE name = ?");
+                $exists->execute([$name]);
+                if (!$exists->fetchColumn()) {
+                    $catOrder = (int)$db->query("SELECT COALESCE(MAX(sort_order), 0) FROM donation_categories")->fetchColumn() + 1;
+                    $db->prepare("INSERT INTO donation_categories (name, description, fund_type, sort_order) VALUES (?, ?, ?, ?)")
+                        ->execute([$name, $data['description'] ?? null, $data['fund_type'] ?? 'general', $catOrder]);
+                }
+            }
+            if ($parentId && $data['account_type'] === 'expense') {
+                $exists = $db->prepare("SELECT id FROM expense_categories WHERE name = ?");
+                $exists->execute([$name]);
+                if (!$exists->fetchColumn()) {
+                    $catOrder = (int)$db->query("SELECT COALESCE(MAX(sort_order), 0) FROM expense_categories")->fetchColumn() + 1;
+                    $db->prepare("INSERT INTO expense_categories (name, description, fund_type, sort_order) VALUES (?, ?, ?, ?)")
+                        ->execute([$name, $data['description'] ?? null, $data['fund_type'] ?? 'general', $catOrder]);
+                }
+            }
+
+            jsonResponse(['message' => 'Account created', 'id' => $newAccountId], 201);
         }
 
         // --- DONATION CATEGORY ---
@@ -1548,25 +1941,30 @@ switch ($method) {
             $items = $data['items'] ?? [];
             if (empty($items)) jsonResponse(['error' => 'No items'], 400);
 
-            $stmt = $db->prepare("
-                INSERT INTO budgets (category_type, category_id, year, month, amount, notes)
-                VALUES (?, ?, ?, ?, ?, ?)
-                ON DUPLICATE KEY UPDATE amount = VALUES(amount), notes = VALUES(notes)
-            ");
+            $year = (int)($items[0]['year'] ?? date('Y'));
 
-            $count = 0;
-            foreach ($items as $item) {
-                if (!isset($item['amount']) || (float)$item['amount'] < 0) continue;
-                $month = isset($item['month']) && $item['month'] !== '' ? (int)$item['month'] : null;
-                $stmt->execute([
-                    $item['category_type'],
-                    (int)$item['category_id'],
-                    (int)$item['year'],
-                    $month,
-                    (float)$item['amount'],
-                    $item['notes'] ?? null,
-                ]);
-                $count++;
+            $db->beginTransaction();
+            try {
+                $delStmt = $db->prepare("DELETE FROM budgets WHERE category_type = ? AND category_id = ? AND year = ? AND month IS NULL");
+                $insStmt = $db->prepare("INSERT INTO budgets (category_type, category_id, year, month, amount, notes) VALUES (?, ?, ?, NULL, ?, ?)");
+
+                $count = 0;
+                foreach ($items as $item) {
+                    if (!isset($item['amount']) || (float)$item['amount'] < 0) continue;
+                    $delStmt->execute([$item['category_type'], (int)$item['category_id'], (int)$item['year']]);
+                    $insStmt->execute([
+                        $item['category_type'],
+                        (int)$item['category_id'],
+                        (int)$item['year'],
+                        (float)$item['amount'],
+                        $item['notes'] ?? null,
+                    ]);
+                    $count++;
+                }
+                $db->commit();
+            } catch (Exception $e) {
+                $db->rollBack();
+                jsonResponse(['error' => $e->getMessage()], 500);
             }
             jsonResponse(['message' => "$count budget(s) saved", 'count' => $count], 201);
         }
@@ -1875,6 +2273,12 @@ switch ($method) {
             }
 
             $data = getRequestBody();
+
+            // Fetch old values for audit log
+            $oldStmt = $db->prepare("SELECT * FROM expenses WHERE id = ?");
+            $oldStmt->execute([$id]);
+            $oldRecord = $oldStmt->fetch();
+
             $fields = [];
             $params = [];
             $allowed = ['category_id', 'amount', 'description', 'vendor', 'payment_method', 'reference_number', 'expense_date', 'receipt_note'];
@@ -1890,6 +2294,22 @@ switch ($method) {
             if (empty($fields)) jsonResponse(['error' => 'Nothing to update'], 400);
             $params[] = $id;
             $db->prepare("UPDATE expenses SET " . implode(', ', $fields) . " WHERE id = ?")->execute($params);
+
+            // Audit log
+            try {
+                $db->prepare("INSERT INTO audit_log (user_id, user_name, action, entity_type, entity_id, description, old_values, new_values, ip_address, created_at) VALUES (?, ?, 'edit', ?, ?, ?, ?, ?, ?, NOW())")
+                    ->execute([
+                        $currentUser['user_id'],
+                        $currentUser['name'],
+                        'expense',
+                        $id,
+                        'Edited expense #' . $id,
+                        json_encode($oldRecord),
+                        json_encode($data),
+                        $_SERVER['REMOTE_ADDR'] ?? '',
+                    ]);
+            } catch (Exception $e) { /* don't fail the main operation */ }
+
             jsonResponse(['message' => 'Expense updated']);
         }
 
@@ -1931,6 +2351,12 @@ switch ($method) {
         }
 
         $data = getRequestBody();
+
+        // Fetch old values for audit log
+        $oldStmt = $db->prepare("SELECT * FROM donations WHERE id = ?");
+        $oldStmt->execute([$id]);
+        $oldRecord = $oldStmt->fetch();
+
         $fields = [];
         $params = [];
         $allowed = ['member_id', 'service_id', 'category_id', 'amount', 'payment_method', 'reference_number', 'donor_name', 'notes', 'donation_date'];
@@ -1946,6 +2372,22 @@ switch ($method) {
         if (empty($fields)) jsonResponse(['error' => 'Nothing to update'], 400);
         $params[] = $id;
         $db->prepare("UPDATE donations SET " . implode(', ', $fields) . " WHERE id = ?")->execute($params);
+
+        // Audit log
+        try {
+            $db->prepare("INSERT INTO audit_log (user_id, user_name, action, entity_type, entity_id, description, old_values, new_values, ip_address, created_at) VALUES (?, ?, 'edit', ?, ?, ?, ?, ?, ?, NOW())")
+                ->execute([
+                    $currentUser['user_id'],
+                    $currentUser['name'],
+                    'donation',
+                    $id,
+                    'Edited donation #' . $id,
+                    json_encode($oldRecord),
+                    json_encode($data),
+                    $_SERVER['REMOTE_ADDR'] ?? '',
+                ]);
+        } catch (Exception $e) { /* don't fail the main operation */ }
+
         jsonResponse(['message' => 'Donation updated']);
         break;
 
@@ -2046,6 +2488,21 @@ switch ($method) {
                 // Delete the donation
                 $db->prepare("DELETE FROM donations WHERE id = ?")->execute([$id]);
                 $db->commit();
+
+                // Audit log
+                try {
+                    $db->prepare("INSERT INTO audit_log (user_id, user_name, action, entity_type, entity_id, description, old_values, new_values, ip_address, created_at) VALUES (?, ?, 'delete', ?, ?, ?, ?, NULL, ?, NOW())")
+                        ->execute([
+                            $currentUser['user_id'],
+                            $currentUser['name'],
+                            'donation',
+                            $id,
+                            'Deleted routed donation #' . $id,
+                            json_encode($don),
+                            $_SERVER['REMOTE_ADDR'] ?? '',
+                        ]);
+                } catch (Exception $e) { /* don't fail the main operation */ }
+
                 jsonResponse(['message' => 'Donation and ledger entry deleted']);
             } catch (Exception $e) {
                 $db->rollBack();
@@ -2103,7 +2560,28 @@ switch ($method) {
         if ($action === 'expense') {
             requireRole($currentUser, ['pastor', 'admin']);
             if (!$id) jsonResponse(['error' => 'Expense ID required'], 400);
+
+            // Fetch old values for audit log
+            $oldStmt = $db->prepare("SELECT * FROM expenses WHERE id = ?");
+            $oldStmt->execute([$id]);
+            $oldRecord = $oldStmt->fetch();
+
             $db->prepare("DELETE FROM expenses WHERE id = ?")->execute([$id]);
+
+            // Audit log
+            try {
+                $db->prepare("INSERT INTO audit_log (user_id, user_name, action, entity_type, entity_id, description, old_values, new_values, ip_address, created_at) VALUES (?, ?, 'delete', ?, ?, ?, ?, NULL, ?, NOW())")
+                    ->execute([
+                        $currentUser['user_id'],
+                        $currentUser['name'],
+                        'expense',
+                        $id,
+                        'Deleted expense #' . $id,
+                        json_encode($oldRecord),
+                        $_SERVER['REMOTE_ADDR'] ?? '',
+                    ]);
+            } catch (Exception $e) { /* don't fail the main operation */ }
+
             jsonResponse(['message' => 'Expense deleted']);
         }
 
@@ -2126,10 +2604,32 @@ switch ($method) {
         // --- DELETE DONATION ---
         requireRole($currentUser, ['pastor', 'admin']);
         if (!$id) jsonResponse(['error' => 'Donation ID required'], 400);
+
+        // Fetch old values for audit log
+        $oldStmt = $db->prepare("SELECT * FROM donations WHERE id = ?");
+        $oldStmt->execute([$id]);
+        $oldRecord = $oldStmt->fetch();
+
         $db->prepare("DELETE FROM donations WHERE id = ?")->execute([$id]);
+
+        // Audit log
+        try {
+            $db->prepare("INSERT INTO audit_log (user_id, user_name, action, entity_type, entity_id, description, old_values, new_values, ip_address, created_at) VALUES (?, ?, 'delete', ?, ?, ?, ?, NULL, ?, NOW())")
+                ->execute([
+                    $currentUser['user_id'],
+                    $currentUser['name'],
+                    'donation',
+                    $id,
+                    'Deleted donation #' . $id,
+                    json_encode($oldRecord),
+                    $_SERVER['REMOTE_ADDR'] ?? '',
+                ]);
+        } catch (Exception $e) { /* don't fail the main operation */ }
+
         jsonResponse(['message' => 'Donation deleted']);
         break;
 
     default:
         jsonResponse(['error' => 'Method not allowed'], 405);
 }
+ 

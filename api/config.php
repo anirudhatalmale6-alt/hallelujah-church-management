@@ -4,6 +4,9 @@
  * Configuration & Database Connection
  */
 
+// Philadelphia / Eastern Time
+date_default_timezone_set('America/New_York');
+
 // Error reporting (disable display in production)
 error_reporting(E_ALL);
 ini_set('display_errors', 0);
@@ -127,6 +130,75 @@ function isClosedPeriod(PDO $db, string $date): bool {
     $stmt = $db->prepare("SELECT id FROM closed_periods WHERE `year_month` = ?");
     $stmt->execute([$yearMonth]);
     return (bool)$stmt->fetch();
+}
+
+/**
+ * Default person types. `auto_absent` controls whether people of this type are
+ * auto-marked absent when a service ends without a check-in.
+ */
+function defaultPersonTypes(): array {
+    return [
+        ['value' => 'church_member',       'label' => 'Church Member',        'auto_absent' => true,  'builtin' => true],
+        ['value' => 'non_member_attendee', 'label' => 'Non-Member Attendee',  'auto_absent' => true,  'builtin' => true],
+        ['value' => 'visitor',             'label' => 'Visitor',              'auto_absent' => false, 'builtin' => true],
+        ['value' => 'ministry_partner',    'label' => 'Ministry Partner',     'auto_absent' => false, 'builtin' => true],
+        ['value' => 'community',           'label' => 'Community',            'auto_absent' => false, 'builtin' => true],
+        ['value' => 'companion',           'label' => 'Companion',            'auto_absent' => false, 'builtin' => true],
+    ];
+}
+
+/**
+ * Resolve the configured person types (custom list from settings, or defaults).
+ * Always guarantees the two required built-ins (church_member, non_member_attendee) exist.
+ */
+function getPersonTypes(PDO $db): array {
+    $list = null;
+    try {
+        $stmt = $db->prepare("SELECT value FROM settings WHERE `key` = 'person_types'");
+        $stmt->execute();
+        $raw = $stmt->fetchColumn();
+        if ($raw) {
+            $decoded = json_decode($raw, true);
+            if (is_array($decoded) && count($decoded) > 0) {
+                $list = [];
+                foreach ($decoded as $t) {
+                    if (empty($t['value'])) continue;
+                    $list[] = [
+                        'value'       => preg_replace('/[^a-z0-9_]/', '', strtolower(str_replace(' ', '_', $t['value']))),
+                        'label'       => $t['label'] ?? $t['value'],
+                        'auto_absent' => !empty($t['auto_absent']),
+                        'builtin'     => !empty($t['builtin']),
+                    ];
+                }
+            }
+        }
+    } catch (Exception $e) {}
+
+    if ($list === null || count($list) === 0) {
+        $list = defaultPersonTypes();
+    }
+
+    // Guarantee the two required built-ins are present
+    $values = array_column($list, 'value');
+    foreach (defaultPersonTypes() as $d) {
+        if ($d['value'] === 'church_member' || $d['value'] === 'non_member_attendee') {
+            if (!in_array($d['value'], $values, true)) $list[] = $d;
+        }
+    }
+    return $list;
+}
+
+/**
+ * Return the list of person_type values that should be auto-marked absent.
+ */
+function autoAbsentPersonTypes(PDO $db): array {
+    $types = getPersonTypes($db);
+    $out = [];
+    foreach ($types as $t) {
+        if (!empty($t['auto_absent'])) $out[] = $t['value'];
+    }
+    if (count($out) === 0) $out[] = 'church_member';
+    return $out;
 }
 
 function createPendingChange(PDO $db, array $params): int {

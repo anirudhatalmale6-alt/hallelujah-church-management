@@ -122,18 +122,115 @@ switch ($method) {
             $groupStmt = $db->query("SELECT DISTINCT name FROM `groups` ORDER BY name");
             $familyGroups = $groupStmt->fetchAll(PDO::FETCH_COLUMN);
 
+            // Get counts by person type
+            $typeCounts = $db->query("
+                SELECT person_type, COUNT(*) as count
+                FROM members
+                GROUP BY person_type
+            ")->fetchAll();
+            $typeCountMap = [];
+            foreach ($typeCounts as $tc) {
+                $typeCountMap[$tc['person_type'] ?: 'unknown'] = (int)$tc['count'];
+            }
+
             jsonResponse([
                 'members' => $members,
                 'total' => (int)$total,
                 'page' => $page,
                 'limit' => $limit,
                 'pages' => ceil($total / $limit),
-                'family_groups' => $familyGroups
+                'family_groups' => $familyGroups,
+                'type_counts' => $typeCountMap,
             ]);
         }
         break;
 
     case 'POST':
+        // Auto-update statuses based on attendance
+        if (isset($_GET['action']) && $_GET['action'] === 'auto_status') {
+            $changes = [];
+
+            // Mark active members as inactive after 3 months of absence
+            $stmt = $db->query("
+                SELECT m.id, m.first_name, m.last_name
+                FROM members m
+                WHERE m.status = 'active'
+                AND m.id NOT IN (
+                    SELECT DISTINCT a.member_id FROM attendance a
+                    JOIN services s ON s.id = a.service_id
+                    WHERE (a.status = 'present' OR a.status = 'late')
+                    AND s.date >= DATE_SUB(CURDATE(), INTERVAL 3 MONTH)
+                )
+                AND m.created_at < DATE_SUB(CURDATE(), INTERVAL 3 MONTH)
+            ");
+            $toInactive = $stmt->fetchAll();
+            if ($toInactive) {
+                $ids = array_column($toInactive, 'id');
+                $placeholders = implode(',', array_fill(0, count($ids), '?'));
+                $db->prepare("UPDATE members SET status = 'inactive' WHERE id IN ($placeholders)")->execute($ids);
+                foreach ($toInactive as $m) {
+                    $changes[] = ['id' => $m['id'], 'name' => $m['first_name'].' '.$m['last_name'], 'from' => 'active', 'to' => 'inactive'];
+                }
+            }
+
+            // Mark inactive members as forsaking after 6 months of absence
+            $stmt = $db->query("
+                SELECT m.id, m.first_name, m.last_name
+                FROM members m
+                WHERE m.status = 'inactive'
+                AND m.id NOT IN (
+                    SELECT DISTINCT a.member_id FROM attendance a
+                    JOIN services s ON s.id = a.service_id
+                    WHERE (a.status = 'present' OR a.status = 'late')
+                    AND s.date >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH)
+                )
+                AND m.created_at < DATE_SUB(CURDATE(), INTERVAL 6 MONTH)
+            ");
+            $toForsaking = $stmt->fetchAll();
+            if ($toForsaking) {
+                $ids = array_column($toForsaking, 'id');
+                $placeholders = implode(',', array_fill(0, count($ids), '?'));
+                $db->prepare("UPDATE members SET status = 'forsaking' WHERE id IN ($placeholders)")->execute($ids);
+                foreach ($toForsaking as $m) {
+                    $changes[] = ['id' => $m['id'], 'name' => $m['first_name'].' '.$m['last_name'], 'from' => 'inactive', 'to' => 'forsaking'];
+                }
+            }
+
+            // Mark forsaking members as restored if they returned and attended for 3+ months
+            $stmt = $db->query("
+                SELECT m.id, m.first_name, m.last_name
+                FROM members m
+                WHERE m.status = 'forsaking'
+                AND (
+                    SELECT COUNT(DISTINCT DATE_FORMAT(s.date, '%Y-%m'))
+                    FROM attendance a
+                    JOIN services s ON s.id = a.service_id
+                    WHERE a.member_id = m.id
+                    AND (a.status = 'present' OR a.status = 'late')
+                    AND s.date >= DATE_SUB(CURDATE(), INTERVAL 3 MONTH)
+                ) >= 3
+            ");
+            $toRestored = $stmt->fetchAll();
+            if ($toRestored) {
+                $ids = array_column($toRestored, 'id');
+                $placeholders = implode(',', array_fill(0, count($ids), '?'));
+                $db->prepare("UPDATE members SET status = 'restored' WHERE id IN ($placeholders)")->execute($ids);
+                foreach ($toRestored as $m) {
+                    $changes[] = ['id' => $m['id'], 'name' => $m['first_name'].' '.$m['last_name'], 'from' => 'forsaking', 'to' => 'restored'];
+                }
+            }
+
+            jsonResponse([
+                'message' => count($changes) . ' status changes applied',
+                'changes' => $changes,
+                'summary' => [
+                    'to_inactive' => count($toInactive),
+                    'to_forsaking' => count($toForsaking ?? []),
+                    'to_restored' => count($toRestored),
+                ],
+            ]);
+        }
+
         // Handle bulk import action
         if (isset($_GET['action']) && $_GET['action'] === 'import') {
             $data = getRequestBody();
@@ -202,6 +299,50 @@ switch ($method) {
             break;
         }
 
+        // Photo upload
+        if (isset($_GET['action']) && $_GET['action'] === 'upload_photo') {
+            $memberId = (int)($_GET['id'] ?? $_POST['member_id'] ?? 0);
+            if (!$memberId) jsonResponse(['error' => 'member_id required'], 400);
+
+            if (empty($_FILES['photo'])) jsonResponse(['error' => 'No photo uploaded'], 400);
+
+            $file = $_FILES['photo'];
+            $allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+            if (!in_array($file['type'], $allowed)) {
+                jsonResponse(['error' => 'Only JPEG, PNG, WebP and GIF images allowed'], 400);
+            }
+            if ($file['size'] > 5 * 1024 * 1024) {
+                jsonResponse(['error' => 'Photo must be under 5MB'], 400);
+            }
+
+            $photoDir = __DIR__ . '/../uploads/photos/';
+            if (!is_dir($photoDir)) mkdir($photoDir, 0755, true);
+
+            // Delete old photo if exists
+            $stmt = $db->prepare("SELECT photo_url FROM members WHERE id = ?");
+            $stmt->execute([$memberId]);
+            $old = $stmt->fetch();
+            if ($old && $old['photo_url']) {
+                $oldFile = __DIR__ . '/..' . parse_url($old['photo_url'], PHP_URL_PATH);
+                if (strpos($oldFile, '/uploads/photos/') !== false && file_exists($oldFile)) {
+                    @unlink($oldFile);
+                }
+            }
+
+            $ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION)) ?: 'jpg';
+            $safeName = 'member_' . $memberId . '_' . time() . '.' . $ext;
+            $destPath = $photoDir . $safeName;
+
+            if (!move_uploaded_file($file['tmp_name'], $destPath)) {
+                jsonResponse(['error' => 'Failed to save photo'], 500);
+            }
+
+            $photoUrl = '/system/uploads/photos/' . $safeName;
+            $db->prepare("UPDATE members SET photo_url = ? WHERE id = ?")->execute([$photoUrl, $memberId]);
+
+            jsonResponse(['message' => 'Photo uploaded', 'photo_url' => $photoUrl]);
+        }
+
         $data = getRequestBody();
         $error = validateRequired($data, ['first_name', 'last_name']);
         if ($error) {
@@ -209,8 +350,8 @@ switch ($method) {
         }
 
         $stmt = $db->prepare("
-            INSERT INTO members (first_name, last_name, email, phone, address, city, state, zip, gender, date_of_birth, family_group, household_id, household_role, membership_date, status, notes, photo_url, baptism_date, salvation_date, first_visit_date, membership_class_date, dedication_date, wedding_date, person_type)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO members (first_name, last_name, email, phone, address, city, state, zip, gender, date_of_birth, family_group, household_id, household_role, membership_date, status, notes, photo_url, card_title, card_expiry_date, baptism_date, salvation_date, first_visit_date, membership_class_date, dedication_date, wedding_date, person_type)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ");
         $stmt->execute([
             trim($data['first_name']),
@@ -230,6 +371,8 @@ switch ($method) {
             $data['status'] ?? 'active',
             $data['notes'] ?? null,
             $data['photo_url'] ?? null,
+            $data['card_title'] ?? null,
+            $data['card_expiry_date'] ?? null,
             $data['baptism_date'] ?? null,
             $data['salvation_date'] ?? null,
             $data['first_visit_date'] ?? null,
@@ -267,8 +410,8 @@ switch ($method) {
             'first_name', 'last_name', 'email', 'phone', 'address', 'city',
             'state', 'zip', 'gender', 'date_of_birth', 'family_group',
             'household_id', 'household_role',
-            'membership_date', 'status', 'notes', 'photo_url',
-            'baptism_date', 'salvation_date', 'first_visit_date',
+            'membership_date', 'status', 'notes', 'photo_url', 'card_title',
+            'card_expiry_date', 'baptism_date', 'salvation_date', 'first_visit_date',
             'membership_class_date', 'dedication_date', 'wedding_date',
             'person_type'
         ];

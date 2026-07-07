@@ -18,11 +18,43 @@ $memberId = isset($_GET['member_id']) ? (int)$_GET['member_id'] : null;
 switch ($method) {
     case 'GET':
         if ($action === 'by_service' && $serviceId) {
+            // Auto-sync: mark absent for ended services (uses per-service duration)
+            try {
+                $now = date('Y-m-d H:i:s');
+                $svcCheck = $db->prepare("SELECT id, date, time, COALESCE(duration_hours, 2.0) as duration_hours FROM services WHERE id = ? AND time IS NOT NULL");
+                $svcCheck->execute([$serviceId]);
+                $svcInfo = $svcCheck->fetch();
+                if ($svcInfo) {
+                    $serviceEnd = strtotime($svcInfo['date'] . ' ' . $svcInfo['time']) + ($svcInfo['duration_hours'] * 3600);
+                    if (time() > $serviceEnd) {
+                        // Only auto-mark absent for person types configured with auto_absent
+                        // (by default: church members and non-member attendees).
+                        $aaTypes = autoAbsentPersonTypes($db);
+                        $aaPlaceholders = implode(',', array_fill(0, count($aaTypes), '?'));
+                        $missingStmt = $db->prepare("
+                            SELECT m.id FROM members m
+                            WHERE m.status IN ('active', 'restored') AND m.person_type IN ($aaPlaceholders)
+                            AND m.id NOT IN (SELECT member_id FROM attendance WHERE service_id = ?)
+                        ");
+                        $missingStmt->execute([...$aaTypes, $serviceId]);
+                        $missingMembers = $missingStmt->fetchAll(PDO::FETCH_COLUMN);
+                        foreach ($missingMembers as $mId) {
+                            try {
+                                $db->prepare("INSERT INTO attendance (service_id, member_id, status, notes) VALUES (?, ?, 'absent', 'Auto-marked absent') ON DUPLICATE KEY UPDATE status = status")
+                                    ->execute([$serviceId, $mId]);
+                            } catch (Exception $e) {}
+                        }
+                    }
+                }
+            } catch (Exception $e) {}
+
             // Get attendance for a specific service
             $stmt = $db->prepare("
-                SELECT a.*, m.first_name, m.last_name, m.email, m.phone, m.photo_url, m.status as member_status
+                SELECT a.*, m.first_name, m.last_name, m.email, m.phone, m.photo_url, m.status as member_status,
+                       u.name as marked_by_name
                 FROM attendance a
                 JOIN members m ON a.member_id = m.id
+                LEFT JOIN users u ON u.id = a.marked_by
                 WHERE a.service_id = ?
                 ORDER BY m.last_name ASC, m.first_name ASC
             ");
@@ -38,7 +70,7 @@ switch ($method) {
             $unmarkedStmt = $db->prepare("
                 SELECT m.id, m.first_name, m.last_name, m.email, m.phone, m.photo_url, m.status as member_status
                 FROM members m
-                WHERE m.status IN ('active', 'non_member_attendee')
+                WHERE m.status IN ('active', 'restored')
                 AND m.id NOT IN (SELECT member_id FROM attendance WHERE service_id = ?)
                 ORDER BY m.last_name ASC, m.first_name ASC
             ");
@@ -165,7 +197,7 @@ switch ($method) {
                         COUNT(CASE WHEN a.status = 'present' OR a.status = 'late' THEN 1 END) as attended,
                         COUNT(CASE WHEN a.status = 'absent' THEN 1 END) as absent,
                         COUNT(a.id) as total_marked,
-                        COUNT(CASE WHEN (a.status = 'present' OR a.status = 'late') AND m.status = 'non_member_attendee' THEN 1 END) as non_members_attended
+                        COUNT(CASE WHEN (a.status = 'present' OR a.status = 'late') AND m.person_type = 'non_member_attendee' THEN 1 END) as non_members_attended
                     FROM services s
                     LEFT JOIN attendance a ON a.service_id = s.id
                     LEFT JOIN members m ON a.member_id = m.id
@@ -217,9 +249,9 @@ switch ($method) {
             $db->beginTransaction();
             try {
                 $upsertStmt = $db->prepare("
-                    INSERT INTO attendance (service_id, member_id, status, check_in_time, notes)
-                    VALUES (?, ?, ?, ?, ?)
-                    ON DUPLICATE KEY UPDATE status = VALUES(status), check_in_time = VALUES(check_in_time), notes = VALUES(notes)
+                    INSERT INTO attendance (service_id, member_id, status, check_in_time, notes, marked_by)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON DUPLICATE KEY UPDATE status = VALUES(status), check_in_time = VALUES(check_in_time), notes = VALUES(notes), marked_by = VALUES(marked_by)
                 ");
 
                 $count = 0;
@@ -236,6 +268,7 @@ switch ($method) {
                         $record['status'],
                         $checkInTime,
                         $record['notes'] ?? null,
+                        $currentUser['user_id'],
                     ]);
                     $count++;
                 }
@@ -278,9 +311,9 @@ switch ($method) {
                 : null;
 
             $stmt = $db->prepare("
-                INSERT INTO attendance (service_id, member_id, status, check_in_time, notes)
-                VALUES (?, ?, ?, ?, ?)
-                ON DUPLICATE KEY UPDATE status = VALUES(status), check_in_time = VALUES(check_in_time), notes = VALUES(notes)
+                INSERT INTO attendance (service_id, member_id, status, check_in_time, notes, marked_by)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE status = VALUES(status), check_in_time = VALUES(check_in_time), notes = VALUES(notes), marked_by = VALUES(marked_by)
             ");
             $stmt->execute([
                 (int)$data['service_id'],
@@ -288,6 +321,7 @@ switch ($method) {
                 $data['status'],
                 $checkInTime,
                 $data['notes'] ?? null,
+                $currentUser['user_id'],
             ]);
 
             jsonResponse(['message' => 'Attendance marked successfully']);

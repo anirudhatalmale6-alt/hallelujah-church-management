@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { attendance as attendanceApi, services as servicesApi, services as svcApi } from '../utils/api';
+import { useAuth } from '../contexts/AuthContext';
 import { formatTime12h, downloadCSV } from '../utils/format';
 import {
   UserCheck, Check, X, Clock, Search, AlertCircle,
   ChevronDown, Save, Calendar, BarChart3, Users, TrendingUp, MessageSquare,
-  ArrowDownAZ, ArrowDownZA, Download
+  ArrowDownAZ, ArrowDownZA, Download, Shield
 } from 'lucide-react';
 
 const serviceTypeLabels = {
@@ -24,6 +25,7 @@ const statusColors = {
 const statusInactive = 'bg-gray-100 text-gray-500 hover:bg-gray-200';
 
 export default function AttendancePage() {
+  const { user } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const [tab, setTab] = useState('mark');
   const [services, setServices] = useState([]);
@@ -65,7 +67,11 @@ export default function AttendancePage() {
 
   const loadServices = async () => {
     try {
-      const data = await servicesApi.list({ limit: 50 });
+      // Only list services up to and including today (no future-dated services).
+      // Special events created for today are included since their date <= today.
+      const today = new Date();
+      const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+      const data = await servicesApi.list({ limit: 50, to: todayStr });
       setServices(data.services);
     } catch (err) {
       setError(err.message);
@@ -369,6 +375,26 @@ export default function AttendancePage() {
 
           {selectedServiceId && !loading && attendanceData && (
             <>
+              {/* Current user marking attendance + auto-sync info */}
+              <div className="card mb-4 bg-blue-50 border-blue-200">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex items-center gap-2 text-sm text-blue-800">
+                    <Shield size={16} className="text-blue-600" />
+                    <span>Marking attendance as: <strong>{user?.name || 'Unknown'}</strong></span>
+                  </div>
+                  {attendanceData.service?.duration_hours && (
+                    <div className="text-xs text-blue-600">
+                      Service duration: {attendanceData.service.duration_hours}h | Auto-absent after service ends
+                    </div>
+                  )}
+                  {attendanceData.attendance?.some(a => a.notes === 'Auto-marked absent') && (
+                    <span className="text-xs bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded-full">
+                      Some members auto-marked from check-in system
+                    </span>
+                  )}
+                </div>
+              </div>
+
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
                 <div className="bg-white rounded-lg border border-gray-200 p-3 text-center">
                   <div className="text-2xl font-bold text-green-600">
@@ -478,6 +504,9 @@ export default function AttendancePage() {
                     filteredMembers.map(m => {
                       const rec = records[m.id];
                       const isNonMember = m.member_status === 'non_member_attendee';
+                      const origRecord = attendanceData.attendance.find(a => a.member_id === m.id);
+                      const isAutoSynced = origRecord && !origRecord.marked_by && origRecord.check_in_time;
+                      const isAutoAbsent = origRecord?.notes === 'Auto-marked absent';
                       return (
                         <div key={m.id} className="px-4 py-3 hover:bg-gray-50">
                           <div className="flex items-center gap-3">
@@ -490,8 +519,19 @@ export default function AttendancePage() {
                                 {isNonMember && (
                                   <span className="ml-2 inline-block px-1.5 py-0.5 text-[10px] font-medium bg-yellow-100 text-yellow-700 rounded-full">Non-Member</span>
                                 )}
+                                {isAutoSynced && (
+                                  <span className="ml-2 inline-block px-1.5 py-0.5 text-[10px] font-medium bg-blue-100 text-blue-700 rounded-full">Check-in</span>
+                                )}
+                                {isAutoAbsent && (
+                                  <span className="ml-2 inline-block px-1.5 py-0.5 text-[10px] font-medium bg-orange-100 text-orange-700 rounded-full">Auto-absent</span>
+                                )}
                               </div>
-                              <div className="text-xs text-gray-500 truncate">{m.phone || m.email || ''}</div>
+                              <div className="text-xs text-gray-500 truncate">
+                                {m.phone || m.email || ''}
+                                {origRecord?.marked_by_name && (
+                                  <span className="ml-2 text-gray-400">Marked by: {origRecord.marked_by_name}</span>
+                                )}
+                              </div>
                             </div>
                             <div className="flex gap-1.5 shrink-0">
                               <button
