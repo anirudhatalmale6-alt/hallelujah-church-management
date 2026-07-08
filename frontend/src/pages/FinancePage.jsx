@@ -1726,6 +1726,8 @@ function StatementsTab({ setError }) {
   const [nonGivers, setNonGivers] = useState(null);
   const [loading, setLoading] = useState(false);
   const [sortBy, setSortBy] = useState('name');
+  const [includePledges, setIncludePledges] = useState(false);
+  const stFreqLabel = { weekly: 'Weekly', monthly: 'Monthly', quarterly: 'Quarterly', annually: 'Annually' };
 
   useEffect(() => {
     membersApi.list({ limit: 9999, sort: 'last_name' }).then(d => setMembersList(d.members || []));
@@ -1786,6 +1788,26 @@ function StatementsTab({ setError }) {
       `<tr><td style="padding:4px 10px;">${cat}</td><td style="padding:4px 10px;text-align:right;font-weight:600;">${formatCurrency(total)}</td></tr>`
     ).join('');
 
+    let pledgeSection = '';
+    if (includePledges) {
+      const pb = statement.pledges_behind || [];
+      if (pb.length > 0) {
+        const pledgeRows = pb.map(p => `<tr>
+          <td style="padding:6px 10px;border-bottom:1px solid #f3f4f6;">${p.category_name} (${stFreqLabel[p.frequency] || p.frequency})</td>
+          <td style="padding:6px 10px;border-bottom:1px solid #f3f4f6;text-align:right;">${formatCurrency(p.expected_total)}</td>
+          <td style="padding:6px 10px;border-bottom:1px solid #f3f4f6;text-align:right;">${formatCurrency(p.total_paid)}</td>
+          <td style="padding:6px 10px;border-bottom:1px solid #f3f4f6;text-align:right;font-weight:600;color:#b91c1c;">${formatCurrency(p.behind_by)}</td>
+        </tr>`).join('');
+        pledgeSection = `<h3 style="margin-top:24px;font-size:16px;color:#b91c1c;">Pledge Balance Behind Schedule</h3>
+        <table><thead><tr><th>Pledge</th><th style="text-align:right;">Expected</th><th style="text-align:right;">Paid</th><th style="text-align:right;">Balance</th></tr></thead>
+        <tbody>${pledgeRows}
+        <tr style="border-top:2px solid #b91c1c;"><td style="padding:8px 10px;font-weight:700;" colspan="3">Total Behind Schedule</td><td style="padding:8px 10px;text-align:right;font-weight:700;color:#b91c1c;">${formatCurrency(statement.pledge_behind_total)}</td></tr>
+        </tbody></table>`;
+      } else {
+        pledgeSection = `<p style="margin-top:24px;font-size:14px;color:#15803d;">On track with all pledges - nothing behind schedule.</p>`;
+      }
+    }
+
     const html = `<!DOCTYPE html><html><head><title>Giving Statement - ${fullName}</title>
     <style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;padding:40px;color:#1f2937;max-width:800px;margin:0 auto;}
     h1{font-size:22px;margin-bottom:4px;} .meta{color:#6b7280;font-size:14px;margin-bottom:20px;}
@@ -1806,6 +1828,7 @@ function StatementsTab({ setError }) {
     <table><tbody>${categoryRows}
     <tr style="border-top:2px solid #1f2937;"><td style="padding:8px 10px;" class="total-row">Grand Total</td><td style="padding:8px 10px;text-align:right;" class="total-row">${formatCurrency(statement.grand_total)}</td></tr>
     </tbody></table>
+    ${pledgeSection}
     <p style="margin-top:30px;font-size:12px;color:#9ca3af;">This statement is provided for your records. Thank you for your generous giving!</p>
     </body></html>`;
 
@@ -1822,11 +1845,22 @@ function StatementsTab({ setError }) {
       d.donation_date, d.category_name, d.payment_method, formatCurrency(d.amount),
     ]);
     const catSummary = Object.entries(statement.total_by_category || {}).map(([cat, t]) => `${cat}: ${formatCurrency(t)}`);
+    const extraLines = [`Period: ${dateFrom} to ${dateTo}`, ...catSummary, `Grand Total: ${formatCurrency(statement.grand_total)}`];
+    if (includePledges) {
+      const pb = statement.pledges_behind || [];
+      if (pb.length > 0) {
+        extraLines.push('--- Pledge Balance Behind Schedule ---');
+        pb.forEach(p => extraLines.push(`${p.category_name} (${stFreqLabel[p.frequency] || p.frequency}): expected ${formatCurrency(p.expected_total)}, paid ${formatCurrency(p.total_paid)}, balance ${formatCurrency(p.behind_by)}`));
+        extraLines.push(`Total Behind Schedule: ${formatCurrency(statement.pledge_behind_total)}`);
+      } else {
+        extraLines.push('Pledges: on track - nothing behind schedule.');
+      }
+    }
     generatePDF(
       `Giving Statement - ${fullName}`,
       headers, rows,
       `giving-statement-${fullName.replace(/\s+/g, '-')}.pdf`,
-      [`Period: ${dateFrom} to ${dateTo}`, ...catSummary, `Grand Total: ${formatCurrency(statement.grand_total)}`]
+      extraLines
     );
   };
 
@@ -1857,12 +1891,14 @@ function StatementsTab({ setError }) {
           {mode === 'individual' && (
             <div className="sm:col-span-2">
               <label className="label">Select Member</label>
-              <select className="input" value={selectedMemberId} onChange={e => setSelectedMemberId(e.target.value)}>
-                <option value="">-- Choose a member --</option>
-                {membersList.map(m => (
-                  <option key={m.id} value={m.id}>{m.last_name}, {m.first_name}</option>
-                ))}
-              </select>
+              <MemberTypeahead
+                membersList={membersList}
+                value={selectedMemberId}
+                donorName=""
+                onChange={(id) => setSelectedMemberId(id)}
+                onDonorNameChange={() => {}}
+                onAddNew={() => membersApi.list({ limit: 9999, sort: 'last_name' }).then(d => setMembersList(d.members || []))}
+              />
             </div>
           )}
           {mode === 'all' && (
@@ -1885,6 +1921,13 @@ function StatementsTab({ setError }) {
             <input type="date" className="input" value={dateTo} onChange={e => setDateTo(e.target.value)} />
           </div>
         </div>
+        {mode === 'individual' && (
+          <label className="mt-4 flex items-center gap-2 text-sm text-gray-700 cursor-pointer select-none">
+            <input type="checkbox" className="rounded border-gray-300 text-primary-700 focus:ring-primary-500"
+              checked={includePledges} onChange={e => setIncludePledges(e.target.checked)} />
+            Include this member's pledge balance behind schedule on the statement
+          </label>
+        )}
         <div className="mt-4">
           <button onClick={loadStatement} disabled={loading} className="btn-primary">
             {loading ? <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" /> : <FileText size={16} />}
@@ -2076,6 +2119,43 @@ function StatementsTab({ setError }) {
             </div>
           ) : (
             <p className="text-center text-gray-500 py-8">No donations found for this period</p>
+          )}
+
+          {includePledges && (
+            (statement.pledges_behind || []).length > 0 ? (
+              <div className="mt-6 border border-red-200 rounded-lg overflow-hidden">
+                <div className="bg-red-50 px-4 py-2 flex items-center justify-between">
+                  <h3 className="text-sm font-semibold text-red-800">Pledge Balance Behind Schedule</h3>
+                  <span className="text-sm font-bold text-red-800">Total: {formatCurrency(statement.pledge_behind_total)}</span>
+                </div>
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50 border-b border-gray-200">
+                    <tr>
+                      <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Pledge</th>
+                      <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase hidden md:table-cell">Frequency</th>
+                      <th className="text-right px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Expected</th>
+                      <th className="text-right px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Paid</th>
+                      <th className="text-right px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Balance</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {statement.pledges_behind.map((p, i) => (
+                      <tr key={i}>
+                        <td className="px-3 py-2">{p.category_name}</td>
+                        <td className="px-3 py-2 hidden md:table-cell">{stFreqLabel[p.frequency] || p.frequency}</td>
+                        <td className="px-3 py-2 text-right">{formatCurrency(p.expected_total)}</td>
+                        <td className="px-3 py-2 text-right">{formatCurrency(p.total_paid)}</td>
+                        <td className="px-3 py-2 text-right font-semibold text-red-700">{formatCurrency(p.behind_by)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="mt-6 border border-green-200 bg-green-50 rounded-lg px-4 py-3 text-sm text-green-700">
+                This member is on track with all pledges - nothing behind schedule.
+              </div>
+            )
           )}
         </div>
       )}

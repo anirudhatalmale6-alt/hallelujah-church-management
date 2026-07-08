@@ -18,8 +18,14 @@ define('DB_NAME', getenv('DB_NAME') ?: 'u802978444_church_mgmt');
 define('DB_USER', getenv('DB_USER') ?: 'u802978444_hallelujah');
 define('DB_PASS', getenv('DB_PASS') ?: 'FMlEjeV:1');
 
-// JWT Configuration
-define('JWT_SECRET', getenv('JWT_SECRET') ?: 'hitc-church-mgmt-secret-2026-change-in-production');
+// Server-only secrets (config.secret.php) are git-ignored so the login key never
+// reaches the public GitHub repo. Falls back to an env var, then a clearly-invalid
+// placeholder (so a misconfigured server fails safe instead of using a known key).
+$__secretFile = __DIR__ . '/config.secret.php';
+if (is_file($__secretFile)) { require $__secretFile; }
+
+// JWT Configuration — real secret lives in config.secret.php on the server only.
+define('JWT_SECRET', getenv('JWT_SECRET') ?: (defined('HITC_JWT_SECRET') ? HITC_JWT_SECRET : 'INSECURE-PLACEHOLDER-set-config.secret.php'));
 define('JWT_EXPIRY', 86400); // 24 hours in seconds
 
 // CORS Configuration

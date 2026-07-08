@@ -18,3 +18,7 @@ api/debug-db.php
 api/reset-admin.php
 api/migrate.php
 .png
+
+# Server-only secrets (never commit)
+api/config.secret.php
+config.secret.php

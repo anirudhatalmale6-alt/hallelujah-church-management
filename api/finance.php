@@ -1260,11 +1260,49 @@ switch ($method) {
                 $grandTotal += (float)$d['amount'];
             }
 
+            // This member's active pledges that are behind schedule (same math as the
+            // Pledges tab). Lets the statement optionally show what they still owe.
+            $pledgesBehind = [];
+            $pledgeBehindTotal = 0;
+            try {
+                $pStmt = $db->prepare("
+                    SELECT p.id, p.member_id, p.category_id, p.amount, p.frequency, p.start_date, p.end_date,
+                           dc.name as category_name
+                    FROM pledges p
+                    JOIN donation_categories dc ON dc.id = p.category_id
+                    WHERE p.member_id = ? AND p.status = 'active'
+                ");
+                $pStmt->execute([$memberId]);
+                foreach ($pStmt->fetchAll() as $pl) {
+                    $endDate = (!empty($pl['end_date']) && $pl['end_date'] !== '0000-00-00') ? $pl['end_date'] : null;
+                    $tpSql = "SELECT COALESCE(SUM(amount),0) FROM donations WHERE member_id = ? AND category_id = ? AND donation_date >= ?";
+                    $tpParams = [$pl['member_id'], $pl['category_id'], $pl['start_date']];
+                    if ($endDate) { $tpSql .= " AND donation_date <= ?"; $tpParams[] = $endDate; }
+                    $ts = $db->prepare($tpSql); $ts->execute($tpParams);
+                    $paid = (float)$ts->fetchColumn();
+                    $exp = (float)$pl['amount'] * pledgeExpectedPayments($pl['frequency'], $pl['start_date'], $endDate);
+                    $behind = max(0, round($exp - $paid, 2));
+                    if ($behind > 0.005) {
+                        $pledgesBehind[] = [
+                            'category_name' => $pl['category_name'],
+                            'frequency' => $pl['frequency'],
+                            'amount' => (float)$pl['amount'],
+                            'expected_total' => $exp,
+                            'total_paid' => $paid,
+                            'behind_by' => $behind,
+                        ];
+                        $pledgeBehindTotal += $behind;
+                    }
+                }
+            } catch (Exception $e) { /* pledges optional on statement */ }
+
             jsonResponse([
                 'member' => $member,
                 'donations' => $donations,
                 'total_by_category' => $totalByCategory,
                 'grand_total' => $grandTotal,
+                'pledges_behind' => $pledgesBehind,
+                'pledge_behind_total' => round($pledgeBehindTotal, 2),
                 'date_from' => $dateFrom,
                 'date_to' => $dateTo,
             ]);
