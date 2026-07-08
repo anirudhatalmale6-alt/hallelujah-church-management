@@ -296,6 +296,121 @@ function handleResetPassword(): void {
     jsonResponse(['message' => 'Password has been reset successfully. You can now sign in.']);
 }
 
+/**
+ * Change the signed-in user's own password (requires their current password).
+ */
+function handleChangePassword(): void {
+    $user = authenticate();
+    $data = getRequestBody();
+    $current = $data['current_password'] ?? '';
+    $new = $data['new_password'] ?? '';
+    if (!$current || !$new) {
+        jsonResponse(['error' => 'Current and new password are required'], 400);
+    }
+    if (strlen($new) < 6) {
+        jsonResponse(['error' => 'New password must be at least 6 characters'], 400);
+    }
+    $db = getDB();
+    $stmt = $db->prepare("SELECT password_hash FROM users WHERE id = ?");
+    $stmt->execute([$user['user_id']]);
+    $row = $stmt->fetch();
+    if (!$row || !password_verify($current, $row['password_hash'])) {
+        jsonResponse(['error' => 'Your current password is not correct'], 400);
+    }
+    $hash = password_hash($new, PASSWORD_BCRYPT);
+    $db->prepare("UPDATE users SET password_hash = ? WHERE id = ?")->execute([$hash, $user['user_id']]);
+    jsonResponse(['message' => 'Password changed successfully.']);
+}
+
+/**
+ * Get the signed-in user's current security question (so the Settings form can
+ * show whether one is set). Returns null when none is configured.
+ */
+function handleGetMyRecovery(): void {
+    $user = authenticate();
+    $db = getDB();
+    try {
+        $stmt = $db->prepare("SELECT recovery_question FROM users WHERE id = ?");
+        $stmt->execute([$user['user_id']]);
+        $q = $stmt->fetchColumn();
+        jsonResponse(['recovery_question' => $q ?: null]);
+    } catch (Exception $e) {
+        jsonResponse(['recovery_question' => null]);
+    }
+}
+
+/**
+ * Set / update the signed-in user's security question + answer. The answer is
+ * hashed (never stored in plain text) and matched case-insensitively at reset.
+ */
+function handleSetRecovery(): void {
+    $user = authenticate();
+    $data = getRequestBody();
+    $question = trim($data['recovery_question'] ?? '');
+    $answer = trim($data['recovery_answer'] ?? '');
+    if ($question === '' || $answer === '') {
+        jsonResponse(['error' => 'Both a security question and an answer are required'], 400);
+    }
+    if (strlen($answer) < 2) {
+        jsonResponse(['error' => 'Please choose a slightly longer answer'], 400);
+    }
+    $hash = password_hash(mb_strtolower($answer), PASSWORD_BCRYPT);
+    $db = getDB();
+    $db->prepare("UPDATE users SET recovery_question = ?, recovery_answer_hash = ? WHERE id = ?")
+       ->execute([$question, $hash, $user['user_id']]);
+    jsonResponse(['message' => 'Security question saved. You can now recover your password with it any time.']);
+}
+
+/**
+ * Public: look up the security question for an email so a locked-out user can
+ * answer it. Returns a generic message when none is set (no account enumeration
+ * benefit — the question itself is only shown when one exists).
+ */
+function handleRecoveryQuestion(): void {
+    $email = trim($_GET['email'] ?? '');
+    if (!$email) {
+        jsonResponse(['error' => 'Email is required'], 400);
+    }
+    $db = getDB();
+    try {
+        $stmt = $db->prepare("SELECT recovery_question FROM users WHERE email = ? AND status = 'active'");
+        $stmt->execute([$email]);
+        $q = $stmt->fetchColumn();
+        if (!$q) {
+            jsonResponse(['error' => 'No security question is set for this account. Use the email reset option instead.'], 404);
+        }
+        jsonResponse(['recovery_question' => $q]);
+    } catch (Exception $e) {
+        jsonResponse(['error' => 'No security question is set for this account. Use the email reset option instead.'], 404);
+    }
+}
+
+/**
+ * Public: reset a password by answering the security question — no email needed.
+ */
+function handleResetWithRecovery(): void {
+    $data = getRequestBody();
+    $email = trim($data['email'] ?? '');
+    $answer = trim($data['answer'] ?? '');
+    $new = $data['new_password'] ?? '';
+    if (!$email || !$answer || !$new) {
+        jsonResponse(['error' => 'Email, answer and new password are required'], 400);
+    }
+    if (strlen($new) < 6) {
+        jsonResponse(['error' => 'New password must be at least 6 characters'], 400);
+    }
+    $db = getDB();
+    $stmt = $db->prepare("SELECT id, recovery_answer_hash FROM users WHERE email = ? AND status = 'active'");
+    $stmt->execute([$email]);
+    $row = $stmt->fetch();
+    if (!$row || empty($row['recovery_answer_hash']) || !password_verify(mb_strtolower($answer), $row['recovery_answer_hash'])) {
+        jsonResponse(['error' => 'That answer does not match. Please try again.'], 400);
+    }
+    $hash = password_hash($new, PASSWORD_BCRYPT);
+    $db->prepare("UPDATE users SET password_hash = ? WHERE id = ?")->execute([$hash, $row['id']]);
+    jsonResponse(['message' => 'Password has been reset successfully. You can now sign in.']);
+}
+
 // Route handling - only when auth.php is accessed directly
 if (basename($_SERVER['SCRIPT_FILENAME']) === 'auth.php') {
     $method = $_SERVER['REQUEST_METHOD'];
@@ -309,6 +424,16 @@ if (basename($_SERVER['SCRIPT_FILENAME']) === 'auth.php') {
         handleResetPassword();
     } elseif ($method === 'GET' && $action === 'verify_reset') {
         handleVerifyReset();
+    } elseif ($method === 'POST' && $action === 'change_password') {
+        handleChangePassword();
+    } elseif ($method === 'GET' && $action === 'my_recovery') {
+        handleGetMyRecovery();
+    } elseif ($method === 'POST' && $action === 'set_recovery') {
+        handleSetRecovery();
+    } elseif ($method === 'GET' && $action === 'recovery_question') {
+        handleRecoveryQuestion();
+    } elseif ($method === 'POST' && $action === 'reset_with_recovery') {
+        handleResetWithRecovery();
     } elseif ($method === 'GET' && $action === 'me') {
         $user = authenticate();
         $db = getDB();

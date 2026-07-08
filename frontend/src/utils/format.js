@@ -8,6 +8,14 @@ export function formatTime12h(timeStr) {
   return `${h}:${m} ${ampm}`;
 }
 
+// Format a 'YYYY-MM-DD' service date as month-date-year: 'MM-DD-YYYY'.
+// Pure string math so there are no timezone off-by-one surprises.
+export function fmtServiceDate(dateStr) {
+  if (!dateStr) return '';
+  const [y, m, d] = String(dateStr).split('-');
+  return (y && m && d) ? `${m}-${d}-${y}` : String(dateStr);
+}
+
 export function downloadCSV(headers, rows, filename) {
   const escape = (val) => {
     const s = String(val ?? '');

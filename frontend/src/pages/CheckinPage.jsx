@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { checkin, members, settings as settingsApi } from '../utils/api';
 import { useAuth } from '../contexts/AuthContext';
-import { formatTime12h } from '../utils/format';
+import { formatTime12h, fmtServiceDate } from '../utils/format';
 import JsBarcode from 'jsbarcode';
 import QRCodeLib from 'qrcode';
 import {
@@ -11,7 +11,7 @@ import {
   Share2, Smartphone, WifiOff
 } from 'lucide-react';
 import OfflineCheckin from '../components/OfflineCheckin';
-import { CameraScanner, PhotoCapture } from '../components/CheckinCapture';
+import { CameraScanner, PhotoScanner, PhotoCapture } from '../components/CheckinCapture';
 
 const TABS = [
   { key: 'kiosk', label: 'Check-In Kiosk', icon: QrCode, perm: 'kiosk' },
@@ -30,7 +30,7 @@ function ServiceSelector({ value, onChange, services }) {
       <select value={value} onChange={e => onChange(e.target.value)} className="input">
         <option value="">-- No specific service --</option>
         {services.map(s => (
-          <option key={s.id} value={s.id}>{s.name} - {s.date} ({formatTime12h(s.time)})</option>
+          <option key={s.id} value={s.id}>{s.name} - {fmtServiceDate(s.date)} ({formatTime12h(s.time)})</option>
         ))}
       </select>
     </div>
@@ -58,6 +58,7 @@ function CheckinKiosk() {
   const [regPhoto, setRegPhoto] = useState(null);
   const [regLoading, setRegLoading] = useState(false);
   const [useCamera, setUseCamera] = useState(false);
+  const [showLiveCamera, setShowLiveCamera] = useState(false);
   const pinRef = useRef(null);
 
   useEffect(() => {
@@ -287,7 +288,23 @@ function CheckinKiosk() {
           </div>
 
           {useCamera ? (
-            <CameraScanner onScan={(code) => handleQrScan(code.trim())} />
+            <div>
+              <PhotoScanner onScan={(code) => handleQrScan(code)} />
+              <div className="mt-3 text-center">
+                <button
+                  type="button"
+                  onClick={() => setShowLiveCamera(v => !v)}
+                  className="text-xs text-gray-500 underline hover:text-gray-700"
+                >
+                  {showLiveCamera ? 'Hide live camera view' : 'Prefer a live camera view? Tap to try (works on some tablets)'}
+                </button>
+              </div>
+              {showLiveCamera && (
+                <div className="mt-2">
+                  <CameraScanner onScan={(code) => handleQrScan(code.trim())} />
+                </div>
+              )}
+            </div>
           ) : (
             <>
               <input

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { departments as deptApi, services as servicesApi, users as usersApi } from '../utils/api';
 import { useAuth } from '../contexts/AuthContext';
-import { formatTime12h } from '../utils/format';
+import { formatTime12h, fmtServiceDate } from '../utils/format';
 import Modal from '../components/Modal';
 import {
   ClipboardList, FileText, Settings, Plus, Trash2, Edit2,
@@ -20,10 +20,7 @@ const serviceTypeLabels = {
 
 function getServiceLabel(s) {
   const typeName = serviceTypeLabels[s.type] || s.type;
-  const dateStr = new Date(s.date + 'T00:00:00').toLocaleDateString('en-US', {
-    month: 'short', day: 'numeric', year: 'numeric',
-  });
-  return `${s.name} - ${dateStr} ${formatTime12h(s.time)} (${typeName})`;
+  return `${s.name} - ${fmtServiceDate(s.date)} ${formatTime12h(s.time)} (${typeName})`;
 }
 
 export default function DepartmentReportsPage() {
@@ -65,7 +62,7 @@ export default function DepartmentReportsPage() {
 
   const loadServices = async () => {
     try {
-      const data = await servicesApi.list({ limit: 50 });
+      const data = await servicesApi.list({ limit: 50, to: new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' }) });
       setServicesList(data.services || []);
     } catch (err) {
       setError(err.message);

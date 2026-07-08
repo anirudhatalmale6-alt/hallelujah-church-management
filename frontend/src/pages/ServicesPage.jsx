@@ -60,6 +60,7 @@ export default function ServicesPage() {
   const [pages, setPages] = useState(1);
   const [page, setPage] = useState(1);
   const [typeFilter, setTypeFilter] = useState('');
+  const [showUpcoming, setShowUpcoming] = useState(false);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editService, setEditService] = useState(null);
@@ -92,7 +93,10 @@ export default function ServicesPage() {
   const loadServices = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await servicesApi.list({ type: typeFilter, page, limit: 25 });
+      const params = { type: typeFilter, page, limit: 25 };
+      // By default show services only up to today; the toggle reveals upcoming ones.
+      if (!showUpcoming) params.to = new Date().toISOString().split('T')[0];
+      const data = await servicesApi.list(params);
       setServices(data.services);
       setTotal(data.total);
       setPages(data.pages);
@@ -103,7 +107,7 @@ export default function ServicesPage() {
       setError(err.message);
     }
     setLoading(false);
-  }, [typeFilter, page]);
+  }, [typeFilter, page, showUpcoming]);
 
   useEffect(() => {
     loadServices();
@@ -345,7 +349,7 @@ export default function ServicesPage() {
 
           {/* Filter */}
           <div className="card mb-6">
-            <div className="flex gap-3">
+            <div className="flex flex-wrap items-center gap-3">
               <select
                 value={typeFilter}
                 onChange={(e) => { setTypeFilter(e.target.value); setPage(1); }}
@@ -356,6 +360,18 @@ export default function ServicesPage() {
                   <option key={t.value} value={t.value}>{t.label}</option>
                 ))}
               </select>
+              <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={showUpcoming}
+                  onChange={(e) => { setShowUpcoming(e.target.checked); setPage(1); }}
+                  className="rounded border-gray-300 text-primary-700 focus:ring-primary-500"
+                />
+                Show upcoming (future) services
+              </label>
+              {!showUpcoming && (
+                <span className="text-xs text-gray-400">Showing services up to today</span>
+              )}
             </div>
           </div>
 

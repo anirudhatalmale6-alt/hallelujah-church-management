@@ -88,6 +88,15 @@ export const auth = {
     request('auth.php', { params: { action: 'verify_reset', token } }),
   resetPassword: (token, password) =>
     request('auth.php', { method: 'POST', body: { token, password }, params: { action: 'reset_password' } }),
+  changePassword: (current_password, new_password) =>
+    request('auth.php', { method: 'POST', body: { current_password, new_password }, params: { action: 'change_password' } }),
+  myRecovery: () => request('auth.php', { params: { action: 'my_recovery' } }),
+  setRecovery: (recovery_question, recovery_answer) =>
+    request('auth.php', { method: 'POST', body: { recovery_question, recovery_answer }, params: { action: 'set_recovery' } }),
+  recoveryQuestion: (email) =>
+    request('auth.php', { params: { action: 'recovery_question', email } }),
+  resetWithRecovery: (email, answer, new_password) =>
+    request('auth.php', { method: 'POST', body: { email, answer, new_password }, params: { action: 'reset_with_recovery' } }),
 };
 
 // Install

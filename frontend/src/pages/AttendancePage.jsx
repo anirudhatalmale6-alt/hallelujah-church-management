@@ -684,31 +684,38 @@ export default function AttendancePage() {
           ) : (
             <>
               {/* Summary cards for grouped view */}
-              {history.length > 0 && (
+              {history.length > 0 && (() => {
+                const totalServices = history.reduce((sum, h) => sum + parseInt(h.service_count || 0), 0);
+                const totalAttendees = history.reduce((sum, h) => sum + parseInt(h.total_attended || 0), 0);
+                // Weighted overall average = total attendees across the whole range / total services
+                // (NOT an average of each period's average, which skews when periods have different service counts).
+                const overallAvg = totalServices > 0 ? (totalAttendees / totalServices) : 0;
+                return (
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-4">
                   <div className="bg-white rounded-lg border border-gray-200 p-4 text-center">
                     <TrendingUp size={20} className="text-primary-700 mx-auto mb-1" />
                     <div className="text-2xl font-bold text-gray-900">
-                      {(history.reduce((sum, h) => sum + parseFloat(h.avg_attended || 0), 0) / history.length).toFixed(1)}
+                      {overallAvg.toFixed(1)}
                     </div>
-                    <div className="text-xs text-gray-500">Overall Avg Attendance</div>
+                    <div className="text-xs text-gray-500">Avg Attendance / Service</div>
                   </div>
                   <div className="bg-white rounded-lg border border-gray-200 p-4 text-center">
                     <Calendar size={20} className="text-blue-600 mx-auto mb-1" />
                     <div className="text-2xl font-bold text-gray-900">
-                      {history.reduce((sum, h) => sum + parseInt(h.service_count || 0), 0)}
+                      {totalServices}
                     </div>
                     <div className="text-xs text-gray-500">Total Services</div>
                   </div>
                   <div className="bg-white rounded-lg border border-gray-200 p-4 text-center">
                     <Users size={20} className="text-green-600 mx-auto mb-1" />
                     <div className="text-2xl font-bold text-gray-900">
-                      {history.reduce((sum, h) => sum + parseInt(h.total_attended || 0), 0)}
+                      {totalAttendees}
                     </div>
                     <div className="text-xs text-gray-500">Total Attendees</div>
                   </div>
                 </div>
-              )}
+                );
+              })()}
 
               <div className="card p-0 overflow-hidden">
                 <div className="overflow-x-auto">

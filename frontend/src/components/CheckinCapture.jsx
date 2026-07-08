@@ -160,67 +160,62 @@ export function CameraScanner({ onScan }) {
   );
 }
 
-// Photo capture for new guests: take a live photo with the tablet/phone camera
-// OR upload an existing image. Calls onChange(File) with the chosen image.
-export function PhotoCapture({ onChange }) {
-  const videoRef = useRef(null);
-  const streamRef = useRef(null);
-  const fileRef = useRef(null);
-  const [mode, setMode] = useState('idle'); // idle | camera
-  const [preview, setPreview] = useState('');
+// Photo-based scanner: uses the tablet's OWN camera app (via a native file input
+// with capture) to snap a photo of the member's QR/barcode, then decodes it from
+// the image. This works even inside the installed home-screen app, where the live
+// browser camera (getUserMedia) is blocked. Calls onScan(code) on a successful read.
+export function PhotoScanner({ onScan }) {
+  const inputRef = useRef(null);
+  const [status, setStatus] = useState('idle'); // idle | reading | error
   const [err, setErr] = useState('');
-  const [deniedPhoto, setDeniedPhoto] = useState(false);
 
-  const stopCamera = () => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(t => t.stop());
-      streamRef.current = null;
-    }
-    setMode('idle');
-  };
-
-  useEffect(() => () => stopCamera(), []);
-
-  const startCamera = async () => {
+  const handleFile = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setStatus('reading');
     setErr('');
-    setDeniedPhoto(false);
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      setErr('Live camera is not supported on this device. Please use "Upload Photo".');
-      return;
-    }
+    const scanner = new Html5Qrcode('photo-scan-region', { verbose: false });
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false });
-      streamRef.current = stream;
-      setMode('camera');
-      setTimeout(() => {
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          videoRef.current.play().catch(() => {});
-        }
-      }, 50);
-    } catch (e) {
-      const name = (e && (e.name || e.toString())) || '';
-      setDeniedPhoto(/NotAllowed|Permission|denied/i.test(name));
-      setErr('Could not access the camera. Turn on camera access for this site (steps below), then tap "Take Photo" again — or use "Upload Photo".');
+      const decoded = await scanner.scanFile(file, false);
+      if (navigator.vibrate) navigator.vibrate(120);
+      setStatus('idle');
+      onScan((decoded || '').trim());
+    } catch (e2) {
+      setStatus('error');
+      setErr("Couldn't read the code in that photo. Hold the card steady, fill the frame, and keep it in focus — then tap Take Photo of Code again.");
+    } finally {
+      try { await scanner.clear(); } catch {}
+      if (inputRef.current) inputRef.current.value = '';
     }
   };
 
-  const takePhoto = () => {
-    const video = videoRef.current;
-    if (!video || !video.videoWidth) return;
-    const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    canvas.getContext('2d').drawImage(video, 0, 0);
-    canvas.toBlob((blob) => {
-      if (!blob) return;
-      const file = new File([blob], `guest_photo_${Date.now()}.jpg`, { type: 'image/jpeg' });
-      if (preview) URL.revokeObjectURL(preview);
-      setPreview(URL.createObjectURL(blob));
-      onChange(file);
-      stopCamera();
-    }, 'image/jpeg', 0.9);
-  };
+  return (
+    <div className="text-center">
+      {/* Off-screen work area the decoder needs; not shown to the user. */}
+      <div id="photo-scan-region" style={{ position: 'fixed', left: '-10000px', top: 0, width: 320 }} />
+      <label className="btn bg-primary-700 text-white hover:bg-primary-800 w-full py-3 cursor-pointer flex items-center justify-center gap-2">
+        <Camera size={18} /> Take Photo of Code
+        <input ref={inputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handleFile} />
+      </label>
+      <p className="text-xs text-gray-500 mt-2">
+        Tap the button, choose your Camera, and snap a clear photo of the member's QR code or barcode. The system reads it and checks them in. This works on the tablet even inside the installed app.
+      </p>
+      {status === 'reading' && (
+        <p className="text-xs text-gray-500 mt-2 flex items-center justify-center gap-1">
+          <RefreshCw size={12} className="animate-spin" /> Reading the code...
+        </p>
+      )}
+      {status === 'error' && <p className="text-xs text-red-600 mt-2">{err}</p>}
+    </div>
+  );
+}
+
+// Photo capture for new guests: take a photo with the tablet/phone camera (via the
+// device's own camera app) OR upload an existing image. Calls onChange(File).
+export function PhotoCapture({ onChange }) {
+  const cameraRef = useRef(null);
+  const fileRef = useRef(null);
+  const [preview, setPreview] = useState('');
 
   const handleFile = (e) => {
     const file = e.target.files?.[0];
@@ -235,7 +230,10 @@ export function PhotoCapture({ onChange }) {
     setPreview('');
     onChange(null);
     if (fileRef.current) fileRef.current.value = '';
+    if (cameraRef.current) cameraRef.current.value = '';
   };
+
+  useEffect(() => () => { if (preview) URL.revokeObjectURL(preview); }, [preview]);
 
   return (
     <div>
@@ -251,32 +249,19 @@ export function PhotoCapture({ onChange }) {
             </button>
           </div>
         </div>
-      ) : mode === 'camera' ? (
-        <div>
-          <video ref={videoRef} playsInline muted className="w-full max-w-xs rounded-lg bg-black" style={{ maxHeight: 260 }} />
-          <div className="flex gap-2 mt-2">
-            <button type="button" onClick={takePhoto} className="btn btn-primary flex items-center gap-2 flex-1 justify-center">
-              <Camera size={16} /> Capture
-            </button>
-            <button type="button" onClick={stopCamera} className="btn bg-gray-200 text-gray-700 hover:bg-gray-300 flex items-center gap-2">
-              <X size={16} /> Cancel
-            </button>
-          </div>
-        </div>
       ) : (
         <div className="flex flex-wrap gap-2">
-          <button type="button" onClick={startCamera} className="btn bg-primary-700 text-white hover:bg-primary-800 flex items-center gap-2">
+          {/* Uses the device's own camera app — works on the tablet even inside the installed app. */}
+          <label className="btn bg-primary-700 text-white hover:bg-primary-800 flex items-center gap-2 cursor-pointer">
             <Camera size={16} /> Take Photo
-          </button>
-          <button type="button" onClick={() => fileRef.current?.click()} className="btn bg-gray-100 text-gray-700 hover:bg-gray-200 flex items-center gap-2">
+            <input ref={cameraRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handleFile} />
+          </label>
+          <label className="btn bg-gray-100 text-gray-700 hover:bg-gray-200 flex items-center gap-2 cursor-pointer">
             <Upload size={16} /> Upload Photo
-          </button>
-          <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleFile} />
+            <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleFile} />
+          </label>
         </div>
       )}
-
-      {err && <p className="text-xs text-red-600 mt-2">{err}</p>}
-      {err && deniedPhoto && <CameraPermissionHelp />}
     </div>
   );
 }

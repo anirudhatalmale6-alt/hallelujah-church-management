@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import ReactDOM from 'react-dom';
 import { finance as financeApi, members as membersApi, services as servicesApi, auditLog as auditLogApi } from '../utils/api';
 import { useAuth } from '../contexts/AuthContext';
-import { formatTime12h, downloadCSV } from '../utils/format';
+import { formatTime12h, downloadCSV, fmtServiceDate } from '../utils/format';
 import Modal from '../components/Modal';
 import Pagination from '../components/Pagination';
 import jsPDF from 'jspdf';
@@ -45,10 +45,7 @@ function formatDate(dateStr) {
 }
 
 function getServiceLabel(s) {
-  const dateStr = new Date(s.date + 'T00:00:00').toLocaleDateString('en-US', {
-    month: 'short', day: 'numeric', year: 'numeric',
-  });
-  return `${s.name} - ${dateStr} ${formatTime12h(s.time)}`;
+  return `${s.name} - ${fmtServiceDate(s.date)} ${formatTime12h(s.time)}`;
 }
 
 function generatePDF(title, headers, rows, filename, summaryLines) {
@@ -324,7 +321,7 @@ function RecordGivingTab({ setError, setMessage }) {
   useEffect(() => {
     financeApi.categories().then(d => setCategories((d.categories || []).filter(c => Number(c.is_active) !== 0)));
     membersApi.list({ limit: 9999, sort: 'last_name' }).then(d => setMembersList(d.members || []));
-    servicesApi.list({ limit: 50 }).then(d => setServicesList(d.services || []));
+    servicesApi.list({ limit: 50, to: new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' }) }).then(d => setServicesList(d.services || []));
     financeApi.accounts('asset').then(d => setBankAccounts((d.accounts || []).filter(a => a.parent_id && parseInt(a.child_count) === 0)));
     financeApi.vendors().then(d => setVendorList(d.vendors || [])).catch(() => {});
   }, []);
@@ -3800,12 +3797,17 @@ function PledgesTab({ setError, setMessage, isAdmin }) {
   };
 
   const handleDelete = async (id) => {
-    if (!confirm('Delete this pledge?')) return;
+    const p = pledges.find(x => x.id === id);
+    const who = p ? `${p.first_name} ${p.last_name}'s ${p.category_name} pledge` : 'this pledge';
+    if (!confirm(`Delete ${who}? This permanently removes the pledge record and cannot be undone. (Recorded donations are not deleted.)`)) return;
     try { await financeApi.deletePledge(id); setMessage('Pledge deleted'); loadPledges(); }
     catch (err) { setError(err.message); }
   };
 
   const handleCancel = async (id) => {
+    const p = pledges.find(x => x.id === id);
+    const who = p ? `${p.first_name} ${p.last_name}'s ${p.category_name} pledge` : 'this pledge';
+    if (!confirm(`Cancel ${who}? It will be marked as cancelled and stop tracking as active. You can still see it under the "Cancelled" filter.`)) return;
     try { await financeApi.updatePledge(id, { status: 'cancelled' }); setMessage('Pledge cancelled'); loadPledges(); }
     catch (err) { setError(err.message); }
   };
@@ -3846,16 +3848,19 @@ function PledgesTab({ setError, setMessage, isAdmin }) {
     <>
       {/* Alerts */}
       {behindAlerts.length > 0 && (
-        <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-xl">
+        <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-xl">
           <div className="flex items-center gap-2 mb-2">
-            <AlertCircle size={20} className="text-amber-600" />
-            <p className="font-medium text-amber-800">{behindAlerts.length} pledge{behindAlerts.length !== 1 ? 's' : ''} behind schedule</p>
+            <AlertCircle size={20} className="text-red-600" />
+            <p className="font-medium text-red-800">
+              {behindAlerts.length} pledge{behindAlerts.length !== 1 ? 's' : ''} behind schedule
+              {' — '}total balance to date {formatCurrency(behindAlerts.reduce((s, a) => s + (a.behind_by || 0), 0))}
+            </p>
           </div>
           <div className="space-y-1">
             {behindAlerts.map((a, i) => (
-              <div key={i} className="flex items-center justify-between text-sm px-2 py-1 rounded hover:bg-amber-100">
-                <span className="text-amber-700">{a.member_name} - {a.category} ({freqLabel[a.frequency]} {formatCurrency(a.pledge_amount)})</span>
-                <span className="text-amber-800 font-medium">Behind by {formatCurrency(a.behind_by)}</span>
+              <div key={i} className="flex items-center justify-between text-sm px-2 py-1 rounded hover:bg-red-100">
+                <span className="text-red-700">{a.member_name} - {a.category} ({freqLabel[a.frequency]} {formatCurrency(a.pledge_amount)})</span>
+                <span className="text-red-800 font-medium">Balance {formatCurrency(a.behind_by)}</span>
               </div>
             ))}
           </div>
@@ -3915,7 +3920,7 @@ function PledgesTab({ setError, setMessage, isAdmin }) {
                       <td className="px-4 py-3 text-sm text-right font-semibold text-gray-900">{formatCurrency(p.amount)}</td>
                       <td className="px-4 py-3 text-sm text-gray-600">{freqLabel[p.frequency]}</td>
                       <td className="px-4 py-3 text-sm text-gray-500 hidden md:table-cell">
-                        {p.start_date}{p.end_date ? ` to ${p.end_date}` : ' (ongoing)'}
+                        {p.start_date}{(p.end_date && p.end_date !== '0000-00-00') ? ` to ${p.end_date}` : ' (ongoing)'}
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2">
@@ -3923,10 +3928,12 @@ function PledgesTab({ setError, setMessage, isAdmin }) {
                             <div className={`h-full ${barColor} rounded-full`} style={{ width: `${Math.min(pct, 100)}%` }} />
                           </div>
                           <span className="text-xs text-gray-500 w-16 text-right">
-                            {formatCurrency(p.total_paid)} / {formatCurrency(p.expected_total)}
+                            {formatCurrency(p.total_paid)} / {formatCurrency(p.display_expected ?? p.expected_total)}
                           </span>
                         </div>
-                        {p.is_behind && <div className="text-xs text-red-600 mt-0.5">Behind by {formatCurrency(p.expected_total - p.total_paid)}</div>}
+                        {p.is_behind
+                          ? <div className="text-xs text-red-600 mt-0.5 font-medium">Not on track — behind by {formatCurrency(p.behind_by ?? Math.max(0, (p.expected_total || 0) - (p.total_paid || 0)))}</div>
+                          : (p.total_paid > 0 && <div className="text-xs text-green-600 mt-0.5">On track</div>)}
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center justify-end gap-1">
@@ -3956,10 +3963,19 @@ function PledgesTab({ setError, setMessage, isAdmin }) {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="label">Member *</label>
-              <select className="input" value={form.member_id} onChange={e => setForm(f => ({ ...f, member_id: e.target.value }))} disabled={!!editPledge}>
-                <option value="">-- Select --</option>
-                {membersList.map(m => <option key={m.id} value={m.id}>{m.last_name}, {m.first_name}</option>)}
-              </select>
+              {editPledge ? (
+                <input className="input bg-gray-50 text-gray-600" disabled
+                  value={(() => { const m = membersList.find(x => String(x.id) === String(form.member_id)); return m ? `${m.last_name}, ${m.first_name}` : ''; })()} />
+              ) : (
+                <MemberTypeahead
+                  membersList={membersList}
+                  value={form.member_id}
+                  donorName=""
+                  onChange={(id) => setForm(f => ({ ...f, member_id: id }))}
+                  onDonorNameChange={() => {}}
+                  onAddNew={() => membersApi.list({ limit: 9999, sort: 'last_name' }).then(d => setMembersList(d.members || []))}
+                />
+              )}
             </div>
             <div>
               <label className="label">Category *</label>

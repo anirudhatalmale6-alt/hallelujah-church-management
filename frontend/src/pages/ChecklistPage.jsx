@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { checklist as checklistApi, services as servicesApi } from '../utils/api';
 import { useAuth } from '../contexts/AuthContext';
-import { formatTime12h } from '../utils/format';
+import { formatTime12h, fmtServiceDate } from '../utils/format';
 import Modal from '../components/Modal';
 import {
   ClipboardList, Check, Square, CheckSquare, Plus, Trash2,
@@ -90,7 +90,7 @@ export default function ChecklistPage() {
 
   const loadServices = async () => {
     try {
-      const data = await servicesApi.list({ limit: 50 });
+      const data = await servicesApi.list({ limit: 50, to: new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' }) });
       setServices(data.services);
     } catch (err) {
       setError(err.message);
@@ -264,7 +264,7 @@ export default function ChecklistPage() {
                   <option value="">-- Choose a service --</option>
                   {services.map(s => (
                     <option key={s.id} value={s.id}>
-                      {s.name} - {new Date(s.date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} {formatTime12h(s.time)} ({serviceTypeLabels[s.type] || s.type})
+                      {s.name} - {fmtServiceDate(s.date)} {formatTime12h(s.time)} ({serviceTypeLabels[s.type] || s.type})
                     </option>
                   ))}
                 </select>

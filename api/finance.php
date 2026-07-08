@@ -2,6 +2,37 @@
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/auth.php';
 
+// Number of pledge payments DUE so far. Counts every period whose start date has
+// arrived, INCLUDING the current in-progress one — a period's payment is due from
+// the moment that period begins. So a member who has fully paid the current period
+// is on track (0 behind), one who paid only part of it is behind by the remainder,
+// and the next period isn't counted until it actually starts.
+// e.g. a monthly pledge starting July 1: on any day in July, July's payment is due;
+// August is not counted until August 1.
+function pledgeExpectedPayments($frequency, $startDateStr, $endDateStr = null) {
+    try {
+        $start = new DateTime($startDateStr); $start->setTime(0, 0, 0);
+    } catch (Exception $e) { return 0; }
+    $now = new DateTime(); $now->setTime(0, 0, 0);
+    $end = $now;
+    if ($endDateStr && $endDateStr !== '0000-00-00') {
+        try {
+            $ed = new DateTime($endDateStr); $ed->setTime(0, 0, 0);
+            if ($ed < $now) $end = $ed;
+        } catch (Exception $e) { $end = $now; }
+    }
+    if ($end < $start) return 0; // pledge hasn't started yet
+    $monthsElapsed = ($end->format('Y') - $start->format('Y')) * 12 + ((int)$end->format('n') - (int)$start->format('n'));
+    // +1 so the current period counts from its start (not only completed periods).
+    switch ($frequency) {
+        case 'weekly':    return (int)floor($start->diff($end)->days / 7) + 1;
+        case 'quarterly': return (int)floor($monthsElapsed / 3) + 1;
+        case 'annually':  return (int)floor($monthsElapsed / 12) + 1;
+        case 'monthly':
+        default:          return (int)$monthsElapsed + 1;
+    }
+}
+
 $method = $_SERVER['REQUEST_METHOD'];
 $action = $_GET['action'] ?? '';
 
@@ -433,41 +464,30 @@ switch ($method) {
 
             // Calculate fulfillment for each pledge
             foreach ($pledges as &$pledge) {
-                $totalPaid = (float)$db->prepare("
-                    SELECT COALESCE(SUM(amount), 0) FROM donations
-                    WHERE member_id = ? AND category_id = ?
-                    AND donation_date >= ? AND donation_date <= COALESCE(?, CURDATE())
-                ")->execute([$pledge['member_id'], $pledge['category_id'], $pledge['start_date'], $pledge['end_date']]) ?
-                    (float)$db->query("SELECT COALESCE(SUM(amount), 0) FROM donations WHERE member_id = {$pledge['member_id']} AND category_id = {$pledge['category_id']} AND donation_date >= '{$pledge['start_date']}'" . ($pledge['end_date'] ? " AND donation_date <= '{$pledge['end_date']}'" : ""))->fetchColumn() : 0;
+                // Ongoing pledges store end_date as NULL or '0000-00-00' — treat those as no end date.
+                $endDate = (!empty($pledge['end_date']) && $pledge['end_date'] !== '0000-00-00') ? $pledge['end_date'] : null;
 
-                $startDate = new DateTime($pledge['start_date']);
-                $endDate = $pledge['end_date'] ? new DateTime($pledge['end_date']) : new DateTime();
-                $now = new DateTime();
-                $effectiveEnd = min($endDate, $now);
+                $tpSql = "SELECT COALESCE(SUM(amount), 0) FROM donations
+                          WHERE member_id = ? AND category_id = ? AND donation_date >= ?";
+                $tpParams = [$pledge['member_id'], $pledge['category_id'], $pledge['start_date']];
+                if ($endDate) { $tpSql .= " AND donation_date <= ?"; $tpParams[] = $endDate; }
+                $tpStmt = $db->prepare($tpSql);
+                $tpStmt->execute($tpParams);
+                $totalPaid = (float)$tpStmt->fetchColumn();
 
-                $expectedPayments = 0;
-                switch ($pledge['frequency']) {
-                    case 'weekly':
-                        $expectedPayments = max(1, floor($startDate->diff($effectiveEnd)->days / 7));
-                        break;
-                    case 'monthly':
-                        $expectedPayments = max(1, ($effectiveEnd->format('Y') - $startDate->format('Y')) * 12 + $effectiveEnd->format('n') - $startDate->format('n') + 1);
-                        break;
-                    case 'quarterly':
-                        $months = ($effectiveEnd->format('Y') - $startDate->format('Y')) * 12 + $effectiveEnd->format('n') - $startDate->format('n') + 1;
-                        $expectedPayments = max(1, ceil($months / 3));
-                        break;
-                    case 'annually':
-                        $expectedPayments = max(1, $effectiveEnd->format('Y') - $startDate->format('Y') + 1);
-                        break;
-                }
+                $amount = (float)$pledge['amount'];
+                $expectedPayments = pledgeExpectedPayments($pledge['frequency'], $pledge['start_date'], $endDate);
+                $expectedTotal = $amount * $expectedPayments;          // amount DUE so far (through the current period)
+                $displayExpected = $expectedTotal > 0 ? $expectedTotal : $amount; // never 0, so the bar/label stays sensible
+                $behindBy = max(0, round($expectedTotal - $totalPaid, 2));
 
-                $expectedTotal = (float)$pledge['amount'] * $expectedPayments;
                 $pledge['total_paid'] = $totalPaid;
                 $pledge['expected_total'] = $expectedTotal;
+                $pledge['display_expected'] = $displayExpected;
                 $pledge['expected_payments'] = $expectedPayments;
-                $pledge['fulfillment_pct'] = $expectedTotal > 0 ? round(($totalPaid / $expectedTotal) * 100, 1) : 0;
-                $pledge['is_behind'] = $totalPaid < $expectedTotal;
+                $pledge['behind_by'] = $behindBy;
+                $pledge['fulfillment_pct'] = $displayExpected > 0 ? min(100, round(($totalPaid / $displayExpected) * 100, 1)) : 0;
+                $pledge['is_behind'] = $behindBy > 0.005;
             }
             unset($pledge);
 
@@ -490,25 +510,18 @@ switch ($method) {
 
                 $alerts = [];
                 foreach ($behindPledges as $p) {
-                    $startDate = new DateTime($p['start_date']);
-                    $now = new DateTime();
-                    $monthsElapsed = max(1, ($now->format('Y') - $startDate->format('Y')) * 12 + $now->format('n') - $startDate->format('n') + 1);
-
-                    $expectedPayments = $monthsElapsed;
-                    if ($p['frequency'] === 'weekly') $expectedPayments = max(1, floor($startDate->diff($now)->days / 7));
-                    if ($p['frequency'] === 'quarterly') $expectedPayments = max(1, ceil($monthsElapsed / 3));
-                    if ($p['frequency'] === 'annually') $expectedPayments = max(1, $now->format('Y') - $startDate->format('Y') + 1);
-
+                    $expectedPayments = pledgeExpectedPayments($p['frequency'], $p['start_date']);
                     $expectedTotal = (float)$p['amount'] * $expectedPayments;
                     $totalPaid = (float)$p['total_paid'];
+                    $behindBy = round($expectedTotal - $totalPaid, 2);
 
-                    if ($totalPaid < $expectedTotal) {
+                    if ($behindBy > 0.005) {
                         $alerts[] = [
                             'member_name' => $p['first_name'] . ' ' . $p['last_name'],
                             'category' => $p['category_name'],
                             'expected' => $expectedTotal,
                             'paid' => $totalPaid,
-                            'behind_by' => $expectedTotal - $totalPaid,
+                            'behind_by' => $behindBy,
                             'frequency' => $p['frequency'],
                             'pledge_amount' => (float)$p['amount'],
                         ];

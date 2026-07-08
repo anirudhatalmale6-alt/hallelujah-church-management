@@ -35,15 +35,13 @@ function getAttendanceStatus($db, $serviceId) {
 
 // Kiosk endpoints - no auth required
 if ($method === 'GET' && $action === 'active_services') {
+    // Show services up to and including today, newest first — you check people in
+    // for today's or a recent service, not future ones. The list reveals gradually
+    // as real services take place instead of jumping weeks ahead.
     $today = date('Y-m-d');
-    $stmt = $db->prepare("SELECT * FROM services WHERE date >= ? ORDER BY date ASC, time ASC LIMIT 20");
+    $stmt = $db->prepare("SELECT * FROM services WHERE date <= ? ORDER BY date DESC, time DESC LIMIT 20");
     $stmt->execute([$today]);
     $services = $stmt->fetchAll();
-    if (empty($services)) {
-        $stmt = $db->prepare("SELECT * FROM services WHERE date <= ? ORDER BY date DESC, time DESC LIMIT 10");
-        $stmt->execute([$today]);
-        $services = array_reverse($stmt->fetchAll());
-    }
     jsonResponse(['services' => $services]);
 }
 

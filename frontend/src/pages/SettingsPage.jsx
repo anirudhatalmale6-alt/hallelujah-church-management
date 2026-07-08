@@ -1,11 +1,137 @@
 import React, { useState, useEffect } from 'react';
-import { settings as settingsApi, backups } from '../utils/api';
+import { settings as settingsApi, backups, auth as authApi } from '../utils/api';
 import { loadPersonTypes } from '../utils/personTypes';
 import { useAuth } from '../contexts/AuthContext';
 import {
   Settings, Save, AlertCircle, Check, X, RefreshCw,
-  Database, Download, Trash2, Plus, Clock, Users
+  Database, Download, Trash2, Plus, Clock, Users, KeyRound, ShieldQuestion
 } from 'lucide-react';
+
+// Admin self-service: shows the username (email), lets you change your password,
+// and set a security question so you can recover access even without email.
+function AccountRecoveryCard() {
+  const { user } = useAuth();
+  const [msg, setMsg] = useState('');
+  const [err, setErr] = useState('');
+  const [pwForm, setPwForm] = useState({ current_password: '', new_password: '', confirm: '' });
+  const [pwSaving, setPwSaving] = useState(false);
+  const [rec, setRec] = useState({ recovery_question: '', recovery_answer: '' });
+  const [existingQuestion, setExistingQuestion] = useState(null);
+  const [recSaving, setRecSaving] = useState(false);
+
+  useEffect(() => {
+    authApi.myRecovery().then(d => {
+      setExistingQuestion(d.recovery_question || null);
+      if (d.recovery_question) setRec(r => ({ ...r, recovery_question: d.recovery_question }));
+    }).catch(() => {});
+  }, []);
+
+  const flash = (setter, text) => { setter(text); setTimeout(() => { setMsg(''); setErr(''); }, 6000); };
+
+  const changePassword = async (e) => {
+    e.preventDefault();
+    setErr(''); setMsg('');
+    if (pwForm.new_password !== pwForm.confirm) { flash(setErr, 'The new password and confirmation do not match.'); return; }
+    if ((pwForm.new_password || '').length < 6) { flash(setErr, 'New password must be at least 6 characters.'); return; }
+    setPwSaving(true);
+    try {
+      const d = await authApi.changePassword(pwForm.current_password, pwForm.new_password);
+      setPwForm({ current_password: '', new_password: '', confirm: '' });
+      flash(setMsg, d.message || 'Password changed.');
+    } catch (e2) { flash(setErr, e2.message || 'Could not change password.'); }
+    setPwSaving(false);
+  };
+
+  const saveRecovery = async (e) => {
+    e.preventDefault();
+    setErr(''); setMsg('');
+    setRecSaving(true);
+    try {
+      const d = await authApi.setRecovery(rec.recovery_question, rec.recovery_answer);
+      setExistingQuestion(rec.recovery_question);
+      setRec(r => ({ ...r, recovery_answer: '' }));
+      flash(setMsg, d.message || 'Security question saved.');
+    } catch (e2) { flash(setErr, e2.message || 'Could not save security question.'); }
+    setRecSaving(false);
+  };
+
+  const commonQuestions = [
+    'What was the name of your first pet?',
+    'What city were you born in?',
+    "What is your mother's maiden name?",
+    'What was the name of your first school?',
+    'What is your favorite Bible verse (book and chapter)?',
+  ];
+
+  return (
+    <div className="card mb-6">
+      <div className="flex items-center gap-2 mb-4">
+        <KeyRound size={20} className="text-primary-700" />
+        <h2 className="text-lg font-semibold text-gray-900">My Login & Recovery</h2>
+      </div>
+
+      {msg && <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded-lg flex items-center gap-2 text-green-700 text-sm"><Check size={16} /> {msg}</div>}
+      {err && <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg flex items-center gap-2 text-red-700 text-sm"><AlertCircle size={16} /> {err}</div>}
+
+      <div className="mb-6">
+        <label className="label">Your username (used to sign in)</label>
+        <input className="input bg-gray-50 text-gray-700 max-w-md" value={user?.email || ''} readOnly onFocus={e => e.target.select()} />
+        <p className="text-xs text-gray-500 mt-1">This is your login email. Keep it noted somewhere safe.</p>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Change password */}
+        <form onSubmit={changePassword} className="space-y-3">
+          <h3 className="text-sm font-semibold text-gray-800 flex items-center gap-1.5"><KeyRound size={15} /> Change my password</h3>
+          <div>
+            <label className="label">Current password</label>
+            <input type="password" className="input" autoComplete="current-password" value={pwForm.current_password}
+              onChange={e => setPwForm(f => ({ ...f, current_password: e.target.value }))} required />
+          </div>
+          <div>
+            <label className="label">New password</label>
+            <input type="password" className="input" autoComplete="new-password" value={pwForm.new_password}
+              onChange={e => setPwForm(f => ({ ...f, new_password: e.target.value }))} required />
+          </div>
+          <div>
+            <label className="label">Confirm new password</label>
+            <input type="password" className="input" autoComplete="new-password" value={pwForm.confirm}
+              onChange={e => setPwForm(f => ({ ...f, confirm: e.target.value }))} required />
+          </div>
+          <button type="submit" disabled={pwSaving} className="btn-primary disabled:opacity-50">
+            {pwSaving ? <RefreshCw size={16} className="animate-spin" /> : <Save size={16} />} Update password
+          </button>
+        </form>
+
+        {/* Security question */}
+        <form onSubmit={saveRecovery} className="space-y-3">
+          <h3 className="text-sm font-semibold text-gray-800 flex items-center gap-1.5"><ShieldQuestion size={15} /> Security question (password recovery)</h3>
+          <p className="text-xs text-gray-500">
+            Set this once. If you ever forget your password, you can reset it from the Sign-In page by answering your
+            question — no email needed. {existingQuestion ? 'A question is currently set; saving replaces it.' : 'No question set yet.'}
+          </p>
+          <div>
+            <label className="label">Question</label>
+            <input className="input" list="recovery-question-list" placeholder="Choose one or type your own"
+              value={rec.recovery_question} onChange={e => setRec(r => ({ ...r, recovery_question: e.target.value }))} required />
+            <datalist id="recovery-question-list">
+              {commonQuestions.map(q => <option key={q} value={q} />)}
+            </datalist>
+          </div>
+          <div>
+            <label className="label">Your answer</label>
+            <input className="input" placeholder="Something only you know" value={rec.recovery_answer}
+              onChange={e => setRec(r => ({ ...r, recovery_answer: e.target.value }))} required />
+            <p className="text-xs text-gray-500 mt-1">Not case-sensitive. Stored securely (encrypted), never shown again.</p>
+          </div>
+          <button type="submit" disabled={recSaving} className="btn-primary disabled:opacity-50">
+            {recSaving ? <RefreshCw size={16} className="animate-spin" /> : <Save size={16} />} Save security question
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
 
 const settingsFields = [
   { key: 'church_name', label: 'Church Name', type: 'text', placeholder: 'Hallelujah In The City' },
@@ -176,6 +302,8 @@ export default function SettingsPage() {
           {success}
         </div>
       )}
+
+      <AccountRecoveryCard />
 
       <form onSubmit={handleSave}>
         <div className="card">
