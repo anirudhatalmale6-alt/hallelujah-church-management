@@ -294,12 +294,14 @@ export const finance = {
   update: (id, data) => request('finance.php', { method: 'PUT', body: data, params: { id } }),
   delete: (id) => request('finance.php', { method: 'DELETE', params: { id } }),
   summary: (params) => request('finance.php', { params: { action: 'summary', ...params } }),
-  memberStatement: (memberId, dateFrom, dateTo) =>
-    request('finance.php', { params: { action: 'member_statement', member_id: memberId, date_from: dateFrom, date_to: dateTo } }),
-  allMembersStatement: (dateFrom, dateTo, sortBy) =>
-    request('finance.php', { params: { action: 'all_members_statement', date_from: dateFrom, date_to: dateTo, sort_by: sortBy } }),
-  nonGivers: (dateFrom, dateTo) =>
-    request('finance.php', { params: { action: 'non_givers', date_from: dateFrom, date_to: dateTo } }),
+  memberStatement: (memberId, dateFrom, dateTo, categoryIds, donorName) =>
+    request('finance.php', { params: { action: 'member_statement', member_id: memberId || '', donor_name: donorName || '', date_from: dateFrom, date_to: dateTo, category_ids: categoryIds || '' } }),
+  allMembersStatement: (dateFrom, dateTo, sortBy, categoryIds) =>
+    request('finance.php', { params: { action: 'all_members_statement', date_from: dateFrom, date_to: dateTo, sort_by: sortBy, category_ids: categoryIds || '' } }),
+  nonGivers: (dateFrom, dateTo, categoryIds) =>
+    request('finance.php', { params: { action: 'non_givers', date_from: dateFrom, date_to: dateTo, category_ids: categoryIds || '' } }),
+  statementDonors: () =>
+    request('finance.php', { params: { action: 'statement_donors' } }),
   // Expense categories
   expenseCategories: () => request('finance.php', { params: { action: 'expense_categories' } }),
   addExpenseCategory: (data) => request('finance.php', { method: 'POST', body: data, params: { action: 'expense_category' } }),

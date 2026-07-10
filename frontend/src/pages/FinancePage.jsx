@@ -1715,10 +1715,66 @@ function OldHistoryTab_UNUSED({ setError, setMessage, isAdmin }) {
 }
 
 /* ─── Statements Tab ─── */
+function GiverPicker({ membersList, donorsList, memberId, donorName, onSelectMember, onSelectDonor, onClear }) {
+  const [search, setSearch] = useState('');
+  const [open, setOpen] = useState(false);
+  const boxRef = React.useRef(null);
+
+  const selectedMember = memberId ? membersList.find(m => String(m.id) === String(memberId)) : null;
+  const display = selectedMember ? `${selectedMember.last_name}, ${selectedMember.first_name}`
+    : donorName ? `${donorName} (non-member)` : '';
+
+  const q = search.trim().toLowerCase();
+  const fMembers = q ? membersList.filter(m => `${m.first_name} ${m.last_name}`.toLowerCase().includes(q) || `${m.last_name}, ${m.first_name}`.toLowerCase().includes(q)) : membersList;
+  const fDonors = q ? donorsList.filter(d => (d.donor_name || '').toLowerCase().includes(q)) : donorsList;
+
+  useEffect(() => {
+    const h = (e) => { if (boxRef.current && !boxRef.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', h);
+    return () => document.removeEventListener('mousedown', h);
+  }, []);
+
+  return (
+    <div className="relative" ref={boxRef}>
+      <input className="input" placeholder="Search member or non-member donor..."
+        value={open ? search : display}
+        onChange={e => { setSearch(e.target.value); setOpen(true); }}
+        onFocus={() => { setSearch(''); setOpen(true); }} />
+      {open && (
+        <div className="absolute z-50 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-72 overflow-y-auto">
+          {display && (
+            <button type="button" className="w-full text-left px-3 py-1.5 text-sm text-gray-400 hover:bg-gray-50" onClick={() => { onClear(); setSearch(''); setOpen(false); }}>Clear selection</button>
+          )}
+          <div className="px-3 py-1 text-xs font-semibold text-gray-400 bg-gray-50 border-t border-gray-100">Members</div>
+          {fMembers.slice(0, 50).map(m => (
+            <button key={`m${m.id}`} type="button" className={`w-full text-left px-3 py-1.5 text-sm hover:bg-primary-50 ${String(m.id) === String(memberId) ? 'bg-primary-50 text-primary-700 font-medium' : 'text-gray-700'}`}
+              onClick={() => { onSelectMember(String(m.id)); setSearch(''); setOpen(false); }}>
+              {m.last_name}, {m.first_name}{m.email ? <span className="text-gray-400 text-xs ml-1">{m.email}</span> : ''}
+            </button>
+          ))}
+          {fMembers.length === 0 && <div className="px-3 py-1.5 text-sm text-gray-400">No member match</div>}
+          <div className="px-3 py-1 text-xs font-semibold text-gray-400 bg-gray-50 border-t border-gray-100">Non-Member Donors</div>
+          {fDonors.slice(0, 50).map((d, i) => (
+            <button key={`d${i}`} type="button" className={`w-full text-left px-3 py-1.5 text-sm hover:bg-primary-50 ${d.donor_name === donorName ? 'bg-primary-50 text-primary-700 font-medium' : 'text-gray-700'}`}
+              onClick={() => { onSelectDonor(d.donor_name); setSearch(''); setOpen(false); }}>
+              {d.donor_name} <span className="text-gray-400 text-xs ml-1">{d.gift_count} gift{Number(d.gift_count) === 1 ? '' : 's'}</span>
+            </button>
+          ))}
+          {fDonors.length === 0 && <div className="px-3 py-1.5 text-sm text-gray-400">No non-member donor found</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function StatementsTab({ setError }) {
   const [mode, setMode] = useState('individual');
   const [membersList, setMembersList] = useState([]);
+  const [donorsList, setDonorsList] = useState([]);
   const [selectedMemberId, setSelectedMemberId] = useState('');
+  const [selectedDonorName, setSelectedDonorName] = useState('');
+  const [categories, setCategories] = useState([]);
+  const [catIds, setCatIds] = useState([]); // empty = all categories
   const [dateFrom, setDateFrom] = useState(new Date().getFullYear() + '-01-01');
   const [dateTo, setDateTo] = useState(new Date().getFullYear() + '-12-31');
   const [statement, setStatement] = useState(null);
@@ -1729,17 +1785,29 @@ function StatementsTab({ setError }) {
   const [includePledges, setIncludePledges] = useState(false);
   const stFreqLabel = { weekly: 'Weekly', monthly: 'Monthly', quarterly: 'Quarterly', annually: 'Annually' };
 
+  const catParam = catIds.join(',');
+  const catLabel = catIds.length === 0
+    ? 'All Categories'
+    : categories.filter(c => catIds.includes(Number(c.id))).map(c => c.name).join(', ');
+
   useEffect(() => {
     membersApi.list({ limit: 9999, sort: 'last_name' }).then(d => setMembersList(d.members || []));
+    financeApi.statementDonors().then(d => setDonorsList(d.donors || [])).catch(() => {});
+    financeApi.categories().then(d => setCategories((d.categories || []).filter(c => c.is_active == null || Number(c.is_active) === 1))).catch(() => {});
   }, []);
+
+  const toggleCat = (id) => {
+    const n = Number(id);
+    setCatIds(prev => prev.includes(n) ? prev.filter(x => x !== n) : [...prev, n]);
+  };
 
   const loadStatement = async () => {
     if (mode === 'individual') {
-      if (!selectedMemberId) { setError('Please select a member'); return; }
+      if (!selectedMemberId && !selectedDonorName) { setError('Please select a member or a non-member donor'); return; }
       setLoading(true);
       setError('');
       try {
-        const data = await financeApi.memberStatement(selectedMemberId, dateFrom, dateTo);
+        const data = await financeApi.memberStatement(selectedMemberId, dateFrom, dateTo, catParam, selectedDonorName);
         setStatement(data);
       } catch (err) {
         setError(err.message);
@@ -1749,7 +1817,7 @@ function StatementsTab({ setError }) {
       setLoading(true);
       setError('');
       try {
-        const data = await financeApi.nonGivers(dateFrom, dateTo);
+        const data = await financeApi.nonGivers(dateFrom, dateTo, catParam);
         setNonGivers(data);
       } catch (err) {
         setError(err.message);
@@ -1759,7 +1827,7 @@ function StatementsTab({ setError }) {
       setLoading(true);
       setError('');
       try {
-        const data = await financeApi.allMembersStatement(dateFrom, dateTo, sortBy);
+        const data = await financeApi.allMembersStatement(dateFrom, dateTo, sortBy, catParam);
         setAllStatement(data);
       } catch (err) {
         setError(err.message);
@@ -1768,10 +1836,73 @@ function StatementsTab({ setError }) {
     }
   };
 
+  const printAllStatement = () => {
+    if (!allStatement) return;
+    const bodyRows = (allStatement.members || []).map(m => {
+      const catRows = Object.entries(m.categories || {}).map(([cat, amt], ci) =>
+        `<tr>${ci === 0 ? `<td rowspan="${Object.keys(m.categories).length + 1}" style="padding:6px 10px;border-bottom:1px solid #e5e7eb;font-weight:600;vertical-align:top;">${m.name}${m.is_non_member ? ' <span style="color:#9ca3af;font-weight:400;">(non-member)</span>' : ''}</td>` : ''}
+          <td style="padding:6px 10px;border-bottom:1px solid #f3f4f6;">${cat}</td>
+          <td style="padding:6px 10px;border-bottom:1px solid #f3f4f6;text-align:right;">${formatCurrency(amt)}</td></tr>`
+      ).join('');
+      return catRows + `<tr style="background:#f9fafb;"><td style="padding:4px 10px;text-align:right;font-size:12px;color:#6b7280;text-transform:uppercase;">Subtotal</td><td style="padding:4px 10px;text-align:right;font-weight:700;color:#334155;">${formatCurrency(m.total)}</td></tr>`;
+    }).join('');
+
+    const html = `<!DOCTYPE html><html><head><title>All Givers Giving Statement</title>
+    <style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;padding:40px;color:#1f2937;max-width:800px;margin:0 auto;}
+    h1{font-size:22px;margin-bottom:4px;} .meta{color:#6b7280;font-size:14px;margin-bottom:20px;}
+    table{width:100%;border-collapse:collapse;font-size:14px;} th{text-align:left;padding:8px 10px;background:#f9fafb;border-bottom:2px solid #e5e7eb;font-weight:600;font-size:12px;text-transform:uppercase;color:#6b7280;}
+    @media print{body{padding:20px;}}</style></head>
+    <body>
+    <h1>All Givers Giving Statement</h1>
+    <div class="meta">
+      <div><strong>Church:</strong> Hallelujah In The City</div>
+      <div><strong>Period:</strong> ${new Date(dateFrom + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })} - ${new Date(dateTo + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</div>
+      <div><strong>Categories:</strong> ${catLabel}</div>
+      <div><strong>Givers:</strong> ${allStatement.count}</div>
+    </div>
+    <table><thead><tr><th>Name</th><th>Type / Category</th><th style="text-align:right;">Total Amount</th></tr></thead>
+    <tbody>${bodyRows}
+    <tr style="border-top:2px solid #1f2937;"><td style="padding:8px 10px;font-weight:700;" colspan="2">Grand Total</td><td style="padding:8px 10px;text-align:right;font-weight:700;">${formatCurrency(allStatement.grand_total)}</td></tr>
+    </tbody></table>
+    <p style="margin-top:30px;font-size:12px;color:#9ca3af;">Generated ${new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}. Thank you for your generous giving!</p>
+    </body></html>`;
+    const win = window.open('', '_blank');
+    if (win) { win.document.write(html); win.document.close(); win.focus(); setTimeout(() => win.print(), 300); }
+  };
+
+  const printNonGivers = () => {
+    if (!nonGivers) return;
+    const rows = (nonGivers.members || []).map((m, i) =>
+      `<tr><td style="padding:6px 10px;border-bottom:1px solid #f3f4f6;color:#9ca3af;">${i + 1}</td>
+        <td style="padding:6px 10px;border-bottom:1px solid #f3f4f6;">${m.last_name}, ${m.first_name}</td>
+        <td style="padding:6px 10px;border-bottom:1px solid #f3f4f6;">${m.email || '-'}</td>
+        <td style="padding:6px 10px;border-bottom:1px solid #f3f4f6;">${m.phone || '-'}</td></tr>`
+    ).join('');
+    const html = `<!DOCTYPE html><html><head><title>Non-Givers Report</title>
+    <style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;padding:40px;color:#1f2937;max-width:800px;margin:0 auto;}
+    h1{font-size:22px;margin-bottom:4px;} .meta{color:#6b7280;font-size:14px;margin-bottom:20px;}
+    table{width:100%;border-collapse:collapse;font-size:14px;} th{text-align:left;padding:8px 10px;background:#f9fafb;border-bottom:2px solid #e5e7eb;font-weight:600;font-size:12px;text-transform:uppercase;color:#6b7280;}
+    @media print{body{padding:20px;}}</style></head>
+    <body>
+    <h1>Non-Givers Report</h1>
+    <div class="meta">
+      <div><strong>Church:</strong> Hallelujah In The City</div>
+      <div><strong>Period:</strong> ${new Date(dateFrom + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })} - ${new Date(dateTo + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</div>
+      <div><strong>Categories:</strong> ${catLabel}</div>
+      <div><strong>Total Non-Givers:</strong> ${nonGivers.count}</div>
+    </div>
+    <table><thead><tr><th>#</th><th>Name</th><th>Email</th><th>Phone</th></tr></thead>
+    <tbody>${rows}</tbody></table>
+    <p style="margin-top:30px;font-size:12px;color:#9ca3af;">Generated ${new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}.</p>
+    </body></html>`;
+    const win = window.open('', '_blank');
+    if (win) { win.document.write(html); win.document.close(); win.focus(); setTimeout(() => win.print(), 300); }
+  };
+
   const printStatement = () => {
     if (!statement) return;
     const m = statement.member;
-    const fullName = `${m.first_name} ${m.last_name}`;
+    const fullName = `${m.first_name} ${m.last_name}`.trim() + (m.is_non_member ? ' (non-member)' : '');
     const address = [m.address, m.city, m.state, m.zip].filter(Boolean).join(', ');
 
     const donationRows = (statement.donations || []).map(d => {
@@ -1819,6 +1950,7 @@ function StatementsTab({ setError }) {
       <div><strong>Name:</strong> ${fullName}</div>
       ${address ? `<div><strong>Address:</strong> ${address}</div>` : ''}
       <div><strong>Period:</strong> ${new Date(dateFrom + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })} - ${new Date(dateTo + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</div>
+      <div><strong>Categories:</strong> ${catLabel}</div>
       <div><strong>Church:</strong> Hallelujah In The City</div>
     </div>
     <h3 style="margin-top:24px;font-size:16px;">Donation Details</h3>
@@ -1839,13 +1971,13 @@ function StatementsTab({ setError }) {
   const downloadStatementPDF = () => {
     if (!statement) return;
     const m = statement.member;
-    const fullName = `${m.first_name} ${m.last_name}`;
+    const fullName = `${m.first_name} ${m.last_name}`.trim() + (m.is_non_member ? ' (non-member)' : '');
     const headers = ['Date', 'Category', 'Method', 'Amount'];
     const rows = (statement.donations || []).map(d => [
       d.donation_date, d.category_name, d.payment_method, formatCurrency(d.amount),
     ]);
     const catSummary = Object.entries(statement.total_by_category || {}).map(([cat, t]) => `${cat}: ${formatCurrency(t)}`);
-    const extraLines = [`Period: ${dateFrom} to ${dateTo}`, ...catSummary, `Grand Total: ${formatCurrency(statement.grand_total)}`];
+    const extraLines = [`Period: ${dateFrom} to ${dateTo}`, `Categories: ${catLabel}`, ...catSummary, `Grand Total: ${formatCurrency(statement.grand_total)}`];
     if (includePledges) {
       const pb = statement.pledges_behind || [];
       if (pb.length > 0) {
@@ -1878,7 +2010,7 @@ function StatementsTab({ setError }) {
             onClick={() => { setMode('all'); setStatement(null); setNonGivers(null); }}
             className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${mode === 'all' ? 'bg-primary-700 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
           >
-            All Members
+            All Givers
           </button>
           <button
             onClick={() => { setMode('non_givers'); setStatement(null); setAllStatement(null); }}
@@ -1890,14 +2022,15 @@ function StatementsTab({ setError }) {
         <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
           {mode === 'individual' && (
             <div className="sm:col-span-2">
-              <label className="label">Select Member</label>
-              <MemberTypeahead
+              <label className="label">Select Member or Donor</label>
+              <GiverPicker
                 membersList={membersList}
-                value={selectedMemberId}
-                donorName=""
-                onChange={(id) => setSelectedMemberId(id)}
-                onDonorNameChange={() => {}}
-                onAddNew={() => membersApi.list({ limit: 9999, sort: 'last_name' }).then(d => setMembersList(d.members || []))}
+                donorsList={donorsList}
+                memberId={selectedMemberId}
+                donorName={selectedDonorName}
+                onSelectMember={(id) => { setSelectedMemberId(id); setSelectedDonorName(''); }}
+                onSelectDonor={(name) => { setSelectedDonorName(name); setSelectedMemberId(''); }}
+                onClear={() => { setSelectedMemberId(''); setSelectedDonorName(''); }}
               />
             </div>
           )}
@@ -1921,7 +2054,28 @@ function StatementsTab({ setError }) {
             <input type="date" className="input" value={dateTo} onChange={e => setDateTo(e.target.value)} />
           </div>
         </div>
-        {mode === 'individual' && (
+
+        <div className="mt-4">
+          <label className="label">Filter by Account / Category</label>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={() => setCatIds([])}
+              className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors ${catIds.length === 0 ? 'bg-primary-700 text-white border-primary-700' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`}>
+              All Categories
+            </button>
+            {categories.map(c => {
+              const on = catIds.includes(Number(c.id));
+              return (
+                <button key={c.id} type="button" onClick={() => toggleCat(c.id)}
+                  className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors ${on ? 'bg-primary-700 text-white border-primary-700' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`}>
+                  {c.name}
+                </button>
+              );
+            })}
+          </div>
+          <p className="text-xs text-gray-400 mt-1">Leave on "All Categories" to include every account, or tap one or more (Tithe, Offering, Special Seed…) to narrow the statement. Applies to individual, all givers, and non-givers.</p>
+        </div>
+
+        {mode === 'individual' && !selectedDonorName && (
           <label className="mt-4 flex items-center gap-2 text-sm text-gray-700 cursor-pointer select-none">
             <input type="checkbox" className="rounded border-gray-300 text-primary-700 focus:ring-primary-500"
               checked={includePledges} onChange={e => setIncludePledges(e.target.checked)} />
@@ -1941,26 +2095,31 @@ function StatementsTab({ setError }) {
         <div className="card">
           <div className="flex items-center justify-between mb-4">
             <div>
-              <h2 className="text-lg font-bold text-gray-900">All Members Giving Statement</h2>
-              <p className="text-sm text-gray-500">{allStatement.count} members | {new Date(dateFrom + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })} - {new Date(dateTo + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}</p>
+              <h2 className="text-lg font-bold text-gray-900">All Givers Giving Statement</h2>
+              <p className="text-sm text-gray-500">{allStatement.count} givers | {catLabel} | {new Date(dateFrom + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })} - {new Date(dateTo + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}</p>
             </div>
-            <button onClick={() => {
-              const headers = ['Name', 'Type / Category', 'Total Amount'];
-              const rows = [];
-              (allStatement.members || []).forEach(m => {
-                Object.entries(m.categories || {}).forEach(([cat, amt]) => {
-                  rows.push([m.name, cat, formatCurrency(amt)]);
+            <div className="flex gap-2">
+              <button onClick={() => {
+                const headers = ['Name', 'Type / Category', 'Total Amount'];
+                const rows = [];
+                (allStatement.members || []).forEach(m => {
+                  Object.entries(m.categories || {}).forEach(([cat, amt]) => {
+                    rows.push([m.name + (m.is_non_member ? ' (non-member)' : ''), cat, formatCurrency(amt)]);
+                  });
                 });
-              });
-              generatePDF(
-                'All Members Giving Statement',
-                headers, rows,
-                'all-members-statement.pdf',
-                [`Period: ${dateFrom} to ${dateTo}`, `Members: ${allStatement.count}`, `Grand Total: ${formatCurrency(allStatement.grand_total)}`]
-              );
-            }} className="btn-secondary">
-              <Download size={16} /> PDF
-            </button>
+                generatePDF(
+                  'All Givers Giving Statement',
+                  headers, rows,
+                  'all-givers-statement.pdf',
+                  [`Period: ${dateFrom} to ${dateTo}`, `Categories: ${catLabel}`, `Givers: ${allStatement.count}`, `Grand Total: ${formatCurrency(allStatement.grand_total)}`]
+                );
+              }} className="btn-secondary">
+                <Download size={16} /> PDF
+              </button>
+              <button onClick={printAllStatement} className="btn-secondary">
+                <Printer size={16} /> Print
+              </button>
+            </div>
           </div>
 
           <div className="overflow-x-auto">
@@ -1980,6 +2139,7 @@ function StatementsTab({ setError }) {
                         {ci === 0 && (
                           <td className="px-4 py-2 font-medium text-gray-900" rowSpan={Object.keys(m.categories).length + 1}>
                             {m.name}
+                            {m.is_non_member && <span className="ml-2 inline-block px-1.5 py-0.5 rounded bg-gray-100 text-gray-500 text-[10px] font-medium uppercase tracking-wide">non-member</span>}
                           </td>
                         )}
                         <td className="px-4 py-2 text-gray-600">{cat}</td>
@@ -2014,18 +2174,23 @@ function StatementsTab({ setError }) {
           <div className="flex items-center justify-between mb-4">
             <div>
               <h2 className="text-lg font-bold text-gray-900">Non-Givers Report</h2>
-              <p className="text-sm text-gray-500">{nonGivers.count} members with no giving | {new Date(dateFrom + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })} - {new Date(dateTo + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}</p>
+              <p className="text-sm text-gray-500">{nonGivers.count} members with no giving | {catLabel} | {new Date(dateFrom + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })} - {new Date(dateTo + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}</p>
             </div>
-            <button onClick={() => {
-              const headers = ['Name', 'Email', 'Phone', 'Status'];
-              const rows = (nonGivers.members || []).map(m => [
-                `${m.first_name} ${m.last_name}`, m.email || '-', m.phone || '-', m.status,
-              ]);
-              generatePDF('Non-Givers Report', headers, rows, 'non-givers-report.pdf',
-                [`Period: ${dateFrom} to ${dateTo}`, `Total Non-Givers: ${nonGivers.count}`]);
-            }} className="btn-secondary">
-              <Download size={16} /> PDF
-            </button>
+            <div className="flex gap-2">
+              <button onClick={() => {
+                const headers = ['Name', 'Email', 'Phone', 'Status'];
+                const rows = (nonGivers.members || []).map(m => [
+                  `${m.first_name} ${m.last_name}`, m.email || '-', m.phone || '-', m.status,
+                ]);
+                generatePDF('Non-Givers Report', headers, rows, 'non-givers-report.pdf',
+                  [`Period: ${dateFrom} to ${dateTo}`, `Categories: ${catLabel}`, `Total Non-Givers: ${nonGivers.count}`]);
+              }} className="btn-secondary">
+                <Download size={16} /> PDF
+              </button>
+              <button onClick={printNonGivers} className="btn-secondary">
+                <Printer size={16} /> Print
+              </button>
+            </div>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -2066,9 +2231,10 @@ function StatementsTab({ setError }) {
             <div>
               <h2 className="text-lg font-bold text-gray-900">
                 {statement.member.first_name} {statement.member.last_name}
+                {statement.member.is_non_member && <span className="ml-2 inline-block px-1.5 py-0.5 rounded bg-gray-100 text-gray-500 text-[10px] font-medium uppercase tracking-wide align-middle">non-member</span>}
               </h2>
               <p className="text-sm text-gray-500">
-                {new Date(dateFrom + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })} - {new Date(dateTo + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+                {catLabel} | {new Date(dateFrom + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })} - {new Date(dateTo + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
               </p>
             </div>
             <div className="flex gap-2">
@@ -2121,7 +2287,7 @@ function StatementsTab({ setError }) {
             <p className="text-center text-gray-500 py-8">No donations found for this period</p>
           )}
 
-          {includePledges && (
+          {includePledges && !statement.member.is_non_member && (
             (statement.pledges_behind || []).length > 0 ? (
               <div className="mt-6 border border-red-200 rounded-lg overflow-hidden">
                 <div className="bg-red-50 px-4 py-2 flex items-center justify-between">
@@ -2163,7 +2329,7 @@ function StatementsTab({ setError }) {
       {!statement && !allStatement && !nonGivers && !loading && (
         <div className="card text-center py-16">
           <FileText size={48} className="text-gray-300 mx-auto mb-3" />
-          <p className="text-gray-500">{mode === 'individual' ? 'Select a member and date range to generate a giving statement' : mode === 'non_givers' ? 'Select a date range and click Generate Statement to see who did not give' : 'Select a date range and click Generate Statement to see all members'}</p>
+          <p className="text-gray-500">{mode === 'individual' ? 'Select a member or non-member donor and a date range to generate a giving statement' : mode === 'non_givers' ? 'Select a date range and click Generate Statement to see who did not give' : 'Select a date range and click Generate Statement to see all givers (members and non-members)'}</p>
         </div>
       )}
     </>

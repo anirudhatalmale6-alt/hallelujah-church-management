@@ -1230,25 +1230,47 @@ switch ($method) {
         // Member giving statement
         if ($action === 'member_statement') {
             $memberId = (int)($_GET['member_id'] ?? 0);
-            if (!$memberId) jsonResponse(['error' => 'member_id required'], 400);
+            $donorName = trim($_GET['donor_name'] ?? '');
+            if (!$memberId && $donorName === '') jsonResponse(['error' => 'member_id or donor_name required'], 400);
 
             $dateFrom = $_GET['date_from'] ?? date('Y-01-01');
             $dateTo = $_GET['date_to'] ?? date('Y-12-31');
 
-            $stmt = $db->prepare("SELECT first_name, last_name, email, phone, address, city, state, zip FROM members WHERE id = ?");
-            $stmt->execute([$memberId]);
-            $member = $stmt->fetch();
-            if (!$member) jsonResponse(['error' => 'Member not found'], 404);
+            // Optional category filter (comma-separated category ids). Empty = all categories.
+            $catIds = array_values(array_filter(array_map('intval', explode(',', $_GET['category_ids'] ?? '')), fn($v) => $v > 0));
+            $catClause = '';
+            if ($catIds) {
+                $catClause = ' AND d.category_id IN (' . implode(',', array_fill(0, count($catIds), '?')) . ')';
+            }
+
+            // Either an actual church member, or a non-member donor recorded by name only.
+            if ($memberId) {
+                $stmt = $db->prepare("SELECT first_name, last_name, email, phone, address, city, state, zip FROM members WHERE id = ?");
+                $stmt->execute([$memberId]);
+                $member = $stmt->fetch();
+                if (!$member) jsonResponse(['error' => 'Member not found'], 404);
+                $whoClause = 'd.member_id = ?';
+                $whoParams = [$memberId];
+            } else {
+                // Non-member donor: build a lightweight "member" object from the donor name.
+                $member = [
+                    'first_name' => $donorName, 'last_name' => '', 'email' => null, 'phone' => null,
+                    'address' => null, 'city' => null, 'state' => null, 'zip' => null,
+                    'is_non_member' => true,
+                ];
+                $whoClause = 'd.donor_name = ? AND d.member_id IS NULL';
+                $whoParams = [$donorName];
+            }
 
             $stmt = $db->prepare("
                 SELECT d.*, dc.name as category_name, s.name as service_name, s.date as service_date
                 FROM donations d
                 JOIN donation_categories dc ON dc.id = d.category_id
                 LEFT JOIN services s ON s.id = d.service_id
-                WHERE d.member_id = ? AND d.donation_date BETWEEN ? AND ?
+                WHERE $whoClause AND d.donation_date BETWEEN ? AND ?$catClause
                 ORDER BY d.donation_date ASC
             ");
-            $stmt->execute([$memberId, $dateFrom, $dateTo]);
+            $stmt->execute(array_merge($whoParams, [$dateFrom, $dateTo], $catIds));
             $donations = $stmt->fetchAll();
 
             $totalByCategory = [];
@@ -1313,6 +1335,16 @@ switch ($method) {
             $dateTo = $_GET['date_to'] ?? date('Y-12-31');
             $sortBy = $_GET['sort_by'] ?? 'name';
 
+            $catIds = array_values(array_filter(array_map('intval', explode(',', $_GET['category_ids'] ?? '')), fn($v) => $v > 0));
+            $catClause = '';
+            if ($catIds) {
+                $catClause = ' AND d.category_id IN (' . implode(',', array_fill(0, count($catIds), '?')) . ')';
+            }
+
+            $memberTotals = [];
+            $grandTotal = 0;
+
+            // Church members
             $stmt = $db->prepare("
                 SELECT m.id, m.first_name, m.last_name,
                        dc.name as category_name,
@@ -1321,21 +1353,49 @@ switch ($method) {
                 FROM donations d
                 JOIN members m ON m.id = d.member_id
                 JOIN donation_categories dc ON dc.id = d.category_id
-                WHERE d.donation_date BETWEEN ? AND ?
+                WHERE d.donation_date BETWEEN ? AND ?$catClause
                 GROUP BY m.id, m.first_name, m.last_name, dc.name
                 ORDER BY m.last_name, m.first_name, dc.name
             ");
-            $stmt->execute([$dateFrom, $dateTo]);
-            $rows = $stmt->fetchAll();
-
-            $memberTotals = [];
-            $grandTotal = 0;
-            foreach ($rows as $r) {
-                $key = $r['id'];
+            $stmt->execute(array_merge([$dateFrom, $dateTo], $catIds));
+            foreach ($stmt->fetchAll() as $r) {
+                $key = 'm' . $r['id'];
                 if (!isset($memberTotals[$key])) {
                     $memberTotals[$key] = [
-                        'id' => $r['id'],
-                        'name' => $r['first_name'] . ' ' . $r['last_name'],
+                        'id' => $key,
+                        'name' => trim($r['first_name'] . ' ' . $r['last_name']),
+                        'is_non_member' => false,
+                        'categories' => [],
+                        'total' => 0,
+                    ];
+                }
+                $memberTotals[$key]['categories'][$r['category_name']] = (float)$r['total_amount'];
+                $memberTotals[$key]['total'] += (float)$r['total_amount'];
+                $grandTotal += (float)$r['total_amount'];
+            }
+
+            // Non-member donors (recorded by name only, no member_id)
+            $stmt = $db->prepare("
+                SELECT d.donor_name,
+                       dc.name as category_name,
+                       SUM(d.amount) as total_amount,
+                       COUNT(d.id) as donation_count
+                FROM donations d
+                JOIN donation_categories dc ON dc.id = d.category_id
+                WHERE d.member_id IS NULL
+                  AND d.donor_name IS NOT NULL AND TRIM(d.donor_name) <> ''
+                  AND d.donation_date BETWEEN ? AND ?$catClause
+                GROUP BY d.donor_name, dc.name
+                ORDER BY d.donor_name, dc.name
+            ");
+            $stmt->execute(array_merge([$dateFrom, $dateTo], $catIds));
+            foreach ($stmt->fetchAll() as $r) {
+                $key = 'n:' . strtolower($r['donor_name']);
+                if (!isset($memberTotals[$key])) {
+                    $memberTotals[$key] = [
+                        'id' => $key,
+                        'name' => $r['donor_name'],
+                        'is_non_member' => true,
                         'categories' => [],
                         'total' => 0,
                     ];
@@ -1348,9 +1408,10 @@ switch ($method) {
             $members = array_values($memberTotals);
 
             if ($sortBy === 'amount') {
-                usort($members, fn($a, $b) => $b['total'] - $a['total']);
-            } elseif ($sortBy === 'type') {
-                // Already grouped by name+category from query
+                usort($members, fn($a, $b) => ($b['total'] <=> $a['total']));
+            } else {
+                // name / type: alphabetical by display name
+                usort($members, fn($a, $b) => strcasecmp($a['name'], $b['name']));
             }
 
             jsonResponse([
@@ -1366,17 +1427,24 @@ switch ($method) {
             $dateFrom = $_GET['date_from'] ?? date('Y-01-01');
             $dateTo = $_GET['date_to'] ?? date('Y-12-31');
 
+            // Optional category filter: members who gave nothing in the SELECTED categories.
+            $catIds = array_values(array_filter(array_map('intval', explode(',', $_GET['category_ids'] ?? '')), fn($v) => $v > 0));
+            $catClause = '';
+            if ($catIds) {
+                $catClause = ' AND d.category_id IN (' . implode(',', array_fill(0, count($catIds), '?')) . ')';
+            }
+
             $stmt = $db->prepare("
                 SELECT m.id, m.first_name, m.last_name, m.email, m.phone, m.person_type, m.status
                 FROM members m
                 WHERE m.status = 'active'
                   AND m.id NOT IN (
                     SELECT DISTINCT d.member_id FROM donations d
-                    WHERE d.member_id IS NOT NULL AND d.donation_date BETWEEN ? AND ?
+                    WHERE d.member_id IS NOT NULL AND d.donation_date BETWEEN ? AND ?$catClause
                   )
                 ORDER BY m.last_name, m.first_name
             ");
-            $stmt->execute([$dateFrom, $dateTo]);
+            $stmt->execute(array_merge([$dateFrom, $dateTo], $catIds));
             $nonGivers = $stmt->fetchAll();
 
             jsonResponse([
@@ -1385,6 +1453,24 @@ switch ($method) {
                 'date_to' => $dateTo,
                 'count' => count($nonGivers),
             ]);
+        }
+
+        // Distinct non-member donor names (recorded by name only, no member_id).
+        // Powers the individual-statement selector so statements can be run for
+        // donors who are not church members.
+        if ($action === 'statement_donors') {
+            $stmt = $db->query("
+                SELECT TRIM(donor_name) as donor_name,
+                       COUNT(*) as gift_count,
+                       SUM(amount) as total_amount,
+                       MAX(donation_date) as last_gift
+                FROM donations
+                WHERE member_id IS NULL
+                  AND donor_name IS NOT NULL AND TRIM(donor_name) <> ''
+                GROUP BY TRIM(donor_name)
+                ORDER BY donor_name ASC
+            ");
+            jsonResponse(['donors' => $stmt->fetchAll()]);
         }
 
         // Financial summary/reports (donations)
