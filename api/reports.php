@@ -122,6 +122,78 @@ switch ($action) {
         ]);
         break;
 
+    case 'engagement_member':
+        // Per-individual engagement detail for a printable one-person report:
+        // every service in the period with this member's status (present/late/absent/not recorded).
+        $memberId = (int)($_GET['member_id'] ?? 0);
+        if (!$memberId) jsonResponse(['error' => 'member_id required'], 400);
+        $period = $_GET['period'] ?? '3';
+        $months = max(1, min(12, (int)$period));
+        $svcType = trim($_GET['service_type'] ?? '');
+
+        $mStmt = $db->prepare("SELECT id, first_name, last_name, status as member_status, family_group, email, phone FROM members WHERE id = ?");
+        $mStmt->execute([$memberId]);
+        $member = $mStmt->fetch();
+        if (!$member) jsonResponse(['error' => 'Member not found'], 404);
+
+        // Every service that has already occurred in the period (optionally of one type)
+        $svcTypeWhere = $svcType ? " AND type = ?" : "";
+        $svcParams = $svcType ? [$months, $svcType] : [$months];
+        $sStmt = $db->prepare("
+            SELECT id, name, date, time, type
+            FROM services
+            WHERE date >= DATE_SUB(CURDATE(), INTERVAL ? MONTH) AND date <= CURDATE()$svcTypeWhere
+            ORDER BY date DESC, time DESC
+        ");
+        $sStmt->execute($svcParams);
+        $services = $sStmt->fetchAll();
+
+        // This member's recorded attendance, keyed by service id
+        $aStmt = $db->prepare("
+            SELECT a.service_id, a.status, a.check_in_time, a.notes
+            FROM attendance a WHERE a.member_id = ?
+        ");
+        $aStmt->execute([$memberId]);
+        $attMap = [];
+        foreach ($aStmt->fetchAll() as $a) { $attMap[$a['service_id']] = $a; }
+
+        $attended = 0; $absent = 0; $lastAttended = null;
+        $rows = [];
+        foreach ($services as $s) {
+            $rec = $attMap[$s['id']] ?? null;
+            $status = $rec ? $rec['status'] : 'not_recorded';
+            if ($status === 'present' || $status === 'late') {
+                $attended++;
+                if (!$lastAttended || $s['date'] > $lastAttended) $lastAttended = $s['date'];
+            } elseif ($status === 'absent') {
+                $absent++;
+            }
+            $rows[] = [
+                'service_id' => $s['id'],
+                'service_name' => $s['name'],
+                'date' => $s['date'],
+                'time' => $s['time'],
+                'type' => $s['type'],
+                'status' => $status,
+            ];
+        }
+        $totalServices = count($services);
+        $rate = $totalServices > 0 ? round(($attended / $totalServices) * 100, 1) : 0;
+
+        jsonResponse([
+            'member' => $member,
+            'services' => $rows,
+            'total_services' => $totalServices,
+            'attended' => $attended,
+            'absent' => $absent,
+            'not_recorded' => $totalServices - $attended - $absent,
+            'attendance_rate' => $rate,
+            'last_attended' => $lastAttended,
+            'period_months' => $months,
+            'service_type' => $svcType,
+        ]);
+        break;
+
     case 'inactive':
         $days = max(7, min(365, (int)($_GET['days'] ?? 30)));
 

@@ -188,6 +188,7 @@ export const households = {
 export const reports = {
   memberGrowth: (months) => request('reports.php', { params: { action: 'member_growth', months } }),
   engagement: (period, serviceType) => request('reports.php', { params: { action: 'engagement', period, service_type: serviceType || '' } }),
+  engagementMember: (memberId, period, serviceType) => request('reports.php', { params: { action: 'engagement_member', member_id: memberId, period, service_type: serviceType || '' } }),
   inactive: (days) => request('reports.php', { params: { action: 'inactive', days } }),
   directory: () => request('reports.php', { params: { action: 'directory' } }),
   attendanceSummary: (params) => request('reports.php', { params: { action: 'attendance_summary', ...params } }),

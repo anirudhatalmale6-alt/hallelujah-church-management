@@ -60,6 +60,49 @@ function calcAccountBalance($db, $accountId, $upToDate = null) {
     return $opening + $donations - $expenses + $ledger;
 }
 
+/**
+ * When a donation is recorded for a named person who isn't a church member yet,
+ * make sure that person exists in the People list so they can be searched,
+ * texted, or emailed later. Returns a member_id to link the donation to, or
+ * null if the name should stay a plain donor_name (blank, or a known
+ * expense vendor / business such as "Amazon", "Twilio Inc").
+ */
+function ensurePersonForDonor($db, $donorName, $recordedBy) {
+    $name = trim($donorName ?? '');
+    if ($name === '') return null;
+
+    // Don't turn expense vendors / businesses (refund sources) into people.
+    try {
+        $vs = $db->prepare("SELECT 1 FROM expenses WHERE LOWER(TRIM(vendor)) = LOWER(?) LIMIT 1");
+        $vs->execute([$name]);
+        if ($vs->fetchColumn()) return null;
+    } catch (Exception $e) { /* expenses table optional */ }
+
+    // Reuse an existing person with the same full name (avoid duplicates).
+    try {
+        $ms = $db->prepare("SELECT id FROM members WHERE LOWER(TRIM(CONCAT(first_name, ' ', last_name))) = LOWER(?) ORDER BY id ASC LIMIT 1");
+        $ms->execute([$name]);
+        $existing = $ms->fetchColumn();
+        if ($existing) return (int)$existing;
+    } catch (Exception $e) { return null; }
+
+    // Split "First Middle Last" -> first_name = first token, last_name = remainder.
+    $parts = preg_split('/\s+/', $name, 2);
+    $first = $parts[0];
+    $last = $parts[1] ?? '';
+
+    try {
+        $ins = $db->prepare("
+            INSERT INTO members (first_name, last_name, person_type, status, import_source, notes)
+            VALUES (?, ?, 'non_member_attendee', 'active', 'donation', 'Auto-added from a recorded donation')
+        ");
+        $ins->execute([$first, $last]);
+        return (int)$db->lastInsertId();
+    } catch (Exception $e) {
+        return null;
+    }
+}
+
 switch ($method) {
     case 'GET':
         // --- CHART OF ACCOUNTS ---
@@ -2242,14 +2285,23 @@ switch ($method) {
                 $amount = (float)$r['amount'];
                 $donationDate = $r['donation_date'] ?? date('Y-m-d');
 
+                // Auto-add a named non-member donor to the People list so they're
+                // searchable / contactable. Businesses & vendors stay as donor_name.
+                $rowMemberId = !empty($r['member_id']) ? (int)$r['member_id'] : null;
+                $rowDonorName = $r['donor_name'] ?? null;
+                if (!$rowMemberId && trim((string)$rowDonorName) !== '') {
+                    $newId = ensurePersonForDonor($db, $rowDonorName, $currentUser['user_id']);
+                    if ($newId) { $rowMemberId = $newId; $rowDonorName = null; }
+                }
+
                 $stmt->execute([
-                    !empty($r['member_id']) ? (int)$r['member_id'] : null,
+                    $rowMemberId,
                     !empty($r['service_id']) ? (int)$r['service_id'] : null,
                     $categoryId,
                     $amount,
                     $method,
                     $r['reference_number'] ?? null,
-                    $r['donor_name'] ?? null,
+                    $rowDonorName,
                     $r['notes'] ?? null,
                     $donationDate,
                     $currentUser['user_id'],
@@ -2295,18 +2347,26 @@ switch ($method) {
             jsonResponse(['error' => 'Amount must be positive'], 400);
         }
 
+        // Auto-add a named non-member donor to the People list (vendors stay as donor_name).
+        $singleMemberId = !empty($data['member_id']) ? (int)$data['member_id'] : null;
+        $singleDonorName = $data['donor_name'] ?? null;
+        if (!$singleMemberId && trim((string)$singleDonorName) !== '') {
+            $newId = ensurePersonForDonor($db, $singleDonorName, $currentUser['user_id']);
+            if ($newId) { $singleMemberId = $newId; $singleDonorName = null; }
+        }
+
         $stmt = $db->prepare("
             INSERT INTO donations (member_id, service_id, category_id, amount, payment_method, reference_number, donor_name, notes, donation_date, recorded_by)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ");
         $stmt->execute([
-            !empty($data['member_id']) ? (int)$data['member_id'] : null,
+            $singleMemberId,
             !empty($data['service_id']) ? (int)$data['service_id'] : null,
             (int)$data['category_id'],
             (float)$data['amount'],
             $data['payment_method'] ?? 'cash',
             $data['reference_number'] ?? null,
-            $data['donor_name'] ?? null,
+            $singleDonorName,
             $data['notes'] ?? null,
             $data['donation_date'] ?? date('Y-m-d'),
             $currentUser['user_id'],

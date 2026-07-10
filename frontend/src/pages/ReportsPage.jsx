@@ -5,7 +5,7 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import {
   FileText, Download, Users, TrendingUp, AlertTriangle,
-  BarChart3, Calendar, UserX, FileSpreadsheet, ClipboardCheck
+  BarChart3, Calendar, UserX, FileSpreadsheet, ClipboardCheck, Printer
 } from 'lucide-react';
 
 function formatMonth(monthStr) {
@@ -189,6 +189,97 @@ export default function ReportsPage() {
     });
 
     doc.save('engagement-report.pdf');
+  };
+
+  // ── Individual engagement report (one person, printable / PDF) ──
+  const [indivBusy, setIndivBusy] = useState(null); // member id being generated
+
+  const buildIndivRows = (d) => {
+    const statusLabel = { present: 'Present', late: 'Late', absent: 'Absent', not_recorded: 'Not recorded' };
+    return (d.services || []).map(s => {
+      const dt = formatDate(s.date);
+      const label = statusLabel[s.status] || s.status;
+      return { dt, name: s.service_name || s.type || 'Service', type: s.type || '', label, status: s.status };
+    });
+  };
+
+  const printMemberEngagement = async (member) => {
+    setIndivBusy(member.id);
+    setError('');
+    try {
+      const d = await reports.engagementMember(member.id, engagementPeriod, engagementType);
+      const m = d.member;
+      const fullName = `${m.first_name} ${m.last_name}`.trim();
+      const rows = buildIndivRows(d);
+      const color = { present: '#15803d', late: '#b45309', absent: '#b91c1c', not_recorded: '#9ca3af' };
+      const bodyRows = rows.map(r => `<tr>
+        <td style="padding:6px 10px;border-bottom:1px solid #f3f4f6;">${r.dt}</td>
+        <td style="padding:6px 10px;border-bottom:1px solid #f3f4f6;">${r.name}</td>
+        <td style="padding:6px 10px;border-bottom:1px solid #f3f4f6;">${r.type}</td>
+        <td style="padding:6px 10px;border-bottom:1px solid #f3f4f6;font-weight:600;color:${color[r.status] || '#374151'};">${r.label}</td>
+      </tr>`).join('');
+      const html = `<!DOCTYPE html><html><head><title>Engagement Report - ${fullName}</title>
+      <style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;padding:40px;color:#1f2937;max-width:760px;margin:0 auto;}
+      h1{font-size:22px;margin-bottom:2px;} .meta{color:#6b7280;font-size:14px;margin-bottom:18px;}
+      .cards{display:flex;gap:12px;margin:18px 0;} .cbox{flex:1;border:1px solid #e5e7eb;border-radius:8px;padding:12px 14px;text-align:center;}
+      .cbox .n{font-size:22px;font-weight:700;} .cbox .l{font-size:11px;text-transform:uppercase;color:#6b7280;letter-spacing:.03em;}
+      table{width:100%;border-collapse:collapse;font-size:14px;} th{text-align:left;padding:8px 10px;background:#f9fafb;border-bottom:2px solid #e5e7eb;font-weight:600;font-size:12px;text-transform:uppercase;color:#6b7280;}
+      @media print{body{padding:20px;}}</style></head>
+      <body>
+      <h1>Attendance &amp; Engagement Report</h1>
+      <div class="meta">
+        <div><strong>Name:</strong> ${fullName}${m.member_status === 'non_member_attendee' ? ' (non-member)' : ''}</div>
+        ${m.family_group ? `<div><strong>Group:</strong> ${m.family_group}</div>` : ''}
+        <div><strong>Period:</strong> Last ${d.period_months} month(s)${d.service_type ? ` &middot; ${d.service_type} services only` : ''}</div>
+        <div><strong>Church:</strong> Hallelujah In The City</div>
+      </div>
+      <div class="cards">
+        <div class="cbox"><div class="n" style="color:#15803d;">${d.attended}</div><div class="l">Attended</div></div>
+        <div class="cbox"><div class="n" style="color:#b91c1c;">${d.absent}</div><div class="l">Missed</div></div>
+        <div class="cbox"><div class="n">${d.total_services}</div><div class="l">Services</div></div>
+        <div class="cbox"><div class="n">${d.attendance_rate}%</div><div class="l">Rate</div></div>
+      </div>
+      <div style="font-size:14px;margin-bottom:6px;"><strong>Last attended:</strong> ${formatDate(d.last_attended)}</div>
+      <h3 style="margin-top:20px;font-size:16px;">Service-by-service detail</h3>
+      <table><thead><tr><th>Date</th><th>Service</th><th>Type</th><th>Status</th></tr></thead>
+      <tbody>${bodyRows || '<tr><td colspan="4" style="padding:14px;text-align:center;color:#9ca3af;">No services in this period</td></tr>'}</tbody></table>
+      <p style="margin-top:26px;font-size:12px;color:#9ca3af;">Generated ${new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}. Attendance rate = services attended out of ${d.total_services} held in the period.</p>
+      </body></html>`;
+      const win = window.open('', '_blank');
+      if (win) { win.document.write(html); win.document.close(); win.focus(); setTimeout(() => win.print(), 300); }
+    } catch (err) {
+      setError(err.message);
+    }
+    setIndivBusy(null);
+  };
+
+  const downloadMemberEngagementPDF = async (member) => {
+    setIndivBusy(member.id);
+    setError('');
+    try {
+      const d = await reports.engagementMember(member.id, engagementPeriod, engagementType);
+      const m = d.member;
+      const fullName = `${m.first_name} ${m.last_name}`.trim();
+      const statusLabel = { present: 'Present', late: 'Late', absent: 'Absent', not_recorded: 'Not recorded' };
+      const doc = new jsPDF();
+      doc.setFontSize(16); doc.text('Hallelujah In The City', 14, 16);
+      doc.setFontSize(13); doc.text(`Attendance & Engagement - ${fullName}`, 14, 25);
+      doc.setFontSize(10); doc.setTextColor(100);
+      doc.text(`Period: Last ${d.period_months} month(s)${d.service_type ? ` (${d.service_type} only)` : ''}`, 14, 32);
+      doc.text(`Attended ${d.attended} of ${d.total_services}  |  Missed ${d.absent}  |  Rate ${d.attendance_rate}%  |  Last attended: ${formatDate(d.last_attended)}`, 14, 38);
+      doc.setTextColor(0);
+      autoTable(doc, {
+        startY: 45,
+        head: [['Date', 'Service', 'Type', 'Status']],
+        body: (d.services || []).map(s => [formatDate(s.date), s.service_name || '-', s.type || '-', statusLabel[s.status] || s.status]),
+        styles: { fontSize: 9, cellPadding: 3 },
+        headStyles: { fillColor: [59, 80, 120] },
+      });
+      doc.save(`engagement-${fullName.replace(/\s+/g, '-')}.pdf`);
+    } catch (err) {
+      setError(err.message);
+    }
+    setIndivBusy(null);
   };
 
   const downloadInactivePDF = () => {
@@ -606,12 +697,13 @@ export default function ReportsPage() {
                         <th className="text-center px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Rate (%)</th>
                         <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Last Attended</th>
                         <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Group</th>
+                        <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Individual Report</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
                       {engagementData.members.length === 0 ? (
                         <tr>
-                          <td colSpan={6} className="text-center py-12 text-gray-400">
+                          <td colSpan={7} className="text-center py-12 text-gray-400">
                             <BarChart3 size={40} className="mx-auto mb-3" />
                             No engagement data for this period
                           </td>
@@ -634,6 +726,16 @@ export default function ReportsPage() {
                             </td>
                             <td className="px-4 py-3 text-sm text-gray-600">{formatDate(m.last_attended)}</td>
                             <td className="px-4 py-3 text-sm text-gray-500">{m.family_group || '-'}</td>
+                            <td className="px-4 py-3 text-right whitespace-nowrap">
+                              <button onClick={() => printMemberEngagement(m)} disabled={indivBusy === m.id}
+                                title="Print this person's report" className="btn-secondary py-1 px-2 text-xs mr-1">
+                                {indivBusy === m.id ? <div className="animate-spin rounded-full h-3.5 w-3.5 border-b-2 border-gray-600" /> : <Printer size={14} />} Print
+                              </button>
+                              <button onClick={() => downloadMemberEngagementPDF(m)} disabled={indivBusy === m.id}
+                                title="Download this person's report as PDF" className="btn-secondary py-1 px-2 text-xs">
+                                <Download size={14} /> PDF
+                              </button>
+                            </td>
                           </tr>
                         ))
                       )}
