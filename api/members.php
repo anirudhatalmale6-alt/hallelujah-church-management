@@ -349,6 +349,18 @@ switch ($method) {
             jsonResponse(['error' => $error], 400);
         }
 
+        // Blank date/select boxes arrive as empty strings; store them as NULL so a
+        // cleared birthday really is cleared instead of becoming 0000-00-00.
+        foreach ([
+            'date_of_birth', 'membership_date', 'card_expiry_date', 'baptism_date',
+            'salvation_date', 'first_visit_date', 'membership_class_date',
+            'dedication_date', 'wedding_date', 'gender', 'household_role',
+        ] as $nullable) {
+            if (isset($data[$nullable]) && $data[$nullable] === '') {
+                $data[$nullable] = null;
+            }
+        }
+
         $stmt = $db->prepare("
             INSERT INTO members (first_name, last_name, email, phone, address, city, state, zip, gender, date_of_birth, family_group, household_id, household_role, membership_date, status, notes, photo_url, card_title, card_expiry_date, baptism_date, salvation_date, first_visit_date, membership_class_date, dedication_date, wedding_date, person_type)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)

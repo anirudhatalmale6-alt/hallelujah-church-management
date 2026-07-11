@@ -4064,6 +4064,9 @@ function PledgesTab({ setError, setMessage, isAdmin }) {
   const [paymentForm, setPaymentForm] = useState({ amount: '', payment_method: 'cash', notes: '', donation_date: new Date().toISOString().split('T')[0] });
   const [paymentSaving, setPaymentSaving] = useState(false);
   const [bankAccounts, setBankAccounts] = useState([]);
+  // Every active pledge, whatever the list filter shows — used to catch the same
+  // person being pledged twice.
+  const [activePledges, setActivePledges] = useState([]);
 
   useEffect(() => {
     membersApi.list({ limit: 9999, sort: 'last_name' }).then(d => setMembersList(d.members || []));
@@ -4074,12 +4077,14 @@ function PledgesTab({ setError, setMessage, isAdmin }) {
   const loadPledges = useCallback(async () => {
     setLoading(true);
     try {
-      const [pledgeData, alertData] = await Promise.all([
+      const [pledgeData, alertData, activeData] = await Promise.all([
         financeApi.pledges({ status: statusFilter }),
         financeApi.pledgeAlerts(),
+        statusFilter === 'active' ? Promise.resolve(null) : financeApi.pledges({ status: 'active' }),
       ]);
       setPledges(pledgeData.pledges || []);
       setAlerts(alertData.alerts || []);
+      setActivePledges((activeData || pledgeData).pledges || []);
     } catch (err) {
       setError(err.message);
     }
@@ -4100,9 +4105,28 @@ function PledgesTab({ setError, setMessage, isAdmin }) {
     setShowModal(true);
   };
 
+  // Pledges already on file for the person being added: same category is almost
+  // always a mistake, a different category usually isn't - so they are shown
+  // differently.
+  const memberPledges = editPledge || !form.member_id ? []
+    : activePledges.filter(p => String(p.member_id) === String(form.member_id));
+  const sameCategoryPledge = form.category_id
+    ? memberPledges.find(p => String(p.category_id) === String(form.category_id)) : null;
+  const otherCategoryPledges = memberPledges.filter(p => p !== sameCategoryPledge);
+
   const handleSave = async () => {
     if (!form.member_id || !form.category_id || !form.amount || !form.start_date) {
       setError('Member, category, amount, and start date are required'); return;
+    }
+    if (sameCategoryPledge) {
+      const p = sameCategoryPledge;
+      const ok = confirm(
+        `${p.first_name} ${p.last_name} already has an active ${p.category_name} pledge ` +
+        `(${formatCurrency(p.amount)} ${p.frequency}, started ${formatDate(p.start_date)}).\n\n` +
+        `Adding this one will give the same person two ${p.category_name} pledges.\n\n` +
+        `Click OK only if that is really what you want. Otherwise click Cancel and edit the existing pledge instead.`
+      );
+      if (!ok) return;
     }
     setSaving(true);
     try {
@@ -4330,15 +4354,42 @@ function PledgesTab({ setError, setMessage, isAdmin }) {
               <p className="text-xs text-gray-400 mt-1">Leave empty for ongoing pledge</p>
             </div>
           </div>
+          {sameCategoryPledge && (
+            <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
+              <div className="flex items-start gap-2">
+                <AlertCircle size={18} className="text-red-600 mt-0.5 flex-shrink-0" />
+                <div className="text-sm text-red-800">
+                  <p className="font-semibold">This person already has this pledge</p>
+                  <p className="mt-1">
+                    {sameCategoryPledge.first_name} {sameCategoryPledge.last_name} already has an active{' '}
+                    {sameCategoryPledge.category_name} pledge of {formatCurrency(sameCategoryPledge.amount)}{' '}
+                    {sameCategoryPledge.frequency}, started {formatDate(sameCategoryPledge.start_date)}.
+                  </p>
+                  <p className="mt-1">Edit that pledge instead of adding a second one - unless you really do want two.</p>
+                </div>
+              </div>
+            </div>
+          )}
+          {!sameCategoryPledge && otherCategoryPledges.length > 0 && (
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800">
+              <p className="font-semibold">Heads up - this person already pledges:</p>
+              <ul className="mt-1 list-disc list-inside">
+                {otherCategoryPledges.map(p => (
+                  <li key={p.id}>{p.category_name} - {formatCurrency(p.amount)} {p.frequency} (since {formatDate(p.start_date)})</li>
+                ))}
+              </ul>
+              <p className="mt-1">That is fine if this is a pledge for a different purpose.</p>
+            </div>
+          )}
           <div>
             <label className="label">Notes</label>
             <input className="input" placeholder="Optional notes" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} />
           </div>
           <div className="flex justify-end gap-3 pt-2">
             <button onClick={() => setShowModal(false)} className="btn-secondary">Cancel</button>
-            <button onClick={handleSave} disabled={saving} className="btn-primary">
+            <button onClick={handleSave} disabled={saving} className={sameCategoryPledge ? 'btn-primary bg-red-600 hover:bg-red-700' : 'btn-primary'}>
               {saving ? <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" /> : <Check size={16} />}
-              {editPledge ? 'Save' : 'Add Pledge'}
+              {editPledge ? 'Save' : (sameCategoryPledge ? 'Add Anyway' : 'Add Pledge')}
             </button>
           </div>
         </div>
