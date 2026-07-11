@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   Upload, Scissors, Download, Play, Pause, Film, Music,
-  Image, Settings, Loader, Check, X, Volume2, Link, Youtube, RefreshCw
+  Image, Settings, Loader, Check, X, Volume2, Link, Youtube, RefreshCw, Layers
 } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_API_URL || '/system/api';
@@ -86,10 +86,29 @@ function TimeInput({ label, value, onChange, max }) {
   );
 }
 
-function YouTubePlayer({ videoId, onTimeUpdate, onReady }) {
+function YouTubePlayer({ videoId, onTimeUpdate, onReady, controlRef }) {
   const iframeRef = useRef(null);
   const playerRef = useRef(null);
   const intervalRef = useRef(null);
+  const stopAtRef = useRef(null);
+
+  // Lets the page play just the selected stretch of the video, then stop.
+  useEffect(() => {
+    if (!controlRef) return;
+    controlRef.current = {
+      playRange: (start, end) => {
+        const p = playerRef.current;
+        if (!p?.seekTo) return;
+        stopAtRef.current = end;
+        p.seekTo(start, true);
+        p.playVideo();
+      },
+      stop: () => {
+        stopAtRef.current = null;
+        playerRef.current?.pauseVideo?.();
+      },
+    };
+  }, [controlRef]);
 
   useEffect(() => {
     if (!videoId) return;
@@ -123,7 +142,12 @@ function YouTubePlayer({ videoId, onTimeUpdate, onReady }) {
             intervalRef.current = setInterval(() => {
               const t = e.target.getCurrentTime();
               if (t !== undefined) onTimeUpdate(t);
-            }, 500);
+              // Stop at the end of the selection when previewing a cut.
+              if (stopAtRef.current !== null && t >= stopAtRef.current) {
+                stopAtRef.current = null;
+                e.target.pauseVideo();
+              }
+            }, 250);
           },
         },
       });
@@ -180,6 +204,19 @@ export default function ClipGeneratorPage() {
   const [error, setError] = useState('');
 
   const [isDragOver, setIsDragOver] = useState(false);
+
+  // Previewing the exact cut before generating anything
+  const [previewingSelection, setPreviewingSelection] = useState(false);
+  const ytPlayerRef = useRef(null);
+
+  // Several clips in one go
+  const [autoCount, setAutoCount] = useState(3);
+  const [autoLengthMin, setAutoLengthMin] = useState(1);
+  const [autoLengthSec, setAutoLengthSec] = useState(0);
+  const [autoSpread, setAutoSpread] = useState('even'); // 'even' | 'sequential'
+  const [autoWithinSelection, setAutoWithinSelection] = useState(false);
+  const [clips, setClips] = useState([]);
+  const [clipWarnings, setClipWarnings] = useState([]);
 
   const videoRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -367,6 +404,153 @@ export default function ClipGeneratorPage() {
     window.open(`${API_BASE}${outputUrl.startsWith('/system/api') ? outputUrl.replace('/system/api', '') : outputUrl}${separator}token=${token}`, '_blank');
   };
 
+  // --- Watch and mark the cut points while the video plays ---
+
+  const markStart = () => {
+    const t = mode === 'youtube' ? currentTime : (videoRef.current?.currentTime ?? currentTime);
+    setStartTime(Math.max(0, Math.min(t, endTime - 1)));
+  };
+
+  const markEnd = () => {
+    const t = mode === 'youtube' ? currentTime : (videoRef.current?.currentTime ?? currentTime);
+    setEndTime(Math.min(duration || Infinity, Math.max(t, startTime + 1)));
+  };
+
+  // Plays exactly what the clip will be, then stops - so the cut can be
+  // checked with sound before anything is generated.
+  const playSelection = () => {
+    if (mode === 'youtube') {
+      if (ytPlayerRef.current?.playRange) ytPlayerRef.current.playRange(startTime, endTime);
+      return;
+    }
+    const v = videoRef.current;
+    if (!v) return;
+    v.currentTime = startTime;
+    setPreviewingSelection(true);
+    v.play();
+  };
+
+  const stopSelection = () => {
+    setPreviewingSelection(false);
+    videoRef.current?.pause();
+  };
+
+  // Stop at the end of the selection while previewing it.
+  useEffect(() => {
+    if (!previewingSelection) return;
+    if (currentTime >= endTime - 0.05) {
+      videoRef.current?.pause();
+      setPreviewingSelection(false);
+    }
+  }, [currentTime, endTime, previewingSelection]);
+
+  // --- Several clips at once ---
+
+  // Work out where each clip starts. "Spread" walks evenly through the whole
+  // video (good for pulling highlights out of a long service); "back to back"
+  // takes them one after another from the start of the selection.
+  const plannedSegments = useCallback(() => {
+    const len = Math.max(1, Math.round(autoLengthMin * 60 + autoLengthSec));
+    const count = Math.max(1, Math.min(8, autoCount));
+    const from = autoWithinSelection ? startTime : 0;
+    const to = autoWithinSelection ? endTime : (duration || 0);
+    const span = Math.max(0, to - from);
+    if (!span) return [];
+
+    const segs = [];
+    for (let i = 0; i < count; i++) {
+      // "One after another" walks straight through; "spread" puts one clip in
+      // each equal slice of the video.
+      let s = autoSpread === 'sequential' ? from + i * len : from + i * (span / count);
+      // Never run past the end - pull the clip back so it keeps its full length.
+      if (s + len > to) s = Math.max(from, to - len);
+      const e = Math.min(s + len, to);
+      if (e - s < 1) continue;
+      const seg = { start: Math.round(s), end: Math.round(e) };
+      // Don't hand back the same stretch twice (happens when the video is too
+      // short for everything that was asked for).
+      if (segs.some(x => x.start === seg.start && x.end === seg.end)) continue;
+      segs.push(seg);
+    }
+    return segs;
+  }, [autoCount, autoLengthMin, autoLengthSec, autoSpread, autoWithinSelection, startTime, endTime, duration]);
+
+  const generateMultipleClips = async () => {
+    const segments = plannedSegments();
+    if (!segments.length) {
+      setError('Set how many clips and how long each one should be first.');
+      return;
+    }
+
+    setProcessing(true);
+    setUploadProgress(0);
+    setError('');
+    setClips([]);
+    setClipWarnings([]);
+    setProcessingStage(mode === 'youtube' ? 'Fetching the clips from YouTube...' : 'Uploading video...');
+
+    try {
+      const token = localStorage.getItem('hitc_token');
+      const formData = new FormData();
+      formData.append('action', 'batch');
+      formData.append('segments', JSON.stringify(segments));
+      formData.append('quality', quality);
+      formData.append('output_format', outputFormat);
+      formData.append('watermark', watermarkEnabled ? '1' : '0');
+      formData.append('watermark_position', watermarkPosition);
+      formData.append('watermark_size', watermarkSize);
+
+      if (mode === 'youtube') {
+        formData.append('mode', 'youtube');
+        formData.append('youtube_url', youtubeUrl);
+      } else {
+        formData.append('mode', 'upload');
+        formData.append('video', file);
+      }
+
+      const xhr = new XMLHttpRequest();
+      const result = await new Promise((resolve, reject) => {
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) {
+            const pct = e.loaded / e.total;
+            setUploadProgress(pct);
+            if (pct >= 1) setProcessingStage(`Cutting ${segments.length} clips...`);
+          }
+        };
+        xhr.onload = () => {
+          try {
+            const data = JSON.parse(xhr.responseText);
+            if (xhr.status >= 400) reject(new Error(data.error || 'Server error'));
+            else resolve(data);
+          } catch {
+            reject(new Error('Invalid server response'));
+          }
+        };
+        xhr.onerror = () => reject(new Error('Network error'));
+        xhr.ontimeout = () => reject(new Error('The server took too long. Try fewer or shorter clips.'));
+        xhr.timeout = 15 * 60 * 1000;
+        xhr.open('POST', `${API_BASE}/clip_process.php`);
+        xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+        xhr.send(formData);
+      });
+
+      setClips(result.clips || []);
+      setClipWarnings(result.warnings || []);
+      setProcessingStage('Complete!');
+    } catch (err) {
+      setError(err.message);
+      setProcessingStage('');
+    }
+    setProcessing(false);
+  };
+
+  const clipUrl = (clip, inline) => {
+    const token = localStorage.getItem('hitc_token');
+    return `${API_BASE}/clip_download.php?id=${encodeURIComponent(clip.job_id)}&ext=${clip.ext}`
+      + (inline ? '&inline=1' : `&filename=${encodeURIComponent(clip.filename)}`)
+      + `&token=${token}`;
+  };
+
   const clipDuration = endTime - startTime;
   const hasSource = mode === 'upload' ? !!file : !!youtubeInfo;
 
@@ -519,6 +703,7 @@ export default function ClipGeneratorPage() {
                 {mode === 'youtube' ? (
                   <YouTubePlayer
                     videoId={youtubeVideoId}
+                    controlRef={ytPlayerRef}
                     onTimeUpdate={setCurrentTime}
                     onReady={(dur) => {
                       if (dur) {
@@ -605,24 +790,51 @@ export default function ClipGeneratorPage() {
                     <TimeInput label="End Time" value={endTime} onChange={handleEndChange} max={duration} />
                   </div>
 
-                  {mode === 'upload' && (
+                  {/* Watch the video, then mark the cut points where you are */}
+                  <div>
+                    <label className="text-xs font-medium text-gray-500 mb-1.5 block">
+                      Play the video and mark your cut - now at {formatTime(currentTime)}
+                    </label>
                     <div className="flex gap-2">
                       <button
-                        onClick={() => seekTo(startTime)}
-                        className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium
-                                   bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition-colors"
+                        onClick={markStart}
+                        className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold
+                                   bg-gold-100 hover:bg-gold-200 text-gold-700 rounded-lg transition-colors"
+                        title="Make the clip start where the video is right now"
                       >
-                        <Play size={12} /> Preview Start
+                        <Scissors size={12} /> Start here
                       </button>
                       <button
-                        onClick={() => seekTo(Math.max(endTime - 3, startTime))}
-                        className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium
-                                   bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition-colors"
+                        onClick={markEnd}
+                        className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold
+                                   bg-primary-100 hover:bg-primary-200 text-primary-800 rounded-lg transition-colors"
+                        title="Make the clip end where the video is right now"
                       >
-                        <Play size={12} /> Preview End
+                        <Scissors size={12} /> End here
                       </button>
                     </div>
-                  )}
+                  </div>
+
+                  <div className="flex gap-2">
+                    <button
+                      onClick={previewingSelection ? stopSelection : playSelection}
+                      disabled={clipDuration <= 0}
+                      className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2.5 text-sm font-semibold rounded-lg transition-colors
+                        ${clipDuration <= 0
+                          ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                          : 'bg-gray-900 hover:bg-black text-white'}`}
+                      title="Play exactly what the clip will be, with sound"
+                    >
+                      {previewingSelection ? <><Pause size={14} /> Stop preview</> : <><Play size={14} /> Play my clip</>}
+                    </button>
+                    <button
+                      onClick={() => (mode === 'youtube' ? ytPlayerRef.current?.playRange(startTime, startTime + 5) : seekTo(startTime))}
+                      className="px-3 py-2.5 text-xs font-medium bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition-colors"
+                      title="Jump to the start of the clip"
+                    >
+                      Go to start
+                    </button>
+                  </div>
 
                   <div className="bg-gray-50 rounded-lg px-3 py-2 flex items-center justify-between">
                     <span className="text-xs text-gray-500">Clip Duration</span>
@@ -801,10 +1013,166 @@ export default function ClipGeneratorPage() {
               {processing ? (
                 <><Loader className="animate-spin" size={20} /> Processing...</>
               ) : (
-                <><Scissors size={20} /> Generate Clip</>
+                <><Scissors size={20} /> Generate This Clip</>
               )}
             </button>
           </div>
+
+          {/* ---------- SEVERAL CLIPS AT ONCE ---------- */}
+          <div className="card mt-8">
+            <div className="flex items-center gap-2 mb-1">
+              <Layers className="text-gold-500" size={18} />
+              <h3 className="font-semibold text-gray-900">Make Several Clips at Once</h3>
+            </div>
+            <p className="text-sm text-gray-500 mb-4">
+              Tell it how many clips you want and how long each one should be. It cuts them all,
+              then you can play each one with sound and download only the ones you like.
+            </p>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
+              <div>
+                <label className="text-xs font-medium text-gray-500 mb-1.5 block">How many clips</label>
+                <input
+                  type="number" min={1} max={8} value={autoCount}
+                  onChange={e => setAutoCount(Math.max(1, Math.min(8, Number(e.target.value) || 1)))}
+                  className="input"
+                />
+                <p className="text-xs text-gray-400 mt-1">Up to 8 at a time</p>
+              </div>
+              <div>
+                <label className="text-xs font-medium text-gray-500 mb-1.5 block">How long is each one</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number" min={0} max={30} value={autoLengthMin}
+                    onChange={e => setAutoLengthMin(Math.max(0, Math.min(30, Number(e.target.value) || 0)))}
+                    className="input"
+                  />
+                  <span className="text-xs text-gray-500">min</span>
+                  <input
+                    type="number" min={0} max={59} value={autoLengthSec}
+                    onChange={e => setAutoLengthSec(Math.max(0, Math.min(59, Number(e.target.value) || 0)))}
+                    className="input"
+                  />
+                  <span className="text-xs text-gray-500">sec</span>
+                </div>
+              </div>
+              <div>
+                <label className="text-xs font-medium text-gray-500 mb-1.5 block">Where to take them from</label>
+                <select className="input" value={autoSpread} onChange={e => setAutoSpread(e.target.value)}>
+                  <option value="even">Spread across the video</option>
+                  <option value="sequential">One after another</option>
+                </select>
+                <label className="flex items-center gap-2 mt-2 text-xs text-gray-600 cursor-pointer">
+                  <input type="checkbox" checked={autoWithinSelection} onChange={e => setAutoWithinSelection(e.target.checked)} className="rounded" />
+                  Only inside my selected range
+                </label>
+              </div>
+            </div>
+
+            {plannedSegments().length > 0 && (
+              <div className="bg-gray-50 rounded-lg px-3 py-2 mb-4">
+                <div className="text-xs text-gray-500 mb-1">
+                  This will cut {plannedSegments().length} clip{plannedSegments().length === 1 ? '' : 's'}:
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {plannedSegments().map((s, i) => (
+                    <span key={i} className="px-2 py-0.5 bg-white border border-gray-200 rounded-full text-xs font-mono text-gray-600">
+                      {formatTime(s.start)} - {formatTime(s.end)}
+                    </span>
+                  ))}
+                </div>
+                {plannedSegments().length < autoCount && (
+                  <div className="text-xs text-amber-700 mt-2">
+                    The video isn't long enough for {autoCount} clips of that length, so only{' '}
+                    {plannedSegments().length} will be made. Make the clips shorter, or ask for fewer.
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="flex justify-center">
+              <button
+                onClick={generateMultipleClips}
+                disabled={processing || plannedSegments().length === 0}
+                className={`flex items-center gap-3 px-6 py-3 rounded-xl font-bold text-sm shadow transition-all
+                  ${processing || plannedSegments().length === 0
+                    ? 'bg-gray-300 text-gray-500 cursor-not-allowed shadow-none'
+                    : 'bg-primary-700 hover:bg-primary-800 text-white hover:shadow-lg active:scale-[0.98]'}`}
+              >
+                {processing ? (
+                  <><Loader className="animate-spin" size={18} /> Working...</>
+                ) : (
+                  <><Layers size={18} /> Generate {plannedSegments().length || ''} Clips</>
+                )}
+              </button>
+            </div>
+          </div>
+
+          {/* ---------- THE CLIPS IT MADE ---------- */}
+          {clips.length > 0 && (
+            <div className="card mt-6">
+              <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+                <div className="flex items-center gap-2">
+                  <Check className="text-green-600" size={18} />
+                  <h3 className="font-semibold text-gray-900">
+                    {clips.length} clip{clips.length === 1 ? '' : 's'} ready - play each one and pick your favourites
+                  </h3>
+                </div>
+                <button
+                  onClick={() => clips.forEach((c, i) => setTimeout(() => window.open(clipUrl(c, false), '_blank'), i * 600))}
+                  className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-semibold"
+                >
+                  <Download size={16} /> Download all
+                </button>
+              </div>
+
+              {clipWarnings.length > 0 && (
+                <div className="mb-4 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-800">
+                  {clipWarnings.map((w, i) => <div key={i}>{w}</div>)}
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                {clips.map(clip => (
+                  <div key={clip.job_id} className="border border-gray-200 rounded-xl overflow-hidden">
+                    {clip.ext === 'mp3' ? (
+                      <div className="bg-gray-900 p-5 flex items-center justify-center">
+                        <audio src={clipUrl(clip, true)} controls className="w-full" />
+                      </div>
+                    ) : (
+                      <video
+                        src={clipUrl(clip, true)}
+                        controls
+                        playsInline
+                        preload="metadata"
+                        className="w-full aspect-video bg-black"
+                      />
+                    )}
+                    <div className="p-3 flex items-center gap-3">
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-semibold text-gray-900">Clip {clip.index}</p>
+                        <p className="text-xs text-gray-500 font-mono">
+                          {formatTime(clip.start)} - {formatTime(clip.end)} · {formatFileSize(clip.size)}
+                        </p>
+                      </div>
+                      <a
+                        href={clipUrl(clip, false)}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="flex items-center gap-1.5 px-3 py-2 bg-gold-500 hover:bg-gold-600 text-white rounded-lg text-xs font-semibold flex-shrink-0"
+                      >
+                        <Download size={14} /> Download
+                      </a>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <p className="text-xs text-gray-400 mt-4 text-center">
+                Clips stay on the server for one hour, so download the ones you want to keep.
+              </p>
+            </div>
+          )}
         </>
       )}
     </div>
