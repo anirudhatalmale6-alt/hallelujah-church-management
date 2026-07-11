@@ -1,8 +1,12 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, Suspense } from 'react';
 import { documents, meetingNotes } from '../utils/api';
 import { useAuth } from '../contexts/AuthContext';
+
+// The PDF engine is only fetched the first time someone opens a PDF, so it
+// doesn't slow down the rest of the system.
+const PdfReader = React.lazy(() => import('../components/PdfReader'));
 import {
-  FileText, Upload, Search, Download, Trash2, Edit2, X,
+  FileText, Upload, Search, Download, Trash2, Edit2, X, Eye,
   File, FileImage, FileVideo, FileAudio, FileSpreadsheet, Plus,
   FileArchive, BookOpen, Calendar, Paperclip, Printer, ChevronDown, ChevronUp,
   Save, Clock, User
@@ -43,6 +47,86 @@ function getFileIcon(type) {
   return <File size={20} className="text-gray-400" />;
 }
 
+// Files the browser can show on its own. Anything else (Word, Excel,
+// PowerPoint, zip...) has to be downloaded to be opened.
+function canPreview(type, name = '') {
+  const t = (type || '').toLowerCase();
+  const ext = (name.split('.').pop() || '').toLowerCase();
+  if (t.includes('pdf') || ext === 'pdf') return 'pdf';
+  if (t.startsWith('image/') || ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'].includes(ext)) return 'image';
+  if (t.startsWith('video/') || ['mp4', 'webm', 'ogg', 'mov'].includes(ext)) return 'video';
+  if (t.startsWith('audio/') || ['mp3', 'wav', 'm4a', 'aac'].includes(ext)) return 'audio';
+  if (t.startsWith('text/') || ['txt', 'csv', 'log', 'md'].includes(ext)) return 'text';
+  return null;
+}
+
+// ===================== FILE VIEWER =====================
+// Opens a document inside the system - no download, no leaving the page.
+function FileViewer({ file, onClose }) {
+  if (!file) return null;
+  const kind = canPreview(file.type, file.name);
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-2 sm:p-6" onClick={onClose}>
+      <div className="bg-white rounded-lg shadow-xl w-full max-w-5xl h-[92vh] flex flex-col overflow-hidden"
+        onClick={e => e.stopPropagation()}>
+        <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-200 bg-gray-50">
+          <FileText size={18} className="text-primary-700 flex-shrink-0" />
+          <div className="flex-1 min-w-0">
+            <div className="font-semibold text-gray-900 truncate">{file.title}</div>
+            <div className="text-xs text-gray-500 truncate">{file.name}</div>
+          </div>
+          <a href={file.downloadUrl} target="_blank" rel="noreferrer"
+            className="btn btn-sm bg-gray-100 text-gray-700 hover:bg-gray-200 flex items-center gap-1" title="Download a copy">
+            <Download size={14} /> <span className="hidden sm:inline">Download</span>
+          </a>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-700 p-1" title="Close">
+            <X size={20} />
+          </button>
+        </div>
+
+        <div className="flex-1 bg-gray-100 overflow-auto">
+          {kind === 'pdf' ? (
+            <Suspense fallback={
+              <div className="w-full h-full flex items-center justify-center">
+                <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary-700" />
+              </div>
+            }>
+              <PdfReader url={file.viewUrl} printUrl={file.viewUrl} />
+            </Suspense>
+          ) : kind === 'text' ? (
+            <iframe src={file.viewUrl} title={file.title} className="w-full h-full border-0" />
+          ) : kind === 'image' ? (
+            <div className="w-full h-full flex items-center justify-center p-4">
+              <img src={file.viewUrl} alt={file.title} className="max-w-full max-h-full object-contain" />
+            </div>
+          ) : kind === 'video' ? (
+            <div className="w-full h-full flex items-center justify-center bg-black p-2">
+              <video src={file.viewUrl} controls className="max-w-full max-h-full" />
+            </div>
+          ) : kind === 'audio' ? (
+            <div className="w-full h-full flex items-center justify-center p-6">
+              <audio src={file.viewUrl} controls className="w-full max-w-lg" />
+            </div>
+          ) : (
+            <div className="w-full h-full flex flex-col items-center justify-center text-center p-8 gap-3">
+              <File size={48} className="text-gray-300" />
+              <div className="text-gray-700 font-medium">This file type can't be shown in the browser</div>
+              <div className="text-sm text-gray-500 max-w-md">
+                Word, Excel, PowerPoint and zip files need to be opened in their own program.
+                PDFs, images, videos and audio open right here.
+              </div>
+              <a href={file.downloadUrl} target="_blank" rel="noreferrer" className="btn btn-primary btn-sm mt-2 flex items-center gap-1">
+                <Download size={14} /> Download this file
+              </a>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ===================== DOCUMENTS TAB =====================
 function DocumentsTab() {
   const [docs, setDocs] = useState([]);
@@ -54,6 +138,7 @@ function DocumentsTab() {
   const [uploadProgress, setUploadProgress] = useState([]);
   const [editing, setEditing] = useState(null);
   const [editForm, setEditForm] = useState({ title: '', category: '', description: '' });
+  const [viewing, setViewing] = useState(null);
 
   const [uploadFiles, setUploadFiles] = useState([]);
   const [uploadCategory, setUploadCategory] = useState('other');
@@ -267,7 +352,16 @@ function DocumentsTab() {
                     </div>
                   ) : (
                     <>
-                      <div className="font-medium text-gray-900 truncate">{doc.title}</div>
+                      <button
+                        onClick={() => setViewing({
+                          title: doc.title, name: doc.file_name, type: doc.file_type,
+                          viewUrl: documents.viewUrl(doc.id), downloadUrl: documents.downloadUrl(doc.id),
+                        })}
+                        className="font-medium text-gray-900 truncate hover:text-primary-700 hover:underline text-left w-full"
+                        title="Click to read this document"
+                      >
+                        {doc.title}
+                      </button>
                       <div className="flex items-center gap-3 text-xs text-gray-500 flex-wrap">
                         <span className="px-2 py-0.5 rounded-full font-medium bg-gray-100 text-gray-600">
                           {CATEGORY_LABELS[doc.category] || doc.category}
@@ -283,6 +377,14 @@ function DocumentsTab() {
                 </div>
                 {editing !== doc.id && (
                   <div className="flex items-center gap-2 flex-shrink-0">
+                    <button
+                      onClick={() => setViewing({
+                        title: doc.title, name: doc.file_name, type: doc.file_type,
+                        viewUrl: documents.viewUrl(doc.id), downloadUrl: documents.downloadUrl(doc.id),
+                      })}
+                      className="text-primary-700 hover:text-primary-900" title="View in the system">
+                      <Eye size={17} />
+                    </button>
                     <a href={documents.downloadUrl(doc.id)} target="_blank" rel="noreferrer"
                       className="text-blue-600 hover:text-blue-800" title="Download">
                       <Download size={16} />
@@ -300,6 +402,8 @@ function DocumentsTab() {
           </div>
         )}
       </div>
+
+      <FileViewer file={viewing} onClose={() => setViewing(null)} />
     </div>
   );
 }
@@ -316,6 +420,7 @@ function MeetingNotesTab() {
   const [expandedNote, setExpandedNote] = useState(null);
   const [loadingNote, setLoadingNote] = useState(false);
   const [attachUploading, setAttachUploading] = useState(false);
+  const [viewingAtt, setViewingAtt] = useState(null);
   const attachRef = useRef(null);
 
   const emptyForm = { title: '', meeting_date: new Date().toISOString().split('T')[0], subjects: [''], content: '' };
@@ -640,9 +745,25 @@ function MeetingNotesTab() {
                               <div key={att.id} className="flex items-center gap-3 text-sm bg-gray-50 rounded-lg px-3 py-2">
                                 {getFileIcon(att.file_type)}
                                 <div className="flex-1 min-w-0">
-                                  <div className="truncate font-medium text-gray-700">{att.file_name}</div>
+                                  <button
+                                    onClick={() => setViewingAtt({
+                                      title: att.file_name, name: att.file_name, type: att.file_type,
+                                      viewUrl: meetingNotes.attachmentViewUrl(att.id),
+                                      downloadUrl: meetingNotes.attachmentDownloadUrl(att.id),
+                                    })}
+                                    className="truncate font-medium text-gray-700 hover:text-primary-700 hover:underline text-left w-full"
+                                    title="Click to view">
+                                    {att.file_name}
+                                  </button>
                                   <div className="text-xs text-gray-500">{formatSize(att.file_size)} - {att.uploaded_by_name}</div>
                                 </div>
+                                <button
+                                  onClick={() => setViewingAtt({
+                                    title: att.file_name, name: att.file_name, type: att.file_type,
+                                    viewUrl: meetingNotes.attachmentViewUrl(att.id),
+                                    downloadUrl: meetingNotes.attachmentDownloadUrl(att.id),
+                                  })}
+                                  className="text-primary-700 hover:text-primary-900" title="View in the system"><Eye size={15} /></button>
                                 <a href={meetingNotes.attachmentDownloadUrl(att.id)} target="_blank" rel="noreferrer"
                                   className="text-blue-600 hover:text-blue-800"><Download size={14} /></a>
                                 <button onClick={() => handleAttachDelete(att.id, note.id)}
@@ -668,6 +789,8 @@ function MeetingNotesTab() {
           ))}
         </div>
       )}
+
+      <FileViewer file={viewingAtt} onClose={() => setViewingAtt(null)} />
     </div>
   );
 }

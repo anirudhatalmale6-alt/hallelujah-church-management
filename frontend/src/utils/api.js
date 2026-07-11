@@ -346,6 +346,9 @@ export const finance = {
   deleteRoutingRule: (id) => request('finance.php', { method: 'DELETE', params: { action: 'routing_rule', id } }),
   // Loans
   loanTransaction: (data) => request('finance.php', { method: 'POST', body: data, params: { action: 'loan_transaction' } }),
+  loanEntry: (id) => request('finance.php', { params: { action: 'loan_entry', id } }),
+  updateLoanTransaction: (id, data) => request('finance.php', { method: 'PUT', body: data, params: { action: 'loan_transaction', id } }),
+  deleteLoanTransaction: (id) => request('finance.php', { method: 'DELETE', params: { action: 'loan_transaction', id } }),
   // Opening Balance
   setOpeningBalance: (data) => request('finance.php', { method: 'POST', body: data, params: { action: 'opening_balance' } }),
   // Category transactions (for drill-down)
@@ -451,6 +454,7 @@ export const documents = {
   update: (id, data) => request('documents.php', { method: 'PUT', body: data, params: { id } }),
   delete: (id) => request('documents.php', { method: 'DELETE', params: { id } }),
   downloadUrl: (id) => `${API_BASE}/documents.php?action=download&id=${id}&token=${getToken()}`,
+  viewUrl: (id) => `${API_BASE}/documents.php?action=view&id=${id}&token=${getToken()}`,
 };
 
 // Meeting Notes
@@ -478,6 +482,7 @@ export const meetingNotes = {
     return data;
   },
   attachmentDownloadUrl: (id) => `${API_BASE}/meeting_notes.php?action=download_attachment&id=${id}&token=${getToken()}`,
+  attachmentViewUrl: (id) => `${API_BASE}/meeting_notes.php?action=view_attachment&id=${id}&token=${getToken()}`,
 };
 
 // Audit Log

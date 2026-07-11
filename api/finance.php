@@ -103,6 +103,57 @@ function ensurePersonForDonor($db, $donorName, $recordedBy) {
     }
 }
 
+/**
+ * A loan is stored as TWO account_ledger rows (the liability side and the
+ * asset side). They are grouped by reference_id so the pair can be edited or
+ * deleted together. Older loans were recorded before reference_id was used, so
+ * fall back to matching on date + amount + description.
+ *
+ * Returns the rows of the loan this ledger id belongs to (liability row first).
+ */
+function loanLedgerGroup($db, $ledgerId) {
+    $stmt = $db->prepare("SELECT * FROM account_ledger WHERE id = ?");
+    $stmt->execute([$ledgerId]);
+    $entry = $stmt->fetch();
+    if (!$entry || !in_array($entry['reference_type'], ['loan', 'loan_payment'])) return [];
+
+    if (!empty($entry['reference_id'])) {
+        $rows = $db->prepare("
+            SELECT * FROM account_ledger
+            WHERE reference_type IN ('loan', 'loan_payment') AND reference_id = ?
+            ORDER BY id ASC
+        ");
+        $rows->execute([$entry['reference_id']]);
+        $group = $rows->fetchAll();
+        if (count($group) >= 1) return $group;
+    }
+
+    // Legacy loans: pair the two rows written together for the same transaction.
+    $rows = $db->prepare("
+        SELECT * FROM account_ledger
+        WHERE reference_type = ?
+          AND entry_date = ?
+          AND ABS(amount) = ABS(?)
+          AND (description = ? OR (description IS NULL AND ? IS NULL))
+          AND (reference_id IS NULL OR reference_id = ?)
+        ORDER BY ABS(id - ?) ASC, id ASC
+        LIMIT 2
+    ");
+    $rows->execute([
+        $entry['reference_type'], $entry['entry_date'], $entry['amount'],
+        $entry['description'], $entry['description'],
+        $entry['reference_id'], $ledgerId,
+    ]);
+    return $rows->fetchAll();
+}
+
+/** Which side of the loan a ledger row sits on, based on its account type. */
+function loanRowAccountType($db, $accountId) {
+    $s = $db->prepare("SELECT account_type FROM accounts WHERE id = ?");
+    $s->execute([$accountId]);
+    return $s->fetchColumn() ?: '';
+}
+
 switch ($method) {
     case 'GET':
         // --- CHART OF ACCOUNTS ---
@@ -670,6 +721,55 @@ switch ($method) {
                             'recorded_by' => $r['recorded_by_name'], 'created_at' => $r['created_at'],
                             'status' => 'recorded', 'notes' => $r['notes'],
                         ];
+                    }
+                } catch (Exception $e) {}
+            }
+
+            // Loans (received / repaid). Shown so they can be edited or deleted
+            // like any other transaction; they are not income or expense, so
+            // they stay out of the Income/Expense/Net totals.
+            if (!$typeFilter || $typeFilter === 'loan') {
+                try {
+                    $stmt = $db->prepare("
+                        SELECT al.id, al.entry_date as date, al.amount, al.description, al.reference_type,
+                            al.reference_id, al.created_at, al.account_id,
+                            a.name as account_name, a.account_type, u.name as recorded_by_name
+                        FROM account_ledger al
+                        LEFT JOIN accounts a ON a.id = al.account_id
+                        LEFT JOIN users u ON u.id = al.created_by
+                        WHERE al.entry_date BETWEEN ? AND ?
+                          AND al.reference_type IN ('loan', 'loan_payment')
+                        ORDER BY al.entry_date DESC, al.id ASC
+                    ");
+                    $stmt->execute([$dateFrom, $dateTo]);
+
+                    // Each loan writes two ledger rows (liability + asset side).
+                    // Show one line per loan, on the asset (cash) side.
+                    $seenLoans = [];
+                    foreach ($stmt->fetchAll() as $r) {
+                        $groupKey = $r['reference_id']
+                            ? 'g' . $r['reference_id']
+                            : $r['reference_type'] . '|' . $r['date'] . '|' . abs((float)$r['amount']) . '|' . $r['description'];
+                        if (isset($seenLoans[$groupKey])) {
+                            // Prefer the asset row for display (it names the bank account).
+                            if ($r['account_type'] !== 'liability') {
+                                $idx = $seenLoans[$groupKey];
+                                $entries[$idx]['id'] = (int)$r['id'];
+                                $entries[$idx]['account'] = $r['account_name'] ?: '';
+                            }
+                            continue;
+                        }
+                        $isPayment = $r['reference_type'] === 'loan_payment';
+                        $entries[] = [
+                            'id' => (int)$r['id'], 'source' => 'loan',
+                            'type' => $isPayment ? 'Loan Payment' : 'Loan Received',
+                            'date' => $r['date'], 'amount' => abs((float)$r['amount']),
+                            'description' => $r['description'] ?: ($isPayment ? 'Loan payment' : 'Loan received'),
+                            'method' => '', 'account' => $r['account_name'] ?: '',
+                            'recorded_by' => $r['recorded_by_name'], 'created_at' => $r['created_at'],
+                            'status' => 'recorded', 'notes' => $r['description'],
+                        ];
+                        $seenLoans[$groupKey] = count($entries) - 1;
                     }
                 } catch (Exception $e) {}
             }
@@ -1516,6 +1616,35 @@ switch ($method) {
             jsonResponse(['donors' => $stmt->fetchAll()]);
         }
 
+        // --- ONE LOAN TRANSACTION (for the edit form) ---
+        if ($action === 'loan_entry') {
+            $id = (int)($_GET['id'] ?? 0);
+            if (!$id) jsonResponse(['error' => 'Ledger entry ID required'], 400);
+
+            $group = loanLedgerGroup($db, $id);
+            if (empty($group)) jsonResponse(['error' => 'Loan transaction not found'], 404);
+
+            $liabilityId = null;
+            $assetId = null;
+            foreach ($group as $row) {
+                $type = loanRowAccountType($db, $row['account_id']);
+                if ($type === 'liability') $liabilityId = (int)$row['account_id'];
+                else $assetId = (int)$row['account_id'];
+            }
+
+            $first = $group[0];
+            jsonResponse(['loan' => [
+                'ledger_ids' => array_map(fn($r) => (int)$r['id'], $group),
+                'transaction_type' => $first['reference_type'] === 'loan_payment' ? 'loan_payment' : 'loan_received',
+                'transaction_date' => $first['entry_date'],
+                'amount' => abs((float)$first['amount']),
+                'description' => $first['description'],
+                'liability_account_id' => $liabilityId,
+                'asset_account_id' => $assetId,
+                'complete' => count($group) >= 2 && $liabilityId && $assetId,
+            ]]);
+        }
+
         // Financial summary/reports (donations)
         if ($action === 'summary') {
             $period = $_GET['period'] ?? 'month';
@@ -2196,27 +2325,37 @@ switch ($method) {
             $db->beginTransaction();
             try {
                 $ledgerStmt = $db->prepare("INSERT INTO account_ledger (account_id, entry_date, entry_type, amount, description, reference_type, reference_id, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+                $ids = [];
 
                 if ($type === 'loan_received') {
                     // Increase liability (positive on liability account)
                     $db->prepare("UPDATE accounts SET current_balance = current_balance + ? WHERE id = ?")->execute([$amount, $liabilityId]);
                     $ledgerStmt->execute([$liabilityId, $txDate, 'deposit', $amount, $description, 'loan', null, $currentUser['user_id']]);
+                    $ids[] = (int)$db->lastInsertId();
 
                     // Increase asset (positive on asset account)
                     $db->prepare("UPDATE accounts SET current_balance = current_balance + ? WHERE id = ?")->execute([$amount, $assetId]);
                     $ledgerStmt->execute([$assetId, $txDate, 'deposit', $amount, $description, 'loan', null, $currentUser['user_id']]);
+                    $ids[] = (int)$db->lastInsertId();
                 } else {
                     // loan_payment: decrease liability
                     $db->prepare("UPDATE accounts SET current_balance = current_balance - ? WHERE id = ?")->execute([$amount, $liabilityId]);
                     $ledgerStmt->execute([$liabilityId, $txDate, 'withdrawal', -$amount, $description, 'loan_payment', null, $currentUser['user_id']]);
+                    $ids[] = (int)$db->lastInsertId();
 
                     // Decrease asset
                     $db->prepare("UPDATE accounts SET current_balance = current_balance - ? WHERE id = ?")->execute([$amount, $assetId]);
                     $ledgerStmt->execute([$assetId, $txDate, 'withdrawal', -$amount, $description, 'loan_payment', null, $currentUser['user_id']]);
+                    $ids[] = (int)$db->lastInsertId();
                 }
 
+                // Group both sides under one reference so the loan can be edited/deleted as one.
+                $groupId = $ids[0];
+                $upd = $db->prepare("UPDATE account_ledger SET reference_id = ? WHERE id = ?");
+                foreach ($ids as $lid) $upd->execute([$groupId, $lid]);
+
                 $db->commit();
-                jsonResponse(['message' => 'Loan transaction recorded'], 201);
+                jsonResponse(['message' => 'Loan transaction recorded', 'ledger_ids' => $ids], 201);
             } catch (Exception $e) {
                 $db->rollBack();
                 jsonResponse(['error' => 'Loan transaction failed: ' . $e->getMessage()], 500);
@@ -2376,6 +2515,75 @@ switch ($method) {
         break;
 
     case 'PUT':
+        // --- EDIT A LOAN TRANSACTION (both sides at once) ---
+        if ($action === 'loan_transaction') {
+            requireRole($currentUser, ['pastor', 'admin']);
+            if (!$id) jsonResponse(['error' => 'Ledger entry ID required'], 400);
+
+            $group = loanLedgerGroup($db, $id);
+            if (empty($group)) jsonResponse(['error' => 'Loan transaction not found'], 404);
+
+            $data = getRequestBody();
+            $first = $group[0];
+
+            $type = $data['transaction_type'] ?? ($first['reference_type'] === 'loan_payment' ? 'loan_payment' : 'loan_received');
+            if (!in_array($type, ['loan_received', 'loan_payment'])) {
+                jsonResponse(['error' => 'transaction_type must be loan_received or loan_payment'], 400);
+            }
+
+            $amount = isset($data['amount']) ? (float)$data['amount'] : abs((float)$first['amount']);
+            if ($amount <= 0) jsonResponse(['error' => 'Amount must be positive'], 400);
+
+            $txDate = $data['transaction_date'] ?? $first['entry_date'];
+            $description = array_key_exists('description', $data) ? $data['description'] : $first['description'];
+
+            // Work out which account is on which side today, so the caller can
+            // keep them or move the loan to different accounts.
+            $currentLiability = null;
+            $currentAsset = null;
+            foreach ($group as $row) {
+                if (loanRowAccountType($db, $row['account_id']) === 'liability') $currentLiability = (int)$row['account_id'];
+                else $currentAsset = (int)$row['account_id'];
+            }
+            $liabilityId = !empty($data['liability_account_id']) ? (int)$data['liability_account_id'] : $currentLiability;
+            $assetId = !empty($data['asset_account_id']) ? (int)$data['asset_account_id'] : $currentAsset;
+            if (!$liabilityId || !$assetId) {
+                jsonResponse(['error' => 'This loan is missing one of its two sides. Please delete it and record it again.'], 400);
+            }
+
+            $signed = $type === 'loan_received' ? $amount : -$amount;
+            $entryType = $type === 'loan_received' ? 'deposit' : 'withdrawal';
+            $refType = $type === 'loan_received' ? 'loan' : 'loan_payment';
+            $groupId = !empty($first['reference_id']) ? (int)$first['reference_id'] : (int)$first['id'];
+
+            $db->beginTransaction();
+            try {
+                $revert = $db->prepare("UPDATE accounts SET current_balance = current_balance - ? WHERE id = ?");
+                $apply = $db->prepare("UPDATE accounts SET current_balance = current_balance + ? WHERE id = ?");
+                $del = $db->prepare("DELETE FROM account_ledger WHERE id = ?");
+
+                // Back out the old entries entirely, then write the loan fresh.
+                foreach ($group as $row) {
+                    $revert->execute([(float)$row['amount'], $row['account_id']]);
+                    $del->execute([$row['id']]);
+                }
+
+                $ins = $db->prepare("INSERT INTO account_ledger (account_id, entry_date, entry_type, amount, description, reference_type, reference_id, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+                $newIds = [];
+                foreach ([$liabilityId, $assetId] as $acctId) {
+                    $ins->execute([$acctId, $txDate, $entryType, $signed, $description, $refType, $groupId, $currentUser['user_id']]);
+                    $newIds[] = (int)$db->lastInsertId();
+                    $apply->execute([$signed, $acctId]);
+                }
+
+                $db->commit();
+                jsonResponse(['message' => 'Loan transaction updated', 'ledger_ids' => $newIds]);
+            } catch (Exception $e) {
+                $db->rollBack();
+                jsonResponse(['error' => 'Failed to update loan: ' . $e->getMessage()], 500);
+            }
+        }
+
         // --- PLEDGE UPDATE ---
         if ($action === 'pledge') {
             if (!$id) jsonResponse(['error' => 'Pledge ID required'], 400);
@@ -2589,6 +2797,30 @@ switch ($method) {
         break;
 
     case 'DELETE':
+        // --- DELETE A LOAN TRANSACTION (both sides at once) ---
+        if ($action === 'loan_transaction') {
+            requireRole($currentUser, ['pastor', 'admin']);
+            if (!$id) jsonResponse(['error' => 'Ledger entry ID required'], 400);
+
+            $group = loanLedgerGroup($db, $id);
+            if (empty($group)) jsonResponse(['error' => 'Loan transaction not found'], 404);
+
+            $db->beginTransaction();
+            try {
+                $revert = $db->prepare("UPDATE accounts SET current_balance = current_balance - ? WHERE id = ?");
+                $del = $db->prepare("DELETE FROM account_ledger WHERE id = ?");
+                foreach ($group as $row) {
+                    $revert->execute([(float)$row['amount'], $row['account_id']]);
+                    $del->execute([$row['id']]);
+                }
+                $db->commit();
+                jsonResponse(['message' => 'Loan transaction deleted and balances reversed']);
+            } catch (Exception $e) {
+                $db->rollBack();
+                jsonResponse(['error' => 'Failed to delete loan: ' . $e->getMessage()], 500);
+            }
+        }
+
         // --- DELETE LEDGER ENTRY (and reverse balance + delete source record) ---
         if ($action === 'ledger_entry') {
             requireRole($currentUser, ['pastor', 'admin']);

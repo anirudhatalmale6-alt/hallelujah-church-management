@@ -1,6 +1,12 @@
 RewriteEngine On
 RewriteBase /system/public/
 
+# The PDF reader ships an .mjs worker; browsers refuse to run it unless the
+# server sends a JavaScript MIME type.
+<IfModule mod_mime.c>
+AddType text/javascript .mjs
+</IfModule>
+
 # Use PHP wrapper as default (bypasses LiteSpeed cache)
 DirectoryIndex index.php index.html
 

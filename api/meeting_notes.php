@@ -72,6 +72,26 @@ switch ($method) {
             readfile($att['file_path']);
             exit();
 
+        } elseif ($action === 'view_attachment' && isset($_GET['id'])) {
+            // Served inline so it opens in the viewer instead of downloading.
+            $id = (int)$_GET['id'];
+            $stmt = $db->prepare("SELECT * FROM meeting_note_attachments WHERE id = ?");
+            $stmt->execute([$id]);
+            $att = $stmt->fetch();
+            if (!$att) jsonResponse(['error' => 'Attachment not found'], 404);
+
+            if (!file_exists($att['file_path'])) {
+                jsonResponse(['error' => 'File not found on server'], 404);
+            }
+
+            header('Content-Type: ' . ($att['file_type'] ?: 'application/octet-stream'));
+            header('Content-Disposition: inline; filename="' . $att['file_name'] . '"');
+            header('Content-Length: ' . filesize($att['file_path']));
+            header('X-Content-Type-Options: nosniff');
+            header_remove('Access-Control-Allow-Origin');
+            readfile($att['file_path']);
+            exit();
+
         } else {
             // List meeting notes
             $search = $_GET['search'] ?? '';

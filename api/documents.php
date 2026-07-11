@@ -35,6 +35,31 @@ switch ($method) {
             readfile($filePath);
             exit();
 
+        } elseif ($action === 'view') {
+            // Same file, served inline so it can be read inside the system
+            // (PDF viewer / image preview) instead of downloading it.
+            $id = (int)($_GET['id'] ?? 0);
+            if (!$id) jsonResponse(['error' => 'ID required'], 400);
+
+            $stmt = $db->prepare("SELECT * FROM documents WHERE id = ?");
+            $stmt->execute([$id]);
+            $doc = $stmt->fetch();
+            if (!$doc) jsonResponse(['error' => 'Document not found'], 404);
+
+            $filePath = $doc['file_path'];
+            if (!file_exists($filePath)) {
+                jsonResponse(['error' => 'File not found on server'], 404);
+            }
+
+            $type = $doc['file_type'] ?: (function_exists('mime_content_type') ? mime_content_type($filePath) : 'application/octet-stream');
+            header('Content-Type: ' . $type);
+            header('Content-Disposition: inline; filename="' . $doc['file_name'] . '"');
+            header('Content-Length: ' . filesize($filePath));
+            header('X-Content-Type-Options: nosniff');
+            header_remove('Access-Control-Allow-Origin');
+            readfile($filePath);
+            exit();
+
         } elseif ($action === 'categories') {
             jsonResponse(['categories' => [
                 ['value' => 'sermon', 'label' => 'Sermons'],

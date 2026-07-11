@@ -1312,12 +1312,28 @@ function HistoryTab({ setError, setMessage, isAdmin }) {
 
   useEffect(() => { loadEntries(); }, [loadEntries]);
 
-  const openEdit = (e) => {
+  const openEdit = async (e) => {
     setEditItem(e);
     if (e.source === 'donation') {
       setEditForm({ amount: e.amount, payment_method: e.method, notes: e.notes || '' });
     } else if (e.source === 'expense') {
       setEditForm({ amount: e.amount, payment_method: e.method, description: e.notes || '' });
+    } else if (e.source === 'loan') {
+      // A loan lives on two accounts at once, so pull both sides before editing.
+      setEditForm({ amount: e.amount, transaction_date: e.date, description: e.description || '', loading: true });
+      try {
+        const res = await financeApi.loanEntry(e.id);
+        const l = res.loan || {};
+        setEditForm({
+          amount: l.amount ?? e.amount,
+          transaction_date: l.transaction_date || e.date,
+          description: l.description || '',
+          transaction_type: l.transaction_type || 'loan_received',
+          liability_account_id: l.liability_account_id || '',
+          asset_account_id: l.asset_account_id || '',
+          complete: l.complete,
+        });
+      } catch (err) { setError(err.message); }
     }
   };
 
@@ -1329,6 +1345,15 @@ function HistoryTab({ setError, setMessage, isAdmin }) {
         await financeApi.update(editItem.id, editForm);
       } else if (editItem.source === 'expense') {
         await financeApi.updateExpense(editItem.id, editForm);
+      } else if (editItem.source === 'loan') {
+        await financeApi.updateLoanTransaction(editItem.id, {
+          amount: editForm.amount,
+          transaction_date: editForm.transaction_date,
+          description: editForm.description,
+          transaction_type: editForm.transaction_type,
+          liability_account_id: editForm.liability_account_id,
+          asset_account_id: editForm.asset_account_id,
+        });
       }
       setEditItem(null);
       setMessage('Updated');
@@ -1343,6 +1368,7 @@ function HistoryTab({ setError, setMessage, isAdmin }) {
       if (deleteItem.source === 'donation') await financeApi.deleteRoutedDonation(deleteItem.id);
       else if (deleteItem.source === 'expense') await financeApi.deleteExpense(deleteItem.id);
       else if (deleteItem.source === 'transfer') await financeApi.deleteTransfer(deleteItem.id);
+      else if (deleteItem.source === 'loan') await financeApi.deleteLoanTransaction(deleteItem.id);
       setDeleteItem(null);
       setMessage('Deleted');
       loadEntries();
@@ -1357,7 +1383,13 @@ function HistoryTab({ setError, setMessage, isAdmin }) {
     } catch (err) { setError(err.message); }
   };
 
-  const typeColors = { Income: 'bg-green-100 text-green-700', Expense: 'bg-red-100 text-red-700', Transfer: 'bg-blue-100 text-blue-700' };
+  const typeColors = {
+    Income: 'bg-green-100 text-green-700',
+    Expense: 'bg-red-100 text-red-700',
+    Transfer: 'bg-blue-100 text-blue-700',
+    'Loan Received': 'bg-purple-100 text-purple-700',
+    'Loan Payment': 'bg-amber-100 text-amber-700',
+  };
 
   return (
     <>
@@ -1376,6 +1408,7 @@ function HistoryTab({ setError, setMessage, isAdmin }) {
             <option value="income">Income</option>
             <option value="expense">Expense</option>
             <option value="transfer">Transfer</option>
+            <option value="loan">Loans</option>
           </select>
           <input type="date" className="input" value={dateFrom} onChange={e => { setDateFrom(e.target.value); setPage(1); }} />
           <input type="date" className="input" value={dateTo} onChange={e => { setDateTo(e.target.value); setPage(1); }} />
@@ -1451,8 +1484,42 @@ function HistoryTab({ setError, setMessage, isAdmin }) {
 
       <Modal isOpen={!!editItem} onClose={() => setEditItem(null)} title={`Edit ${editItem?.type || ''}`} size="sm">
         <div className="space-y-4">
-          <div><label className="label">Amount ($)</label><input type="number" step="0.01" className="input" value={editForm.amount || ''} onChange={e => setEditForm(f => ({ ...f, amount: e.target.value }))} /></div>
-          <div><label className="label">Method</label><select className="input" value={editForm.payment_method || ''} onChange={e => setEditForm(f => ({ ...f, payment_method: e.target.value }))}>{paymentMethods.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}</select></div>
+          {editItem?.source === 'loan' ? (
+            <>
+              <div>
+                <label className="label">Date</label>
+                <input type="date" className="input" value={editForm.transaction_date || ''}
+                  onChange={e => setEditForm(f => ({ ...f, transaction_date: e.target.value }))} />
+              </div>
+              <div>
+                <label className="label">Description</label>
+                <input className="input" placeholder="e.g. N Loan" value={editForm.description || ''}
+                  onChange={e => setEditForm(f => ({ ...f, description: e.target.value }))} />
+              </div>
+              <div>
+                <label className="label">Amount ($)</label>
+                <input type="number" step="0.01" className="input" value={editForm.amount || ''}
+                  onChange={e => setEditForm(f => ({ ...f, amount: e.target.value }))} />
+              </div>
+              <div>
+                <label className="label">Type</label>
+                <select className="input" value={editForm.transaction_type || 'loan_received'}
+                  onChange={e => setEditForm(f => ({ ...f, transaction_type: e.target.value }))}>
+                  <option value="loan_received">Loan Received</option>
+                  <option value="loan_payment">Loan Payment</option>
+                </select>
+              </div>
+              <p className="text-xs text-gray-500">
+                Both sides of the loan (the loan account and the bank account) are updated together,
+                and the balances are corrected automatically.
+              </p>
+            </>
+          ) : (
+            <>
+              <div><label className="label">Amount ($)</label><input type="number" step="0.01" className="input" value={editForm.amount || ''} onChange={e => setEditForm(f => ({ ...f, amount: e.target.value }))} /></div>
+              <div><label className="label">Method</label><select className="input" value={editForm.payment_method || ''} onChange={e => setEditForm(f => ({ ...f, payment_method: e.target.value }))}>{paymentMethods.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}</select></div>
+            </>
+          )}
           <div className="flex justify-end gap-3 pt-2">
             <button onClick={() => setEditItem(null)} className="btn-secondary">Cancel</button>
             <button onClick={handleEdit} disabled={editSaving} className="btn-primary"><Check size={16} /> Save</button>
@@ -3218,6 +3285,9 @@ function FinancialStatementsTab({ setError, setMessage, isAdmin, hasFinanceSecti
                   await financeApi.deleteTransfer(entry.record_id);
                 } else if (entry.source === 'journal_entry') {
                   await financeApi.deleteJournalEntry(entry.record_id);
+                } else if (entry.source === 'ledger') {
+                  // Loans live on two accounts - delete both sides together.
+                  await financeApi.deleteLoanTransaction(entry.record_id);
                 }
                 setMessage('Entry deleted');
                 loadData();
@@ -3431,6 +3501,13 @@ function FinancialStatementsTab({ setError, setMessage, isAdmin, hasFinanceSecti
                         description: journalEditForm.description,
                         payment_method: journalEditForm.payment_method,
                         expense_date: journalEditForm.date,
+                      });
+                    } else if (journalEdit.source === 'ledger') {
+                      // Loan received / loan payment - both sides updated together.
+                      await financeApi.updateLoanTransaction(journalEdit.record_id, {
+                        amount: parseFloat(journalEditForm.amount),
+                        description: journalEditForm.description,
+                        transaction_date: journalEditForm.date,
                       });
                     }
                     setJournalEdit(null);
@@ -4568,10 +4645,18 @@ function ChartOfAccountsTab({ setError, setMessage, isAdmin }) {
     );
   };
 
+  const isLoanEntry = (entry) => ['loan', 'loan_payment'].includes(entry.reference_type);
+
   const handleDeleteEntry = async (entry) => {
-    if (!confirm('Are you sure you want to delete this entry? This will reverse the balance.')) return;
+    const loan = isLoanEntry(entry);
+    if (!confirm(loan
+      ? 'Delete this loan? Both sides of it (the loan account and the bank account) will be removed and the balances reversed.'
+      : 'Are you sure you want to delete this entry? This will reverse the balance.')) return;
     try {
-      if (entry.source === 'ledger') {
+      if (loan) {
+        // A loan is two ledger rows - remove them together so no balance is left behind.
+        await financeApi.deleteLoanTransaction(entry.id);
+      } else if (entry.source === 'ledger') {
         await financeApi.deleteLedgerEntry(entry.id);
       } else if (entry.source === 'donation' || entry.reference_type === 'donation') {
         await financeApi.deleteRoutedDonation(entry.reference_id || entry.id);
@@ -4593,6 +4678,10 @@ function ChartOfAccountsTab({ setError, setMessage, isAdmin }) {
         await financeApi.update(record_id, { amount: parseFloat(amount), notes: description, donation_date: date, payment_method: method });
       } else if (source === 'expense') {
         await financeApi.updateExpense(record_id, { amount: parseFloat(amount), description, expense_date: date, payment_method: method });
+      } else if (source === 'loan') {
+        await financeApi.updateLoanTransaction(record_id, {
+          amount: parseFloat(amount), description, transaction_date: date,
+        });
       }
       setReportEdit(null);
       setMessage('Entry updated');
@@ -5133,17 +5222,17 @@ function ChartOfAccountsTab({ setError, setMessage, isAdmin }) {
                         {isAdmin && (
                           <td className="px-2 py-2">
                             <div className="flex items-center gap-1 justify-end">
-                              {(e.source === 'donation' || e.source === 'expense') && (
+                              {(e.source === 'donation' || e.source === 'expense' || isLoanEntry(e)) && (
                                 <button onClick={() => {
                                   setReportEdit({
-                                    record_id: e.reference_id || e.id,
-                                    source: e.source,
+                                    record_id: isLoanEntry(e) ? e.id : (e.reference_id || e.id),
+                                    source: isLoanEntry(e) ? 'loan' : e.source,
                                     amount: Math.abs(parseFloat(e.amount)),
                                     description: e.description || '',
                                     date: e.entry_date,
                                     method: '',
                                   });
-                                }} className="p-1 text-gray-300 hover:text-blue-600" title="Edit entry">
+                                }} className="p-1 text-gray-300 hover:text-blue-600" title={isLoanEntry(e) ? 'Edit loan' : 'Edit entry'}>
                                   <Edit2 size={14} />
                                 </button>
                               )}
