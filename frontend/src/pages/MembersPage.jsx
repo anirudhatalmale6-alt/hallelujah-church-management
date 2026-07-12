@@ -501,7 +501,7 @@ export default function MembersPage() {
                   <option value="">Day</option>
                   {Array.from({length:31},(_,i)=>i+1).map(d => <option key={d} value={d}>{d}</option>)}
                 </select>
-                <select className="input w-24" value={dobPart(form.date_of_birth, 'y')} onChange={e => updateField('date_of_birth', setDobPart(form.date_of_birth, 'y', e.target.value))}>
+                <select className="input w-28" value={dobPart(form.date_of_birth, 'y')} onChange={e => updateField('date_of_birth', setDobPart(form.date_of_birth, 'y', e.target.value))}>
                   <option value="">No year</option>
                   {Array.from({length: new Date().getFullYear() - 1919}, (_, i) => new Date().getFullYear() - i).map(y => <option key={y} value={y}>{y}</option>)}
                 </select>
