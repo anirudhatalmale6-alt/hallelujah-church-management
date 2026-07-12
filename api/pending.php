@@ -104,12 +104,15 @@ switch ($method) {
                             ]);
                     }
                 } elseif ($entityType === 'attendance') {
+                    // The attendance belongs to whoever submitted it, not to the
+                    // pastor approving it, so marked_by follows requested_by.
+                    $markedBy = $change['requested_by'] ?? null;
                     if ($actionType === 'mark' || $actionType === 'bulk_mark') {
                         if (isset($changeData['records'])) {
                             $upsertStmt = $db->prepare("
-                                INSERT INTO attendance (service_id, member_id, status, check_in_time, notes)
-                                VALUES (?, ?, ?, ?, ?)
-                                ON DUPLICATE KEY UPDATE status = VALUES(status), check_in_time = VALUES(check_in_time), notes = VALUES(notes)
+                                INSERT INTO attendance (service_id, member_id, status, check_in_time, notes, marked_by)
+                                VALUES (?, ?, ?, ?, ?, ?)
+                                ON DUPLICATE KEY UPDATE status = VALUES(status), check_in_time = VALUES(check_in_time), notes = VALUES(notes), marked_by = VALUES(marked_by)
                             ");
                             foreach ($changeData['records'] as $record) {
                                 $checkInTime = ($record['status'] === 'present' || $record['status'] === 'late')
@@ -121,6 +124,7 @@ switch ($method) {
                                     $record['status'],
                                     $checkInTime,
                                     $record['notes'] ?? null,
+                                    $markedBy,
                                 ]);
                             }
                         } elseif (isset($changeData['service_id'])) {
@@ -128,15 +132,16 @@ switch ($method) {
                                 ? ($changeData['check_in_time'] ?? date('Y-m-d H:i:s'))
                                 : null;
                             $db->prepare("
-                                INSERT INTO attendance (service_id, member_id, status, check_in_time, notes)
-                                VALUES (?, ?, ?, ?, ?)
-                                ON DUPLICATE KEY UPDATE status = VALUES(status), check_in_time = VALUES(check_in_time), notes = VALUES(notes)
+                                INSERT INTO attendance (service_id, member_id, status, check_in_time, notes, marked_by)
+                                VALUES (?, ?, ?, ?, ?, ?)
+                                ON DUPLICATE KEY UPDATE status = VALUES(status), check_in_time = VALUES(check_in_time), notes = VALUES(notes), marked_by = VALUES(marked_by)
                             ")->execute([
                                 (int)$changeData['service_id'],
                                 (int)$changeData['member_id'],
                                 $changeData['status'],
                                 $checkInTime,
                                 $changeData['notes'] ?? null,
+                                $markedBy,
                             ]);
                         }
                     } elseif ($actionType === 'delete' && $entityId) {

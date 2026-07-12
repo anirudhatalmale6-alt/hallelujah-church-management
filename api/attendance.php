@@ -66,6 +66,29 @@ switch ($method) {
             $svcStmt->execute([$serviceId]);
             $service = $svcStmt->fetch();
 
+            // Who recorded this service's attendance, and when. Records with no
+            // marked_by came from the check-in kiosk (QR/PIN) or the auto-absent
+            // sweep, so they are reported separately instead of being blamed on a user.
+            $byStmt = $db->prepare("
+                SELECT u.id as user_id, u.name, u.role, COUNT(*) as records, MAX(a.created_at) as last_at
+                FROM attendance a
+                JOIN users u ON u.id = a.marked_by
+                WHERE a.service_id = ?
+                GROUP BY u.id, u.name, u.role
+                ORDER BY records DESC, u.name ASC
+            ");
+            $byStmt->execute([$serviceId]);
+            $recordedBy = $byStmt->fetchAll();
+
+            $selfStmt = $db->prepare("
+                SELECT COUNT(*) FROM attendance
+                WHERE service_id = ? AND marked_by IS NULL
+                  AND check_in_time IS NOT NULL
+                  AND (notes IS NULL OR notes <> 'Auto-marked absent')
+            ");
+            $selfStmt->execute([$serviceId]);
+            $selfCheckins = (int)$selfStmt->fetchColumn();
+
             // Get all active members and non-member attendees for marking (those not yet marked)
             $unmarkedStmt = $db->prepare("
                 SELECT m.id, m.first_name, m.last_name, m.email, m.phone, m.photo_url, m.status as member_status
@@ -81,6 +104,8 @@ switch ($method) {
                 'service' => $service,
                 'attendance' => $attendance,
                 'unmarked_members' => $unmarked,
+                'recorded_by' => $recordedBy,
+                'self_checkins' => $selfCheckins,
                 'summary' => [
                     'present' => count(array_filter($attendance, fn($a) => $a['status'] === 'present')),
                     'late' => count(array_filter($attendance, fn($a) => $a['status'] === 'late')),
@@ -197,10 +222,13 @@ switch ($method) {
                         COUNT(CASE WHEN a.status = 'present' OR a.status = 'late' THEN 1 END) as attended,
                         COUNT(CASE WHEN a.status = 'absent' THEN 1 END) as absent,
                         COUNT(a.id) as total_marked,
-                        COUNT(CASE WHEN (a.status = 'present' OR a.status = 'late') AND m.person_type = 'non_member_attendee' THEN 1 END) as non_members_attended
+                        COUNT(CASE WHEN (a.status = 'present' OR a.status = 'late') AND m.person_type = 'non_member_attendee' THEN 1 END) as non_members_attended,
+                        GROUP_CONCAT(DISTINCT u.name ORDER BY u.name SEPARATOR ', ') as recorded_by,
+                        MAX(CASE WHEN a.marked_by IS NOT NULL THEN a.created_at END) as recorded_at
                     FROM services s
                     LEFT JOIN attendance a ON a.service_id = s.id
                     LEFT JOIN members m ON a.member_id = m.id
+                    LEFT JOIN users u ON u.id = a.marked_by
                     WHERE s.date BETWEEN ? AND ?
                     GROUP BY s.id
                     ORDER BY s.date DESC, s.time DESC

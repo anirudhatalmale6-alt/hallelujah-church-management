@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { members as membersApi } from '../utils/api';
+import { formatBirthday } from '../utils/format';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import {
@@ -115,7 +116,7 @@ export default function MemberDetailPage() {
     if (member.email) info.push(['Email', member.email]);
     if (member.phone) info.push(['Phone', member.phone]);
     if (member.address || member.city) info.push(['Address', [member.address, member.city, member.state, member.zip].filter(Boolean).join(', ')]);
-    if (formatDate(member.date_of_birth)) info.push(['Date of Birth', formatDate(member.date_of_birth)]);
+    if (formatBirthday(member.date_of_birth)) info.push(['Date of Birth', formatBirthday(member.date_of_birth)]);
     if (member.gender) info.push(['Gender', member.gender.charAt(0).toUpperCase() + member.gender.slice(1)]);
     info.push(['Status', member.status.charAt(0).toUpperCase() + member.status.slice(1)]);
     if (member.family_group) info.push(['Group', member.family_group]);
@@ -224,10 +225,10 @@ export default function MemberDetailPage() {
                   </span>
                 </div>
               )}
-              {formatDate(member.date_of_birth) && (
+              {formatBirthday(member.date_of_birth) && (
                 <div className="flex items-center gap-3 text-sm">
                   <Calendar size={16} className="text-gray-400 shrink-0" />
-                  <span className="text-gray-700">Born: {formatDate(member.date_of_birth)}</span>
+                  <span className="text-gray-700">Born: {formatBirthday(member.date_of_birth)}</span>
                 </div>
               )}
               {member.family_group && (

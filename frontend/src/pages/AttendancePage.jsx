@@ -24,6 +24,14 @@ const statusColors = {
 };
 const statusInactive = 'bg-gray-100 text-gray-500 hover:bg-gray-200';
 
+// 'Jul 12, 3:45 PM' - when a user last saved attendance for this service.
+const formatStamp = (ts) => {
+  if (!ts) return '';
+  const d = new Date(String(ts).replace(' ', 'T'));
+  if (isNaN(d.getTime())) return '';
+  return d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+};
+
 export default function AttendancePage() {
   const { user } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -280,10 +288,10 @@ export default function AttendancePage() {
     if (!history.length) return;
     if (groupBy === 'service') {
       downloadCSV(
-        ['Service', 'Date', 'Type', 'Attended', 'Non-Members', 'Visitors', 'Absent', 'Rate (%)'],
+        ['Service', 'Date', 'Type', 'Attended', 'Non-Members', 'Visitors', 'Absent', 'Rate (%)', 'Recorded By'],
         history.map(h => {
           const rate = h.total_marked > 0 ? Math.round((parseInt(h.attended) / parseInt(h.total_marked)) * 100) : 0;
-          return [h.name, h.date, getTypeLabel(h.type), h.attended, h.non_members_attended || 0, h.visitor_count || 0, h.absent, `${rate}%`];
+          return [h.name, h.date, getTypeLabel(h.type), h.attended, h.non_members_attended || 0, h.visitor_count || 0, h.absent, `${rate}%`, h.recorded_by || 'Check-in / automatic'];
         }),
         `attendance-history-${historyFrom}-to-${historyTo}.csv`
       );
@@ -375,7 +383,7 @@ export default function AttendancePage() {
 
           {selectedServiceId && !loading && attendanceData && (
             <>
-              {/* Current user marking attendance + auto-sync info */}
+              {/* Current user marking attendance + who already recorded this service */}
               <div className="card mb-4 bg-blue-50 border-blue-200">
                 <div className="flex items-center justify-between flex-wrap gap-2">
                   <div className="flex items-center gap-2 text-sm text-blue-800">
@@ -391,6 +399,31 @@ export default function AttendancePage() {
                     <span className="text-xs bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded-full">
                       Some members auto-marked from check-in system
                     </span>
+                  )}
+                </div>
+
+                <div className="mt-3 pt-3 border-t border-blue-200 flex items-start gap-2 text-sm">
+                  <UserCheck size={16} className="text-blue-600 mt-0.5 shrink-0" />
+                  {attendanceData.recorded_by?.length > 0 ? (
+                    <div className="text-blue-900">
+                      <span className="font-medium">Attendance recorded by:</span>{' '}
+                      {attendanceData.recorded_by.map((r, i) => (
+                        <span key={r.user_id}>
+                          {i > 0 && ', '}
+                          <strong>{r.name}</strong>
+                          <span className="text-blue-700"> ({r.records} {r.records == 1 ? 'person' : 'people'}{r.last_at ? ` - ${formatStamp(r.last_at)}` : ''})</span>
+                        </span>
+                      ))}
+                      {attendanceData.self_checkins > 0 && (
+                        <span className="text-blue-700">, plus {attendanceData.self_checkins} self check-in{attendanceData.self_checkins == 1 ? '' : 's'} (QR / PIN)</span>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="text-blue-800">
+                      {attendanceData.self_checkins > 0
+                        ? <>No user has recorded this service yet - {attendanceData.self_checkins} person(s) checked themselves in at the kiosk (QR / PIN).</>
+                        : <>No one has recorded attendance for this service yet. When you save, it will be filed under your name.</>}
+                    </div>
                   )}
                 </div>
               </div>
@@ -647,6 +680,7 @@ export default function AttendancePage() {
                       <th className="text-center px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Visitors</th>
                       <th className="text-center px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Absent</th>
                       <th className="text-center px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Rate</th>
+                      <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Recorded By</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
@@ -673,6 +707,19 @@ export default function AttendancePage() {
                             <span className={`text-sm font-medium ${rate >= 70 ? 'text-green-600' : rate >= 40 ? 'text-yellow-600' : 'text-red-500'}`}>
                               {rate}%
                             </span>
+                          </td>
+                          <td className="px-4 py-3 text-sm">
+                            {h.recorded_by ? (
+                              <div className="flex items-center gap-1.5 text-gray-700">
+                                <UserCheck size={14} className="text-gray-400 shrink-0" />
+                                <span>{h.recorded_by}</span>
+                                {h.recorded_at && (
+                                  <span className="text-xs text-gray-400">({formatStamp(h.recorded_at)})</span>
+                                )}
+                              </div>
+                            ) : (
+                              <span className="text-xs text-gray-400">{parseInt(h.total_marked) > 0 ? 'Check-in / automatic' : 'Not recorded yet'}</span>
+                            )}
                           </td>
                         </tr>
                       );

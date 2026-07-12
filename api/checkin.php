@@ -379,13 +379,15 @@ switch ($method) {
             $stmt->execute([$memberId, $serviceId, $checkinTime, $method, $currentUser['user_id'], $data['notes'] ?? null]);
 
             if ($serviceId) {
+                // A staff member checked this person in by hand, so the attendance
+                // record carries their name (a QR/PIN self check-in leaves it empty).
                 $attStatus = getAttendanceStatus($db, $serviceId);
                 $attStmt = $db->prepare("
-                    INSERT INTO attendance (service_id, member_id, status, check_in_time)
-                    VALUES (?, ?, ?, ?)
-                    ON DUPLICATE KEY UPDATE status = VALUES(status), check_in_time = VALUES(check_in_time)
+                    INSERT INTO attendance (service_id, member_id, status, check_in_time, marked_by)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON DUPLICATE KEY UPDATE status = VALUES(status), check_in_time = VALUES(check_in_time), marked_by = VALUES(marked_by)
                 ");
-                $attStmt->execute([$serviceId, $memberId, $attStatus, $checkinTime]);
+                $attStmt->execute([$serviceId, $memberId, $attStatus, $checkinTime, $currentUser['user_id']]);
             }
 
             $stmt = $db->prepare("SELECT first_name, last_name FROM members WHERE id = ?");

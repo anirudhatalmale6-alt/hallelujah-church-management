@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { members as membersApi, groups as groupsApi, households as householdsApi } from '../utils/api';
 import { useAuth } from '../contexts/AuthContext';
-import { downloadCSV } from '../utils/format';
+import { downloadCSV, dobPart, setDobPart, formatBirthday } from '../utils/format';
 import { loadPersonTypes, labelFor, colorFor, DEFAULT_PERSON_TYPES } from '../utils/personTypes';
 import Modal from '../components/Modal';
 import Pagination from '../components/Pagination';
@@ -20,28 +20,6 @@ const emptyMember = {
   baptism_date: '', salvation_date: '', first_visit_date: '',
   membership_class_date: '', dedication_date: '', wedding_date: '',
   card_title: '', card_expiry_date: '',
-};
-
-// Date of birth is edited with three dropdowns. A date only exists once all
-// three are chosen; blanking any one of them (or pressing Clear) removes the
-// birthday completely, which is how you undo a date entered by mistake.
-const dobPart = (value, part) => {
-  const [y, m, d] = (value || '').split('-');
-  if (!y || !m || !d) return '';
-  if (part === 'y') return y;
-  if (part === 'm') return String(parseInt(m, 10));
-  return String(parseInt(d, 10));
-};
-
-const setDobPart = (value, part, next) => {
-  if (!next) return ''; // blank choice = clear the birthday
-  const parts = { y: dobPart(value, 'y'), m: dobPart(value, 'm'), d: dobPart(value, 'd') };
-  parts[part] = next;
-  const y = parts.y || '2000';
-  const m = parts.m || '1';
-  const daysInMonth = new Date(parseInt(y, 10), parseInt(m, 10), 0).getDate();
-  const d = Math.min(parseInt(parts.d || '1', 10), daysInMonth);
-  return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
 };
 
 const personTypeLabels = {
@@ -237,7 +215,7 @@ export default function MembersPage() {
       const data = await membersApi.list({ limit: 9999 });
       const headers = ['First Name', 'Last Name', 'Email', 'Phone', 'Gender', 'Date of Birth', 'Address', 'City', 'Status', 'Group', 'Membership Date', 'Wedding Date'];
       const rows = (data.members || []).map(m => [
-        m.first_name, m.last_name, m.email, m.phone, m.gender, m.date_of_birth,
+        m.first_name, m.last_name, m.email, m.phone, m.gender, formatBirthday(m.date_of_birth),
         m.address, m.city, m.status, m.family_group, m.membership_date, m.wedding_date,
       ]);
       downloadCSV(headers, rows, `members-${new Date().toISOString().split('T')[0]}.csv`);
@@ -523,12 +501,16 @@ export default function MembersPage() {
                   <option value="">Day</option>
                   {Array.from({length:31},(_,i)=>i+1).map(d => <option key={d} value={d}>{d}</option>)}
                 </select>
-                <select className="input w-20" value={dobPart(form.date_of_birth, 'y')} onChange={e => updateField('date_of_birth', setDobPart(form.date_of_birth, 'y', e.target.value))}>
-                  <option value="">Year</option>
+                <select className="input w-24" value={dobPart(form.date_of_birth, 'y')} onChange={e => updateField('date_of_birth', setDobPart(form.date_of_birth, 'y', e.target.value))}>
+                  <option value="">No year</option>
                   {Array.from({length: new Date().getFullYear() - 1919}, (_, i) => new Date().getFullYear() - i).map(y => <option key={y} value={y}>{y}</option>)}
                 </select>
               </div>
-              <p className="text-xs text-gray-400 mt-1">Pick Month, Day and Year. Set any of them back to blank (or use Clear) to remove the birthday.</p>
+              <p className="text-xs text-gray-400 mt-1">
+                The year is optional - leave it on "No year" to record only the month and the day
+                {form.date_of_birth && <> (saved as <span className="text-gray-500">{formatBirthday(form.date_of_birth)}</span>)</>}.
+                Blank the Month or the Day, or use Clear, to remove the birthday completely.
+              </p>
             </div>
             <div className="sm:col-span-2">
               <label className="label">Groups</label>
