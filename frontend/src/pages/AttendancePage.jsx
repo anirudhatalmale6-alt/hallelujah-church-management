@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { attendance as attendanceApi, services as servicesApi, services as svcApi } from '../utils/api';
 import { useAuth } from '../contexts/AuthContext';
 import { formatTime12h, downloadCSV } from '../utils/format';
+import { loadPersonTypes, DEFAULT_PERSON_TYPES, colorFor } from '../utils/personTypes';
 import {
   UserCheck, Check, X, Clock, Search, AlertCircle,
   ChevronDown, Save, Calendar, BarChart3, Users, TrendingUp, MessageSquare,
@@ -61,9 +62,32 @@ export default function AttendancePage() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [groupBy, setGroupBy] = useState('service');
 
+  // Person types (Settings) drive both the attendance sheet and the history filter.
+  const [personTypes, setPersonTypes] = useState(DEFAULT_PERSON_TYPES);
+  const [showEveryone, setShowEveryone] = useState(false);
+  const [rateTypes, setRateTypes] = useState(null); // null = still loading, [] = none
+  const [splitByType, setSplitByType] = useState(false);
+
   useEffect(() => {
     loadServices();
+    loadPersonTypes().then(list => {
+      setPersonTypes(list);
+      const saved = localStorage.getItem('hitc_rate_types');
+      const values = list.map(t => t.value);
+      const restored = saved ? saved.split(',').filter(v => values.includes(v)) : null;
+      setRateTypes(restored && restored.length ? restored : values);
+    }).catch(() => setRateTypes(DEFAULT_PERSON_TYPES.map(t => t.value)));
   }, []);
+
+  const toggleRateType = (value) => {
+    setRateTypes(prev => {
+      const next = prev.includes(value) ? prev.filter(v => v !== value) : [...prev, value];
+      localStorage.setItem('hitc_rate_types', next.join(','));
+      return next;
+    });
+  };
+
+  const typeLabel = (value) => personTypes.find(t => t.value === value)?.label || value;
 
   useEffect(() => {
     const svcParam = searchParams.get('service');
@@ -113,16 +137,27 @@ export default function AttendancePage() {
   }, [selectedServiceId, loadAttendance]);
 
   const loadHistory = useCallback(async () => {
+    if (!rateTypes) return;            // still loading the configured categories
+    if (!rateTypes.length) {           // nothing ticked: nothing to count
+      setHistory([]);
+      setHistoryLoading(false);
+      return;
+    }
     setHistoryLoading(true);
     setHistory([]);
     try {
-      const data = await attendanceApi.history({ from: historyFrom, to: historyTo, group_by: groupBy });
+      const data = await attendanceApi.history({
+        from: historyFrom,
+        to: historyTo,
+        group_by: groupBy,
+        types: rateTypes.join(','),
+      });
       setHistory(data.history);
     } catch (err) {
       setError(err.message);
     }
     setHistoryLoading(false);
-  }, [historyFrom, historyTo, groupBy]);
+  }, [historyFrom, historyTo, groupBy, rateTypes]);
 
   useEffect(() => {
     if (tab === 'history') loadHistory();
@@ -157,15 +192,13 @@ export default function AttendancePage() {
     });
   };
 
+  // Marks everyone currently shown on the sheet - not people hidden by the
+  // search box or by the "Show everyone else" checkbox.
   const markAllPresent = () => {
     if (!attendanceData) return;
-    const allMembers = [
-      ...attendanceData.attendance.map(a => a.member_id),
-      ...attendanceData.unmarked_members.map(m => m.id),
-    ];
-    const rec = {};
-    allMembers.forEach(id => {
-      rec[id] = { status: 'present', notes: records[id]?.notes || '' };
+    const rec = { ...records };
+    filteredMembers.forEach(m => {
+      rec[m.id] = { status: 'present', notes: records[m.id]?.notes || '' };
     });
     setRecords(rec);
   };
@@ -234,7 +267,7 @@ export default function AttendancePage() {
 
   const [sortAZ, setSortAZ] = useState(true);
 
-  const allMembers = attendanceData
+  const everyone = attendanceData
     ? [
         ...attendanceData.attendance.map(a => ({
           id: a.member_id,
@@ -243,10 +276,30 @@ export default function AttendancePage() {
           email: a.email,
           phone: a.phone,
           member_status: a.member_status,
+          person_type: a.person_type,
         })),
         ...attendanceData.unmarked_members,
       ]
     : [];
+
+  // The sheet holds the person types ticked as "Auto-absent" in Settings (the same
+  // ones the system auto-marks absent), plus anyone outside those types who was
+  // actually there - a visitor marked present stays on the sheet for that service.
+  // Everybody else - forsaking, inactive, and people only ever auto-marked absent -
+  // appears once "Show everyone else" is ticked, so one of them can be marked present.
+  // Uses the saved status, not the unsaved clicks, so nobody vanishes mid-edit.
+  const rosterTypes = attendanceData?.roster_types || [];
+  const savedStatus = {};
+  (attendanceData?.attendance || []).forEach(a => { savedStatus[a.member_id] = a.status; });
+
+  const onSheet = (m) =>
+    (rosterTypes.includes(m.person_type) && ['active', 'restored'].includes(m.member_status)) ||
+    ['present', 'late'].includes(savedStatus[m.id]);
+
+  const rosterMembers = everyone.filter(onSheet);
+  const otherMembers = everyone.filter(m => !onSheet(m));
+  const otherWithRecords = otherMembers.filter(m => savedStatus[m.id]);
+  const allMembers = showEveryone ? everyone : rosterMembers;
 
   const filteredMembers = allMembers
     .filter(m => {
@@ -288,10 +341,24 @@ export default function AttendancePage() {
     if (!history.length) return;
     if (groupBy === 'service') {
       downloadCSV(
-        ['Service', 'Date', 'Type', 'Attended', 'Non-Members', 'Visitors', 'Absent', 'Rate (%)', 'Recorded By'],
+        [
+          'Service', 'Date', 'Type', 'Attended', 'Non-Members', 'Visitors', 'Absent', 'Rate (%)',
+          ...(splitByType ? rateTypes.map(t => `${typeLabel(t)} (attended/marked, rate)`) : []),
+          'Recorded By',
+        ],
         history.map(h => {
           const rate = h.total_marked > 0 ? Math.round((parseInt(h.attended) / parseInt(h.total_marked)) * 100) : 0;
-          return [h.name, h.date, getTypeLabel(h.type), h.attended, h.non_members_attended || 0, h.visitor_count || 0, h.absent, `${rate}%`, h.recorded_by || 'Check-in / automatic'];
+          const splitCells = splitByType ? rateTypes.map(t => {
+            const b = h.breakdown?.[t];
+            if (!b || !b.marked) return '-';
+            return `${b.attended}/${b.marked} (${Math.round((b.attended / b.marked) * 100)}%)`;
+          }) : [];
+          return [
+            h.name, h.date, getTypeLabel(h.type), h.attended, h.non_members_attended || 0,
+            h.visitor_count || 0, h.absent, `${rate}%`,
+            ...splitCells,
+            h.recorded_by || 'Check-in / automatic',
+          ];
         }),
         `attendance-history-${historyFrom}-to-${historyTo}.csv`
       );
@@ -449,10 +516,50 @@ export default function AttendancePage() {
                 </div>
                 <div className="bg-white rounded-lg border border-gray-200 p-3 text-center">
                   <div className="text-2xl font-bold text-gray-400">
-                    {allMembers.length - Object.keys(records).length}
+                    {rosterMembers.filter(m => !records[m.id]).length}
                   </div>
                   <div className="text-xs text-gray-500">Unmarked</div>
                 </div>
+              </div>
+
+              {/* Who is on this sheet (driven by Settings) */}
+              <div className="card mb-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="text-sm text-gray-600">
+                    <span className="font-medium text-gray-900">On this sheet:</span>{' '}
+                    {rosterTypes.length > 0
+                      ? rosterTypes.map(t => typeLabel(t)).join(', ')
+                      : 'Church Member'}
+                    <span className="text-gray-400"> ({rosterMembers.length} people)</span>
+                    <div className="text-xs text-gray-400 mt-0.5">
+                      These are the person types ticked as "Auto-absent" in Settings. They are the ones
+                      shown here and the ones automatically marked absent when the service ends.
+                    </div>
+                    {otherWithRecords.length > 0 && !showEveryone && (
+                      <div className="text-xs text-amber-600 mt-1">
+                        {otherWithRecords.length} other person(s) outside these categories still have a
+                        record on this service. Tick "Show everyone else" to review or remove them.
+                      </div>
+                    )}
+                  </div>
+                  {otherMembers.length > 0 && (
+                    <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer shrink-0 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
+                      <input
+                        type="checkbox"
+                        className="w-4 h-4"
+                        checked={showEveryone}
+                        onChange={e => setShowEveryone(e.target.checked)}
+                      />
+                      Show everyone else ({otherMembers.length}) - forsaking, visitors, etc.
+                    </label>
+                  )}
+                </div>
+                {showEveryone && (
+                  <div className="mt-3 pt-3 border-t border-gray-100 text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2">
+                    Everybody is listed now. Mark someone present or late and they stay on this
+                    service's sheet after saving - they are not auto-marked absent on other services.
+                  </div>
+                )}
               </div>
 
               {/* Service Notes & Counts */}
@@ -536,21 +643,32 @@ export default function AttendancePage() {
                   ) : (
                     filteredMembers.map(m => {
                       const rec = records[m.id];
-                      const isNonMember = m.member_status === 'non_member_attendee';
+                      const isNonMember = m.person_type === 'non_member_attendee';
+                      const offSheet = !onSheet(m);
                       const origRecord = attendanceData.attendance.find(a => a.member_id === m.id);
                       const isAutoSynced = origRecord && !origRecord.marked_by && origRecord.check_in_time;
                       const isAutoAbsent = origRecord?.notes === 'Auto-marked absent';
                       return (
-                        <div key={m.id} className="px-4 py-3 hover:bg-gray-50">
+                        <div key={m.id} className={`px-4 py-3 hover:bg-gray-50 ${offSheet ? 'bg-gray-50/60' : ''}`}>
                           <div className="flex items-center gap-3">
-                            <div className={`w-9 h-9 rounded-full flex items-center justify-center text-white text-sm font-medium shrink-0 ${isNonMember ? 'bg-yellow-500' : 'bg-primary-700'}`}>
+                            <div className={`w-9 h-9 rounded-full flex items-center justify-center text-white text-sm font-medium shrink-0 ${offSheet ? 'bg-gray-400' : isNonMember ? 'bg-yellow-500' : 'bg-primary-700'}`}>
                               {m.first_name?.charAt(0)}{m.last_name?.charAt(0)}
                             </div>
                             <div className="flex-1 min-w-0">
                               <div className="font-medium text-gray-900 text-sm">
                                 {m.first_name} {m.last_name}
-                                {isNonMember && (
-                                  <span className="ml-2 inline-block px-1.5 py-0.5 text-[10px] font-medium bg-yellow-100 text-yellow-700 rounded-full">Non-Member</span>
+                                {m.person_type && (
+                                  <span className={`ml-2 inline-block px-1.5 py-0.5 text-[10px] font-medium rounded-full ${colorFor(m.person_type)}`}>
+                                    {typeLabel(m.person_type)}
+                                  </span>
+                                )}
+                                {m.member_status && m.member_status !== 'active' && (
+                                  <span className="ml-2 inline-block px-1.5 py-0.5 text-[10px] font-medium bg-gray-200 text-gray-600 rounded-full capitalize">
+                                    {m.member_status}
+                                  </span>
+                                )}
+                                {offSheet && (
+                                  <span className="ml-2 inline-block px-1.5 py-0.5 text-[10px] font-medium bg-slate-100 text-slate-600 rounded-full">Not on sheet</span>
                                 )}
                                 {isAutoSynced && (
                                   <span className="ml-2 inline-block px-1.5 py-0.5 text-[10px] font-medium bg-blue-100 text-blue-700 rounded-full">Check-in</span>
@@ -655,9 +773,66 @@ export default function AttendancePage() {
                 </button>
               )}
             </div>
+
+            {/* Which categories of people the rate is calculated on */}
+            <div className="mt-4 pt-4 border-t border-gray-100">
+              <div className="flex items-center justify-between flex-wrap gap-2 mb-2">
+                <label className="label mb-0">Count these categories in the rate</label>
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const all = personTypes.map(t => t.value);
+                      const next = rateTypes?.length === all.length ? [] : all;
+                      setRateTypes(next);
+                      localStorage.setItem('hitc_rate_types', next.join(','));
+                    }}
+                    className="text-xs text-primary-700 hover:underline"
+                  >
+                    {rateTypes?.length === personTypes.length ? 'Clear all' : 'Select all'}
+                  </button>
+                  {groupBy === 'service' && (
+                    <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer">
+                      <input type="checkbox" className="w-4 h-4" checked={splitByType} onChange={e => setSplitByType(e.target.checked)} />
+                      Split the rate by category
+                    </label>
+                  )}
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {personTypes.map(t => {
+                  const on = rateTypes?.includes(t.value);
+                  return (
+                    <label
+                      key={t.value}
+                      className={`flex items-center gap-2 text-sm px-3 py-1.5 rounded-lg border cursor-pointer transition-colors ${
+                        on ? 'bg-primary-50 border-primary-200 text-primary-800' : 'bg-white border-gray-200 text-gray-500'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        className="w-4 h-4"
+                        checked={!!on}
+                        onChange={() => toggleRateType(t.value)}
+                      />
+                      {t.label}
+                    </label>
+                  );
+                })}
+              </div>
+              <p className="text-xs text-gray-400 mt-2">
+                The Attended, Absent and Rate columns count only the categories ticked here.
+                Tick "Split the rate by category" to see each one in its own column.
+              </p>
+            </div>
           </div>
 
-          {historyLoading ? (
+          {rateTypes && rateTypes.length === 0 ? (
+            <div className="card text-center py-16">
+              <Users size={48} className="text-gray-300 mx-auto mb-3" />
+              <p className="text-gray-500">Tick at least one category above to see the attendance rate</p>
+            </div>
+          ) : historyLoading ? (
             <div className="flex items-center justify-center py-16">
               <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary-700"></div>
             </div>
@@ -680,6 +855,11 @@ export default function AttendancePage() {
                       <th className="text-center px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Visitors</th>
                       <th className="text-center px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Absent</th>
                       <th className="text-center px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Rate</th>
+                      {splitByType && rateTypes.map(t => (
+                        <th key={t} className="text-center px-4 py-3 text-xs font-semibold text-gray-500 uppercase whitespace-nowrap bg-gray-100">
+                          {typeLabel(t)}
+                        </th>
+                      ))}
                       <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Recorded By</th>
                     </tr>
                   </thead>
@@ -708,6 +888,23 @@ export default function AttendancePage() {
                               {rate}%
                             </span>
                           </td>
+                          {splitByType && rateTypes.map(t => {
+                            const b = h.breakdown?.[t];
+                            const marked = b?.marked || 0;
+                            const tRate = marked > 0 ? Math.round((b.attended / marked) * 100) : null;
+                            return (
+                              <td key={t} className="px-4 py-3 text-center bg-gray-50/60">
+                                {marked > 0 ? (
+                                  <>
+                                    <div className="text-sm font-medium text-gray-800">{b.attended}/{marked}</div>
+                                    <div className={`text-xs ${tRate >= 70 ? 'text-green-600' : tRate >= 40 ? 'text-yellow-600' : 'text-red-500'}`}>{tRate}%</div>
+                                  </>
+                                ) : (
+                                  <span className="text-xs text-gray-300">-</span>
+                                )}
+                              </td>
+                            );
+                          })}
                           <td className="px-4 py-3 text-sm">
                             {h.recorded_by ? (
                               <div className="flex items-center gap-1.5 text-gray-700">

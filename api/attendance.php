@@ -50,7 +50,8 @@ switch ($method) {
 
             // Get attendance for a specific service
             $stmt = $db->prepare("
-                SELECT a.*, m.first_name, m.last_name, m.email, m.phone, m.photo_url, m.status as member_status,
+                SELECT a.*, m.first_name, m.last_name, m.email, m.phone, m.photo_url,
+                       m.status as member_status, m.person_type,
                        u.name as marked_by_name
                 FROM attendance a
                 JOIN members m ON a.member_id = m.id
@@ -89,16 +90,25 @@ switch ($method) {
             $selfStmt->execute([$serviceId]);
             $selfCheckins = (int)$selfStmt->fetchColumn();
 
-            // Get all active members and non-member attendees for marking (those not yet marked)
+            // Everyone not yet marked for this service. The whole list is sent (every
+            // person type, every status); the attendance sheet shows the roster types
+            // configured in Settings by default and keeps the rest behind a checkbox.
             $unmarkedStmt = $db->prepare("
-                SELECT m.id, m.first_name, m.last_name, m.email, m.phone, m.photo_url, m.status as member_status
+                SELECT m.id, m.first_name, m.last_name, m.email, m.phone, m.photo_url,
+                       m.status as member_status, m.person_type
                 FROM members m
-                WHERE m.status IN ('active', 'restored')
-                AND m.id NOT IN (SELECT member_id FROM attendance WHERE service_id = ?)
+                WHERE m.id NOT IN (SELECT member_id FROM attendance WHERE service_id = ?)
                 ORDER BY m.last_name ASC, m.first_name ASC
             ");
             $unmarkedStmt->execute([$serviceId]);
             $unmarked = $unmarkedStmt->fetchAll();
+
+            // "Unmarked" only counts the people who belong on the sheet by default.
+            $rosterTypes = autoAbsentPersonTypes($db);
+            $rosterUnmarked = array_filter($unmarked, fn($m) =>
+                in_array($m['person_type'], $rosterTypes, true)
+                && in_array($m['member_status'], ['active', 'restored'], true)
+            );
 
             jsonResponse([
                 'service' => $service,
@@ -106,12 +116,14 @@ switch ($method) {
                 'unmarked_members' => $unmarked,
                 'recorded_by' => $recordedBy,
                 'self_checkins' => $selfCheckins,
+                'person_types' => getPersonTypes($db),
+                'roster_types' => $rosterTypes,
                 'summary' => [
                     'present' => count(array_filter($attendance, fn($a) => $a['status'] === 'present')),
                     'late' => count(array_filter($attendance, fn($a) => $a['status'] === 'late')),
                     'absent' => count(array_filter($attendance, fn($a) => $a['status'] === 'absent')),
                     'total_marked' => count($attendance),
-                    'total_unmarked' => count($unmarked),
+                    'total_unmarked' => count($rosterUnmarked),
                 ]
             ]);
         } elseif ($action === 'by_member' && $memberId) {
@@ -156,6 +168,18 @@ switch ($method) {
             $to = $_GET['to'] ?? date('Y-m-d');
             $groupBy = $_GET['group_by'] ?? 'service';
 
+            // ?types=church_member,staff limits the attendance rate to those categories.
+            // No types given (or an unknown list) = everybody, exactly as before.
+            $allTypes = array_column(getPersonTypes($db), 'value');
+            $selTypes = array_values(array_intersect(
+                array_filter(array_map('trim', explode(',', (string)($_GET['types'] ?? '')))),
+                $allTypes
+            ));
+            if (count($selTypes) === 0) $selTypes = $allTypes;
+            $typeIn = implode(',', array_fill(0, count($selTypes), '?'));
+            // Rows whose person is missing (deleted) never match a type filter.
+            $typeCond = "m.person_type IN ($typeIn)";
+
             if ($groupBy === 'week') {
                 $stmt = $db->prepare("
                     SELECT
@@ -170,11 +194,12 @@ switch ($method) {
                     FROM services s
                     JOIN (
                         SELECT s2.id,
-                            COUNT(CASE WHEN a.status = 'present' OR a.status = 'late' THEN 1 END) as attended,
-                            COUNT(CASE WHEN a.status = 'absent' THEN 1 END) as absent,
-                            COUNT(a.id) as total_marked
+                            COUNT(CASE WHEN (a.status = 'present' OR a.status = 'late') AND $typeCond THEN 1 END) as attended,
+                            COUNT(CASE WHEN a.status = 'absent' AND $typeCond THEN 1 END) as absent,
+                            COUNT(CASE WHEN $typeCond THEN 1 END) as total_marked
                         FROM services s2
                         LEFT JOIN attendance a ON a.service_id = s2.id
+                        LEFT JOIN members m ON m.id = a.member_id
                         WHERE s2.date BETWEEN ? AND ?
                         GROUP BY s2.id
                     ) sub ON sub.id = s.id
@@ -182,9 +207,9 @@ switch ($method) {
                     GROUP BY YEARWEEK(s.date, 1)
                     ORDER BY period_key DESC
                 ");
-                $stmt->execute([$from, $to, $from, $to]);
+                $stmt->execute([...$selTypes, ...$selTypes, ...$selTypes, $from, $to, $from, $to]);
                 $history = $stmt->fetchAll();
-                jsonResponse(['history' => $history, 'group_by' => 'week']);
+                jsonResponse(['history' => $history, 'group_by' => 'week', 'types' => $selTypes]);
 
             } elseif ($groupBy === 'month') {
                 $stmt = $db->prepare("
@@ -200,11 +225,12 @@ switch ($method) {
                     FROM services s
                     JOIN (
                         SELECT s2.id,
-                            COUNT(CASE WHEN a.status = 'present' OR a.status = 'late' THEN 1 END) as attended,
-                            COUNT(CASE WHEN a.status = 'absent' THEN 1 END) as absent,
-                            COUNT(a.id) as total_marked
+                            COUNT(CASE WHEN (a.status = 'present' OR a.status = 'late') AND $typeCond THEN 1 END) as attended,
+                            COUNT(CASE WHEN a.status = 'absent' AND $typeCond THEN 1 END) as absent,
+                            COUNT(CASE WHEN $typeCond THEN 1 END) as total_marked
                         FROM services s2
                         LEFT JOIN attendance a ON a.service_id = s2.id
+                        LEFT JOIN members m ON m.id = a.member_id
                         WHERE s2.date BETWEEN ? AND ?
                         GROUP BY s2.id
                     ) sub ON sub.id = s.id
@@ -212,16 +238,16 @@ switch ($method) {
                     GROUP BY DATE_FORMAT(s.date, '%Y-%m')
                     ORDER BY period_key DESC
                 ");
-                $stmt->execute([$from, $to, $from, $to]);
+                $stmt->execute([...$selTypes, ...$selTypes, ...$selTypes, $from, $to, $from, $to]);
                 $history = $stmt->fetchAll();
-                jsonResponse(['history' => $history, 'group_by' => 'month']);
+                jsonResponse(['history' => $history, 'group_by' => 'month', 'types' => $selTypes]);
 
             } else {
                 $stmt = $db->prepare("
                     SELECT s.id, s.name, s.date, s.time, s.type, s.visitor_count,
-                        COUNT(CASE WHEN a.status = 'present' OR a.status = 'late' THEN 1 END) as attended,
-                        COUNT(CASE WHEN a.status = 'absent' THEN 1 END) as absent,
-                        COUNT(a.id) as total_marked,
+                        COUNT(CASE WHEN (a.status = 'present' OR a.status = 'late') AND $typeCond THEN 1 END) as attended,
+                        COUNT(CASE WHEN a.status = 'absent' AND $typeCond THEN 1 END) as absent,
+                        COUNT(CASE WHEN $typeCond THEN 1 END) as total_marked,
                         COUNT(CASE WHEN (a.status = 'present' OR a.status = 'late') AND m.person_type = 'non_member_attendee' THEN 1 END) as non_members_attended,
                         GROUP_CONCAT(DISTINCT u.name ORDER BY u.name SEPARATOR ', ') as recorded_by,
                         MAX(CASE WHEN a.marked_by IS NOT NULL THEN a.created_at END) as recorded_at
@@ -233,9 +259,42 @@ switch ($method) {
                     GROUP BY s.id
                     ORDER BY s.date DESC, s.time DESC
                 ");
-                $stmt->execute([$from, $to]);
+                $stmt->execute([...$selTypes, ...$selTypes, ...$selTypes, $from, $to]);
                 $history = $stmt->fetchAll();
-                jsonResponse(['history' => $history, 'group_by' => 'service']);
+
+                // Per-category split for every service, so the page can show the rate
+                // of each category side by side instead of one blended number.
+                $splitStmt = $db->prepare("
+                    SELECT a.service_id, m.person_type,
+                        COUNT(CASE WHEN a.status = 'present' OR a.status = 'late' THEN 1 END) as attended,
+                        COUNT(CASE WHEN a.status = 'absent' THEN 1 END) as absent,
+                        COUNT(*) as marked
+                    FROM attendance a
+                    JOIN members m ON m.id = a.member_id
+                    JOIN services s ON s.id = a.service_id
+                    WHERE s.date BETWEEN ? AND ?
+                    GROUP BY a.service_id, m.person_type
+                ");
+                $splitStmt->execute([$from, $to]);
+                $split = [];
+                foreach ($splitStmt->fetchAll() as $row) {
+                    $split[(int)$row['service_id']][$row['person_type']] = [
+                        'attended' => (int)$row['attended'],
+                        'absent'   => (int)$row['absent'],
+                        'marked'   => (int)$row['marked'],
+                    ];
+                }
+                foreach ($history as &$h) {
+                    $h['breakdown'] = $split[(int)$h['id']] ?? [];
+                }
+                unset($h);
+
+                jsonResponse([
+                    'history' => $history,
+                    'group_by' => 'service',
+                    'types' => $selTypes,
+                    'person_types' => getPersonTypes($db),
+                ]);
             }
         } else {
             jsonResponse(['error' => 'Invalid action. Use by_service, by_member, or history'], 400);
