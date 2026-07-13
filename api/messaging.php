@@ -228,7 +228,15 @@ switch ($method) {
                     ];
                 }
             } elseif ($recipientType === 'group' && !empty($data['group_name'])) {
-                $stmt = $db->prepare("SELECT id, first_name, last_name, email, phone FROM members WHERE FIND_IN_SET(?, REPLACE(family_group, ', ', ',')) AND status = 'active'");
+                // Resolve through member_groups rather than string-matching the
+                // cached name list, so a group name can never miss a recipient.
+                $stmt = $db->prepare("
+                    SELECT m.id, m.first_name, m.last_name, m.email, m.phone
+                    FROM member_groups mg
+                    JOIN members m ON m.id = mg.member_id
+                    JOIN `groups` g ON g.id = mg.group_id
+                    WHERE g.name = ? AND m.status = 'active'
+                ");
                 $stmt->execute([$data['group_name']]);
                 $recipients = $stmt->fetchAll();
             } elseif ($recipientType === 'person_type' && !empty($data['person_type'])) {
