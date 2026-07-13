@@ -251,6 +251,41 @@ switch ($method) {
                 LEFT JOIN users u ON d.leader_user_id = u.id
                 ORDER BY d.sort_order ASC
             ")->fetchAll();
+
+            // The groups that serve each department, and how many people that is.
+            // people_count is DISTINCT: someone in two groups of the same
+            // department is one person, not two.
+            $links = $db->query("
+                SELECT g.department_id, g.id, g.name,
+                       (SELECT COUNT(*) FROM member_groups mg WHERE mg.group_id = g.id) AS member_count
+                FROM `groups` g
+                WHERE g.department_id IS NOT NULL
+                ORDER BY g.name ASC
+            ")->fetchAll();
+
+            $people = $db->query("
+                SELECT g.department_id, COUNT(DISTINCT mg.member_id) AS people
+                FROM `groups` g
+                JOIN member_groups mg ON mg.group_id = g.id
+                WHERE g.department_id IS NOT NULL
+                GROUP BY g.department_id
+            ")->fetchAll(PDO::FETCH_KEY_PAIR);
+
+            $byDept = [];
+            foreach ($links as $l) {
+                $byDept[(int)$l['department_id']][] = [
+                    'id'           => (int)$l['id'],
+                    'name'         => $l['name'],
+                    'member_count' => (int)$l['member_count'],
+                ];
+            }
+
+            foreach ($depts as &$d) {
+                $d['groups']       = $byDept[(int)$d['id']] ?? [];
+                $d['people_count'] = (int)($people[(int)$d['id']] ?? 0);
+            }
+            unset($d);
+
             jsonResponse(['departments' => $depts]);
         }
         break;

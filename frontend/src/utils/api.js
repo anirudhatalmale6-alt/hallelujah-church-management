@@ -170,6 +170,7 @@ export const dashboard = {
 // Groups
 export const groups = {
   list: () => request('groups.php'),
+  members: (id) => request('groups.php', { params: { action: 'members', id } }),
   create: (data) => request('groups.php', { method: 'POST', body: data }),
   update: (id, data) => request('groups.php', { method: 'PUT', body: data, params: { id } }),
   delete: (id) => request('groups.php', { method: 'DELETE', params: { id } }),

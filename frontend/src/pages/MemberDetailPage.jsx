@@ -231,10 +231,27 @@ export default function MemberDetailPage() {
                   <span className="text-gray-700">Born: {formatBirthday(member.date_of_birth)}</span>
                 </div>
               )}
-              {member.family_group && (
-                <div className="flex items-center gap-3 text-sm">
-                  <Users size={16} className="text-gray-400 shrink-0" />
-                  <span className="text-gray-700">{member.family_group}</span>
+              {(member.groups?.length > 0 || member.family_group) && (
+                <div className="flex items-start gap-3 text-sm">
+                  <Users size={16} className="text-gray-400 shrink-0 mt-0.5" />
+                  {member.groups?.length > 0 ? (
+                    <div className="flex flex-wrap gap-1.5">
+                      {member.groups.map(g => (
+                        <span
+                          key={g.id}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gray-100 text-gray-700 text-xs"
+                          title={g.department_name ? `Serves the ${g.department_name} department` : undefined}
+                        >
+                          {g.name}
+                          {g.department_name && (
+                            <span className="text-blue-600">&middot; {g.department_name}</span>
+                          )}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <span className="text-gray-700">{member.family_group}</span>
+                  )}
                 </div>
               )}
               {formatDate(member.membership_date) && (

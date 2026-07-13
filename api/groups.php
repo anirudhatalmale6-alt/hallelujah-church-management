@@ -7,11 +7,44 @@ $method = $_SERVER['REQUEST_METHOD'];
 $id = isset($_GET['id']) ? (int)$_GET['id'] : null;
 $db = getDB();
 
+$CATEGORIES = array_keys(groupCategories());
+
 switch ($method) {
     case 'GET':
-        $stmt = $db->query("SELECT * FROM `groups` ORDER BY name ASC");
+        // Members of one group (used by the expandable card on the Groups page)
+        if (($_GET['action'] ?? '') === 'members' && $id) {
+            $stmt = $db->prepare("
+                SELECT m.id, m.first_name, m.last_name, m.email, m.phone,
+                       m.person_type, m.status
+                FROM member_groups mg
+                JOIN members m ON m.id = mg.member_id
+                WHERE mg.group_id = ?
+                ORDER BY m.last_name ASC, m.first_name ASC
+            ");
+            $stmt->execute([$id]);
+            jsonResponse(['members' => $stmt->fetchAll()]);
+        }
+
+        $stmt = $db->query("
+            SELECT g.*,
+                   d.name AS department_name,
+                   (SELECT COUNT(*) FROM member_groups mg WHERE mg.group_id = g.id) AS member_count
+            FROM `groups` g
+            LEFT JOIN departments d ON d.id = g.department_id
+            ORDER BY g.sort_order ASC, g.name ASC
+        ");
         $groups = $stmt->fetchAll();
-        jsonResponse(['groups' => $groups]);
+        foreach ($groups as &$g) {
+            $g['member_count']  = (int)$g['member_count'];
+            $g['department_id'] = $g['department_id'] !== null ? (int)$g['department_id'] : null;
+            $g['is_active']     = (int)$g['is_active'];
+        }
+        unset($g);
+
+        jsonResponse([
+            'groups'     => $groups,
+            'categories' => groupCategories(),
+        ]);
         break;
 
     case 'POST':
@@ -21,7 +54,6 @@ switch ($method) {
         if ($error) jsonResponse(['error' => $error], 400);
 
         $name = trim($data['name']);
-        $desc = $data['description'] ?? null;
 
         $check = $db->prepare("SELECT id FROM `groups` WHERE name = ?");
         $check->execute([$name]);
@@ -29,9 +61,21 @@ switch ($method) {
             jsonResponse(['error' => 'A group with this name already exists'], 400);
         }
 
-        $stmt = $db->prepare("INSERT INTO `groups` (name, description) VALUES (?, ?)");
-        $stmt->execute([$name, $desc]);
-        $newId = $db->lastInsertId();
+        $category = in_array($data['category'] ?? '', $CATEGORIES, true) ? $data['category'] : 'ministry';
+        $deptId   = !empty($data['department_id']) ? (int)$data['department_id'] : null;
+        // A group is only a "serving team" if it actually points at a department
+        if ($category === 'department' && !$deptId) $category = 'ministry';
+
+        $stmt = $db->prepare("INSERT INTO `groups` (name, description, department_id, category, sort_order)
+                              VALUES (?, ?, ?, ?, ?)");
+        $stmt->execute([
+            $name,
+            $data['description'] ?? null,
+            $deptId,
+            $category,
+            (int)($data['sort_order'] ?? 0),
+        ]);
+        $newId = (int)$db->lastInsertId();
 
         $stmt = $db->prepare("SELECT * FROM `groups` WHERE id = ?");
         $stmt->execute([$newId]);
@@ -45,30 +89,56 @@ switch ($method) {
 
         $fields = [];
         $params = [];
-        foreach (['name', 'description'] as $f) {
-            if (array_key_exists($f, $data)) {
-                $fields[] = "$f = ?";
-                $params[] = $data[$f];
-            }
+
+        if (array_key_exists('name', $data)) {
+            $newName = trim($data['name']);
+            if ($newName === '') jsonResponse(['error' => 'Group name is required'], 400);
+
+            $dupe = $db->prepare("SELECT id FROM `groups` WHERE name = ? AND id <> ?");
+            $dupe->execute([$newName, $id]);
+            if ($dupe->fetch()) jsonResponse(['error' => 'A group with this name already exists'], 400);
+
+            $fields[] = "name = ?";
+            $params[] = $newName;
         }
+
+        if (array_key_exists('description', $data)) {
+            $fields[] = "description = ?";
+            $params[] = $data['description'];
+        }
+
+        if (array_key_exists('department_id', $data)) {
+            $fields[] = "department_id = ?";
+            $params[] = !empty($data['department_id']) ? (int)$data['department_id'] : null;
+        }
+
+        if (array_key_exists('category', $data) && in_array($data['category'], $CATEGORIES, true)) {
+            $fields[] = "category = ?";
+            $params[] = $data['category'];
+        }
+
+        if (array_key_exists('is_active', $data)) {
+            $fields[] = "is_active = ?";
+            $params[] = !empty($data['is_active']) ? 1 : 0;
+        }
+
+        if (array_key_exists('sort_order', $data)) {
+            $fields[] = "sort_order = ?";
+            $params[] = (int)$data['sort_order'];
+        }
+
         if (empty($fields)) jsonResponse(['error' => 'No fields to update'], 400);
 
-        if (isset($data['name'])) {
-            $old = $db->prepare("SELECT name FROM `groups` WHERE id = ?");
-            $old->execute([$id]);
-            $oldName = $old->fetchColumn();
+        $params[] = $id;
+        $db->prepare("UPDATE `groups` SET " . implode(', ', $fields) . " WHERE id = ?")->execute($params);
 
-            $params[] = $id;
-            $db->prepare("UPDATE `groups` SET " . implode(', ', $fields) . " WHERE id = ?")->execute($params);
+        // A serving team must point at a department; otherwise it is a plain ministry
+        $db->prepare("UPDATE `groups` SET category = 'ministry'
+                      WHERE id = ? AND category = 'department' AND department_id IS NULL")->execute([$id]);
 
-            if ($oldName && $oldName !== $data['name']) {
-                $db->prepare("UPDATE members SET family_group = ? WHERE family_group = ?")
-                   ->execute([trim($data['name']), $oldName]);
-            }
-        } else {
-            $params[] = $id;
-            $db->prepare("UPDATE `groups` SET " . implode(', ', $fields) . " WHERE id = ?")->execute($params);
-        }
+        // Memberships live in member_groups now, so a rename can no longer orphan
+        // anyone - we just refresh the denormalised name cache.
+        rebuildGroupCache($db);
 
         $stmt = $db->prepare("SELECT * FROM `groups` WHERE id = ?");
         $stmt->execute([$id]);
@@ -79,14 +149,25 @@ switch ($method) {
         requireRole($currentUser, ['pastor', 'admin']);
         if (!$id) jsonResponse(['error' => 'Group ID required'], 400);
 
-        $stmt = $db->prepare("SELECT name FROM `groups` WHERE id = ?");
+        $stmt = $db->prepare("SELECT id FROM `groups` WHERE id = ?");
         $stmt->execute([$id]);
-        $group = $stmt->fetch();
-        if (!$group) jsonResponse(['error' => 'Group not found'], 404);
+        if (!$stmt->fetch()) jsonResponse(['error' => 'Group not found'], 404);
 
-        $db->prepare("UPDATE members SET family_group = NULL WHERE family_group = ?")->execute([$group['name']]);
+        // member_groups rows cascade. Only THIS group is removed from each member
+        // - their other groups survive. The old code blanked the whole
+        // family_group field and wiped every group the person was in.
+        $affected = $db->prepare("SELECT member_id FROM member_groups WHERE group_id = ?");
+        $affected->execute([$id]);
+        $memberIds = $affected->fetchAll(PDO::FETCH_COLUMN);
+
         $db->prepare("DELETE FROM `groups` WHERE id = ?")->execute([$id]);
-        jsonResponse(['message' => 'Group deleted']);
+
+        foreach ($memberIds as $mid) rebuildGroupCache($db, (int)$mid);
+
+        jsonResponse([
+            'message'         => 'Group deleted',
+            'members_updated' => count($memberIds),
+        ]);
         break;
 
     default:

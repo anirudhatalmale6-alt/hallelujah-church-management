@@ -223,3 +223,59 @@ function createPendingChange(PDO $db, array $params): int {
     ]);
     return (int)$db->lastInsertId();
 }
+
+/* ---------------------------------------------------------------------------
+ * Group membership (member_groups is the source of truth; members.family_group
+ * is a denormalised cache kept in sync so older read paths - CSV export, ID
+ * cards, reports - keep working without change).
+ * ------------------------------------------------------------------------- */
+
+function groupCategories(): array {
+    return [
+        'department' => 'Serving Team (Department)',
+        'leadership' => 'Leadership & Governance',
+        'ministry'   => 'Ministry & Fellowship',
+    ];
+}
+
+/** Rebuild members.family_group for one member (or all when $memberId is null). */
+function rebuildGroupCache(PDO $db, ?int $memberId = null): void {
+    $sql = "UPDATE members m
+            LEFT JOIN (
+                SELECT mg.member_id, GROUP_CONCAT(g.name ORDER BY g.name SEPARATOR ', ') AS names
+                FROM member_groups mg JOIN `groups` g ON g.id = mg.group_id
+                GROUP BY mg.member_id
+            ) x ON x.member_id = m.id
+            SET m.family_group = x.names";
+    if ($memberId !== null) {
+        $sql .= " WHERE m.id = ?";
+        $db->prepare($sql)->execute([$memberId]);
+    } else {
+        $db->exec($sql);
+    }
+}
+
+/** Replace a member's groups with $groupIds and refresh the cache. */
+function syncMemberGroups(PDO $db, int $memberId, array $groupIds): void {
+    $ids = array_values(array_unique(array_filter(array_map('intval', $groupIds))));
+
+    if ($ids) {
+        $in = implode(',', array_fill(0, count($ids), '?'));
+        $del = $db->prepare("DELETE FROM member_groups WHERE member_id = ? AND group_id NOT IN ($in)");
+        $del->execute(array_merge([$memberId], $ids));
+
+        $ins = $db->prepare("INSERT IGNORE INTO member_groups (member_id, group_id) VALUES (?, ?)");
+        foreach ($ids as $gid) $ins->execute([$memberId, $gid]);
+    } else {
+        $db->prepare("DELETE FROM member_groups WHERE member_id = ?")->execute([$memberId]);
+    }
+
+    rebuildGroupCache($db, $memberId);
+}
+
+/** Group ids a member belongs to. */
+function memberGroupIds(PDO $db, int $memberId): array {
+    $s = $db->prepare("SELECT group_id FROM member_groups WHERE member_id = ?");
+    $s->execute([$memberId]);
+    return array_map('intval', $s->fetchAll(PDO::FETCH_COLUMN));
+}

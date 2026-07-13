@@ -14,7 +14,7 @@ import {
 const emptyMember = {
   first_name: '', last_name: '', email: '', phone: '',
   address: '', city: '', state: '', zip: '',
-  gender: '', date_of_birth: '', family_group: '',
+  gender: '', date_of_birth: '', group_ids: [],
   household_id: '', household_role: '',
   membership_date: '', status: 'active', person_type: 'church_member', notes: '',
   baptism_date: '', salvation_date: '', first_visit_date: '',
@@ -79,7 +79,7 @@ export default function MembersPage() {
     try {
       const params = { search, sort: sortBy, page, limit: 25 };
       if (statusFilter) params.status = statusFilter;
-      if (groupFilter) params.family_group = groupFilter;
+      if (groupFilter) params.group_id = groupFilter;
       if (personTypeFilter) params.person_type = personTypeFilter;
       const data = await membersApi.list(params);
       setMembers(data.members);
@@ -138,7 +138,7 @@ export default function MembersPage() {
       zip: member.zip || '',
       gender: member.gender || '',
       date_of_birth: member.date_of_birth || '',
-      family_group: member.family_group || '',
+      group_ids: (member.group_ids || []).map(Number),
       household_id: member.household_id || '',
       household_role: member.household_role || '',
       membership_date: member.membership_date || '',
@@ -200,13 +200,15 @@ export default function MembersPage() {
 
   const updateField = (field, value) => setForm(f => ({ ...f, [field]: value }));
 
-  const toggleGroup = (groupName) => {
+  const toggleGroup = (groupId) => {
     setForm(f => {
-      const current = (f.family_group || '').split(', ').filter(Boolean);
-      const updated = current.includes(groupName)
-        ? current.filter(g => g !== groupName)
-        : [...current, groupName];
-      return { ...f, family_group: updated.join(', ') };
+      const current = f.group_ids || [];
+      return {
+        ...f,
+        group_ids: current.includes(groupId)
+          ? current.filter(id => id !== groupId)
+          : [...current, groupId],
+      };
     });
   };
 
@@ -321,15 +323,15 @@ export default function MembersPage() {
             <option value="revoked">Revoked</option>
             <option value="restored">Restored</option>
           </select>
-          {familyGroups.length > 0 && (
+          {availableGroups.length > 0 && (
             <select
               value={groupFilter}
               onChange={(e) => { setGroupFilter(e.target.value); setPage(1); }}
               className="input w-auto"
             >
               <option value="">All Groups</option>
-              {familyGroups.map(g => (
-                <option key={g} value={g}>{g}</option>
+              {availableGroups.map(g => (
+                <option key={g.id} value={g.id}>{g.name}</option>
               ))}
             </select>
           )}
@@ -515,18 +517,23 @@ export default function MembersPage() {
             <div className="sm:col-span-2">
               <label className="label">Groups</label>
               {availableGroups.length > 0 ? (
-                <div className="border border-gray-200 rounded-lg p-2 grid grid-cols-2 sm:grid-cols-3 gap-1 max-h-40 overflow-y-auto">
+                <div className="border border-gray-200 rounded-lg p-2 grid grid-cols-1 sm:grid-cols-2 gap-1 max-h-52 overflow-y-auto">
                   {availableGroups.map(g => {
-                    const selected = (form.family_group || '').split(', ').filter(Boolean).includes(g.name);
+                    const selected = (form.group_ids || []).includes(g.id);
                     return (
-                      <label key={g.id} className={`flex items-center gap-2 p-1.5 rounded cursor-pointer transition-colors ${selected ? 'bg-primary-50' : 'hover:bg-gray-50'}`}>
+                      <label key={g.id} className={`flex items-start gap-2 p-1.5 rounded cursor-pointer transition-colors ${selected ? 'bg-primary-50' : 'hover:bg-gray-50'}`}>
                         <input
                           type="checkbox"
                           checked={selected}
-                          onChange={() => toggleGroup(g.name)}
-                          className="w-4 h-4 text-primary-700 rounded border-gray-300 focus:ring-primary-500"
+                          onChange={() => toggleGroup(g.id)}
+                          className="mt-0.5 w-4 h-4 text-primary-700 rounded border-gray-300 focus:ring-primary-500"
                         />
-                        <span className="text-sm text-gray-700">{g.name}</span>
+                        <span className="min-w-0">
+                          <span className="block text-sm text-gray-700 truncate">{g.name}</span>
+                          {g.department_name && (
+                            <span className="block text-xs text-blue-600 truncate">serves {g.department_name}</span>
+                          )}
+                        </span>
                       </label>
                     );
                   })}

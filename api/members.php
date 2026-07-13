@@ -65,6 +65,19 @@ switch ($method) {
                 $member['household_members'] = $stmt->fetchAll();
             }
 
+            // Groups this person belongs to, with the department each one serves
+            $stmt = $db->prepare("
+                SELECT g.id, g.name, g.category, g.department_id, d.name AS department_name
+                FROM member_groups mg
+                JOIN `groups` g ON g.id = mg.group_id
+                LEFT JOIN departments d ON d.id = g.department_id
+                WHERE mg.member_id = ?
+                ORDER BY g.sort_order ASC, g.name ASC
+            ");
+            $stmt->execute([$id]);
+            $member['groups'] = $stmt->fetchAll();
+            $member['group_ids'] = array_map('intval', array_column($member['groups'], 'id'));
+
             jsonResponse(['member' => $member]);
         } else {
             // List members with search/filter
@@ -88,9 +101,17 @@ switch ($method) {
                 $where[] = "status = ?";
                 $params[] = $status;
             }
-            if ($family_group) {
-                $where[] = "FIND_IN_SET(?, REPLACE(family_group, ', ', ',')) > 0";
-                $params[] = $family_group;
+            // Filter by group. Prefer the real join table; accept either a group
+            // id (?group_id=) or a name (?family_group=, kept for older callers).
+            $groupId = isset($_GET['group_id']) ? (int)$_GET['group_id'] : 0;
+            if (!$groupId && $family_group) {
+                $g = $db->prepare("SELECT id FROM `groups` WHERE name = ?");
+                $g->execute([$family_group]);
+                $groupId = (int)$g->fetchColumn();
+            }
+            if ($groupId) {
+                $where[] = "id IN (SELECT member_id FROM member_groups WHERE group_id = ?)";
+                $params[] = $groupId;
             }
             if ($person_type) {
                 $where[] = "person_type = ?";
@@ -118,9 +139,31 @@ switch ($method) {
             $stmt->execute($params);
             $members = $stmt->fetchAll();
 
-            // Get groups for filter dropdown (from groups table)
-            $groupStmt = $db->query("SELECT DISTINCT name FROM `groups` ORDER BY name");
-            $familyGroups = $groupStmt->fetchAll(PDO::FETCH_COLUMN);
+            // Groups for the filter dropdown and the group picker on the form
+            $groupRows = $db->query("
+                SELECT g.id, g.name, g.category, g.department_id, d.name AS department_name
+                FROM `groups` g
+                LEFT JOIN departments d ON d.id = g.department_id
+                WHERE g.is_active = 1
+                ORDER BY g.sort_order ASC, g.name ASC
+            ")->fetchAll();
+            $familyGroups = array_column($groupRows, 'name');
+
+            // Attach each member's group ids so the form can pre-tick the boxes
+            if ($members) {
+                $ids = array_column($members, 'id');
+                $in  = implode(',', array_fill(0, count($ids), '?'));
+                $mg  = $db->prepare("SELECT member_id, group_id FROM member_groups WHERE member_id IN ($in)");
+                $mg->execute($ids);
+                $map = [];
+                foreach ($mg->fetchAll() as $row) {
+                    $map[(int)$row['member_id']][] = (int)$row['group_id'];
+                }
+                foreach ($members as &$m) {
+                    $m['group_ids'] = $map[(int)$m['id']] ?? [];
+                }
+                unset($m);
+            }
 
             // Get counts by person type
             $typeCounts = $db->query("
@@ -140,6 +183,7 @@ switch ($method) {
                 'limit' => $limit,
                 'pages' => ceil($total / $limit),
                 'family_groups' => $familyGroups,
+                'groups' => $groupRows,
                 'type_counts' => $typeCountMap,
             ]);
         }
@@ -395,9 +439,15 @@ switch ($method) {
         ]);
 
         $newId = $db->lastInsertId();
+
+        if (array_key_exists('group_ids', $data) && is_array($data['group_ids'])) {
+            syncMemberGroups($db, (int)$newId, $data['group_ids']);
+        }
+
         $stmt = $db->prepare("SELECT * FROM members WHERE id = ?");
         $stmt->execute([$newId]);
         $member = $stmt->fetch();
+        $member['group_ids'] = memberGroupIds($db, (int)$newId);
 
         jsonResponse(['member' => $member, 'message' => 'Member added successfully'], 201);
         break;
@@ -440,18 +490,28 @@ switch ($method) {
             }
         }
 
-        if (empty($fields)) {
+        $hasGroups = array_key_exists('group_ids', $data) && is_array($data['group_ids']);
+
+        if (empty($fields) && !$hasGroups) {
             jsonResponse(['error' => 'No fields to update'], 400);
         }
 
-        $params[] = $id;
-        $sql = "UPDATE members SET " . implode(', ', $fields) . " WHERE id = ?";
-        $stmt = $db->prepare($sql);
-        $stmt->execute($params);
+        if ($fields) {
+            $params[] = $id;
+            $sql = "UPDATE members SET " . implode(', ', $fields) . " WHERE id = ?";
+            $stmt = $db->prepare($sql);
+            $stmt->execute($params);
+        }
+
+        // Runs after the UPDATE so it also refreshes the family_group cache
+        if ($hasGroups) {
+            syncMemberGroups($db, (int)$id, $data['group_ids']);
+        }
 
         $stmt = $db->prepare("SELECT * FROM members WHERE id = ?");
         $stmt->execute([$id]);
         $member = $stmt->fetch();
+        $member['group_ids'] = memberGroupIds($db, (int)$id);
 
         jsonResponse(['member' => $member, 'message' => 'Member updated successfully']);
         break;
