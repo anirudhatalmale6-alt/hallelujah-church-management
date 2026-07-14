@@ -69,6 +69,36 @@ if ($method === 'POST' && $action === 'quick_register') {
     $stmt->execute([$firstName, $lastName, $phone, $email]);
     $newId = (int)$db->lastInsertId();
 
+    // The person is standing at the kiosk and ticks this box themselves, so it
+    // is first-party consent - the strongest kind. Record when and how, and
+    // write the same proof line the website sign-up writes.
+    if (!empty($data['sms_consent'])) {
+        $db->prepare("
+            UPDATE members
+            SET sms_consent = 1,
+                sms_consent_at = NOW(),
+                sms_consent_source = 'checkin_kiosk',
+                sms_consent_proof = ?
+            WHERE id = ?
+        ")->execute([$_SERVER['REMOTE_ADDR'] ?? '', $newId]);
+
+        $digits = preg_replace('/\D+/', '', $phone);
+        if (strlen($digits) === 11 && $digits[0] === '1') $digits = substr($digits, 1);
+        $row = [
+            gmdate('Y-m-d H:i:s') . ' UTC',
+            "$firstName $lastName",
+            (strlen($digits) === 10 ? '+1' . $digits : $phone),
+            $_SERVER['REMOTE_ADDR'] ?? '',
+            substr($_SERVER['HTTP_USER_AGENT'] ?? '', 0, 200),
+            'check-in kiosk (new person registration)',
+        ];
+        @file_put_contents(
+            __DIR__ . '/../../../hitc_sms_consent.csv',
+            '"' . implode('","', array_map(fn($v) => str_replace('"', '""', $v), $row)) . "\"\n",
+            FILE_APPEND | LOCK_EX
+        );
+    }
+
     $qrCode = strtoupper(bin2hex(random_bytes(8)));
     $attempts = 0;
     do {

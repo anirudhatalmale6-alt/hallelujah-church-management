@@ -54,7 +54,7 @@ function CheckinKiosk() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [showRegister, setShowRegister] = useState(false);
-  const [regForm, setRegForm] = useState({ first_name: '', last_name: '', phone: '', email: '' });
+  const [regForm, setRegForm] = useState({ first_name: '', last_name: '', phone: '', email: '', sms_consent: 0 });
   const [regPhoto, setRegPhoto] = useState(null);
   const [regLoading, setRegLoading] = useState(false);
   const [useCamera, setUseCamera] = useState(false);
@@ -118,7 +118,7 @@ function CheckinKiosk() {
         try { await members.uploadPhoto(newMemberId, regPhoto); } catch {}
       }
       setResult({ ...res, pin_code: res.pin_code });
-      setRegForm({ first_name: '', last_name: '', phone: '', email: '' });
+      setRegForm({ first_name: '', last_name: '', phone: '', email: '', sms_consent: 0 });
       setRegPhoto(null);
       setShowRegister(false);
     } catch (err) {
@@ -233,6 +233,24 @@ function CheckinKiosk() {
                 placeholder="email@example.com"
               />
             </div>
+            {/* First-party consent: the visitor ticks this themselves at the
+                kiosk. Must never be pre-ticked. */}
+            <label className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer ${regForm.sms_consent ? 'border-green-400 bg-green-50' : 'border-gray-200 bg-gray-50'}`}>
+              <input
+                type="checkbox"
+                className="mt-0.5 h-5 w-5 flex-shrink-0"
+                checked={!!regForm.sms_consent}
+                onChange={e => setRegForm(f => ({ ...f, sms_consent: e.target.checked ? 1 : 0 }))}
+              />
+              <span className="text-sm text-gray-700 leading-snug">
+                <span className="font-semibold text-gray-900">Yes, send me church text messages.</span>{' '}
+                I agree to receive recurring automated text messages (service reminders, event
+                announcements, prayer updates, and church news) from Hallelujah In The City at the
+                number above. Consent is not a condition of membership. Up to 10 messages per month.
+                Message &amp; data rates may apply. Reply STOP to unsubscribe or HELP for help.
+              </span>
+            </label>
+
             <div className="pt-1">
               <PhotoCapture onChange={setRegPhoto} />
             </div>
@@ -340,7 +358,7 @@ function ManualCheckin() {
   const [todayLogs, setTodayLogs] = useState([]);
   const [message, setMessage] = useState('');
   const [showNewPerson, setShowNewPerson] = useState(false);
-  const [newPerson, setNewPerson] = useState({ first_name: '', last_name: '', phone: '', email: '' });
+  const [newPerson, setNewPerson] = useState({ first_name: '', last_name: '', phone: '', email: '', sms_consent: 0 });
   const [newPersonPhoto, setNewPersonPhoto] = useState(null);
   const [regLoading, setRegLoading] = useState(false);
 
@@ -402,7 +420,7 @@ function ManualCheckin() {
         try { await members.uploadPhoto(newMemberId, newPersonPhoto); } catch {}
       }
       setMessage(`${newPerson.first_name} ${newPerson.last_name} registered & checked in!`);
-      setNewPerson({ first_name: '', last_name: '', phone: '', email: '' });
+      setNewPerson({ first_name: '', last_name: '', phone: '', email: '', sms_consent: 0 });
       setNewPersonPhoto(null);
       setShowNewPerson(false);
       loadToday();
@@ -453,6 +471,24 @@ function ManualCheckin() {
             <input type="tel" placeholder="Phone Number *" className="input" required value={newPerson.phone} onChange={e => setNewPerson(p => ({ ...p, phone: e.target.value }))} />
             <input type="email" placeholder="Email (optional)" className="input" value={newPerson.email} onChange={e => setNewPerson(p => ({ ...p, email: e.target.value }))} />
           </div>
+          {/* The person is standing here and ticks this themselves - that is
+              valid consent. Never pre-tick it. */}
+          <label className={`mt-3 flex items-start gap-3 p-3 rounded-lg border cursor-pointer ${newPerson.sms_consent ? 'border-green-400 bg-white' : 'border-gray-200 bg-white'}`}>
+            <input
+              type="checkbox"
+              className="mt-0.5 h-5 w-5 flex-shrink-0"
+              checked={!!newPerson.sms_consent}
+              onChange={e => setNewPerson(p => ({ ...p, sms_consent: e.target.checked ? 1 : 0 }))}
+            />
+            <span className="text-sm text-gray-700 leading-snug">
+              <span className="font-semibold text-gray-900">Yes, send me church text messages.</span>{' '}
+              I agree to receive recurring automated text messages (service reminders, event
+              announcements, prayer updates, and church news) from Hallelujah In The City at the
+              number above. Consent is not a condition of membership. Up to 10 messages per month.
+              Message &amp; data rates may apply. Reply STOP to unsubscribe or HELP for help.
+            </span>
+          </label>
+
           <div className="mt-3">
             <PhotoCapture onChange={setNewPersonPhoto} />
           </div>
