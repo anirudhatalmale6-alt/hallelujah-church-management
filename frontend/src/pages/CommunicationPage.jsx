@@ -82,6 +82,7 @@ function ComposeTab({ setError, setMessage }) {
   const [sending, setSending] = useState(false);
   const [memberSearch, setMemberSearch] = useState('');
   const [configStatus, setConfigStatus] = useState(null);
+  const [consentStats, setConsentStats] = useState(null);
   const [directContacts, setDirectContacts] = useState([]);
   const [directInput, setDirectInput] = useState('');
   const [saveToContacts, setSaveToContacts] = useState(false);
@@ -95,6 +96,7 @@ function ComposeTab({ setError, setMessage }) {
     membersApi.list({ limit: 9999, sort: 'last_name' }).then(d => setMembersList(d.members || []));
     groupsApi.list().then(d => setGroupsList(d.groups || [])).catch(() => {});
     msgApi.config().then(d => setConfigStatus(d)).catch(() => {});
+    msgApi.consentStats().then(d => setConsentStats(d)).catch(() => {});
     loadPersonTypes().then(setPersonTypes).catch(() => {});
   }, []);
 
@@ -186,6 +188,30 @@ function ComposeTab({ setError, setMessage }) {
         <div className="mb-4 p-4 bg-amber-50 border border-amber-200 rounded-xl">
           <p className="text-amber-800 font-medium">Email not configured yet</p>
           <p className="text-amber-600 text-sm">Go to Settings tab to add your SendGrid API key before sending emails.</p>
+        </div>
+      )}
+
+      {/* Texting someone who never opted in is illegal and gets the church's
+          number blocked by the carriers, so show up front who is reachable. */}
+      {(messageType === 'sms' || messageType === 'both') && consentStats && (
+        <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-xl">
+          <p className="text-blue-900 font-medium">
+            {consentStats.consented} of {consentStats.with_phone} people with a phone number can receive texts
+          </p>
+          {consentStats.not_consented > 0 ? (
+            <p className="text-blue-700 text-sm mt-1">
+              The other {consentStats.not_consented} have not agreed to receive text messages yet, so they
+              will be skipped automatically. Texting them would be against the law and can get the
+              church's number blocked. Invite them to sign up at{' '}
+              <a className="underline font-medium" href={consentStats.optin_url} target="_blank" rel="noreferrer">
+                the text sign-up page
+              </a>
+              , or tick the consent box on their profile once they sign a consent card. Everyone can
+              still be reached by <span className="font-medium">Email</span>.
+            </p>
+          ) : (
+            <p className="text-blue-700 text-sm mt-1">Everyone with a phone number has agreed to receive texts.</p>
+          )}
         </div>
       )}
 
@@ -412,13 +438,19 @@ function ComposeTab({ setError, setMessage }) {
             <div className="max-h-96 overflow-y-auto space-y-1">
               {filteredMembers.slice(0, 100).map(m => {
                 const selected = recipientIds.includes(m.id);
-                const hasContact = messageType === 'sms' ? m.phone : m.email;
+                // For SMS a phone number alone isn't enough - they must have consented.
+                const smsReady = m.phone && m.sms_consent;
+                const hasContact = messageType === 'sms' ? smsReady : m.email;
                 return (
                   <label key={m.id} className={`flex items-center gap-2 p-2 rounded cursor-pointer text-sm ${selected ? 'bg-primary-50' : 'hover:bg-gray-50'} ${!hasContact ? 'opacity-40' : ''}`}>
                     <input type="checkbox" checked={selected} onChange={() => toggleRecipient(m.id)} disabled={!hasContact} className="rounded" />
                     <div className="flex-1 min-w-0">
                       <div className="font-medium text-gray-900 truncate">{m.first_name} {m.last_name}</div>
-                      <div className="text-xs text-gray-400 truncate">{messageType === 'sms' ? (m.phone || 'No phone') : (m.email || 'No email')}</div>
+                      <div className="text-xs text-gray-400 truncate">
+                        {messageType === 'sms'
+                          ? (!m.phone ? 'No phone' : (m.sms_consent ? m.phone : `${m.phone} - no text consent`))
+                          : (m.email || 'No email')}
+                      </div>
                     </div>
                   </label>
                 );

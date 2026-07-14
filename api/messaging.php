@@ -132,6 +132,33 @@ switch ($method) {
             jsonResponse(['message' => $message, 'recipients' => $recipients->fetchAll()]);
         }
 
+        // How many people can we legally text? Drives the warning on the
+        // Communication page so a send never silently reaches fewer people
+        // than expected.
+        if ($action === 'consent_stats') {
+            $row = $db->query("
+                SELECT
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN phone IS NOT NULL AND phone <> '' THEN 1 ELSE 0 END) AS with_phone,
+                    SUM(CASE WHEN phone IS NOT NULL AND phone <> '' AND sms_consent = 1 THEN 1 ELSE 0 END) AS consented,
+                    SUM(CASE WHEN sms_opted_out_at IS NOT NULL THEN 1 ELSE 0 END) AS opted_out
+                FROM members
+                WHERE status = 'active'
+            ")->fetch();
+
+            $withPhone = (int)($row['with_phone'] ?? 0);
+            $consented = (int)($row['consented'] ?? 0);
+
+            jsonResponse([
+                'total'         => (int)($row['total'] ?? 0),
+                'with_phone'    => $withPhone,
+                'consented'     => $consented,
+                'not_consented' => max(0, $withPhone - $consented),
+                'opted_out'     => (int)($row['opted_out'] ?? 0),
+                'optin_url'     => 'https://www.hallelujahinthecity.org/sms-optin.htm',
+            ]);
+        }
+
         // Get messaging config status
         if ($action === 'config') {
             $settings = getMessagingSettings($db);
@@ -212,26 +239,43 @@ switch ($method) {
             $recipients = [];
             if ($recipientType === 'individual' && !empty($recipientIds)) {
                 $placeholders = implode(',', array_fill(0, count($recipientIds), '?'));
-                $stmt = $db->prepare("SELECT id, first_name, last_name, email, phone FROM members WHERE id IN ($placeholders)");
+                $stmt = $db->prepare("SELECT id, first_name, last_name, email, phone, sms_consent FROM members WHERE id IN ($placeholders)");
                 $stmt->execute($recipientIds);
                 $recipients = $stmt->fetchAll();
             } elseif ($recipientType === 'direct') {
                 // Direct email/phone entry
                 $directContacts = $data['direct_contacts'] ?? [];
+                // A hand-typed number still needs consent on file, so match it
+                // against People (last 10 digits) and carry that person's flag.
+                $consentLookup = $db->prepare("
+                    SELECT sms_consent FROM members
+                    WHERE RIGHT(REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9]', ''), 10) = ?
+                    ORDER BY sms_consent DESC LIMIT 1
+                ");
                 foreach ($directContacts as $dc) {
+                    $dcPhone = $dc['phone'] ?? null;
+                    $dcConsent = 0;
+                    if ($dcPhone) {
+                        $last10 = substr(preg_replace('/\D+/', '', $dcPhone), -10);
+                        if (strlen($last10) === 10) {
+                            $consentLookup->execute([$last10]);
+                            $dcConsent = (int)$consentLookup->fetchColumn();
+                        }
+                    }
                     $recipients[] = [
                         'id' => null,
                         'first_name' => $dc['name'] ?? 'Unknown',
                         'last_name' => '',
                         'email' => $dc['email'] ?? null,
-                        'phone' => $dc['phone'] ?? null,
+                        'phone' => $dcPhone,
+                        'sms_consent' => $dcConsent,
                     ];
                 }
             } elseif ($recipientType === 'group' && !empty($data['group_name'])) {
                 // Resolve through member_groups rather than string-matching the
                 // cached name list, so a group name can never miss a recipient.
                 $stmt = $db->prepare("
-                    SELECT m.id, m.first_name, m.last_name, m.email, m.phone
+                    SELECT m.id, m.first_name, m.last_name, m.email, m.phone, m.sms_consent
                     FROM member_groups mg
                     JOIN members m ON m.id = mg.member_id
                     JOIN `groups` g ON g.id = mg.group_id
@@ -240,22 +284,30 @@ switch ($method) {
                 $stmt->execute([$data['group_name']]);
                 $recipients = $stmt->fetchAll();
             } elseif ($recipientType === 'person_type' && !empty($data['person_type'])) {
-                $stmt = $db->prepare("SELECT id, first_name, last_name, email, phone FROM members WHERE person_type = ? AND status = 'active'");
+                $stmt = $db->prepare("SELECT id, first_name, last_name, email, phone, sms_consent FROM members WHERE person_type = ? AND status = 'active'");
                 $stmt->execute([$data['person_type']]);
                 $recipients = $stmt->fetchAll();
             } elseif ($recipientType === 'all') {
-                $recipients = $db->query("SELECT id, first_name, last_name, email, phone FROM members WHERE status = 'active'")->fetchAll();
+                $recipients = $db->query("SELECT id, first_name, last_name, email, phone, sms_consent FROM members WHERE status = 'active'")->fetchAll();
             }
 
             // Insert recipients
             $recpStmt = $db->prepare("INSERT INTO message_recipients (message_id, member_id, email, phone, name, channel) VALUES (?, ?, ?, ?, ?, ?)");
+            $smsSkipped = [];
             foreach ($recipients as $r) {
                 $name = trim($r['first_name'] . ' ' . $r['last_name']);
                 if ($messageType === 'email' || $messageType === 'both') {
                     if ($r['email']) $recpStmt->execute([$messageId, $r['id'], $r['email'], null, $name, 'email']);
                 }
+                // SMS ONLY to people who gave consent. Texting someone who never
+                // opted in is illegal (TCPA) and gets the number blocked by the
+                // carriers, so we skip them here rather than trusting the caller.
                 if ($messageType === 'sms' || $messageType === 'both') {
-                    if ($r['phone']) $recpStmt->execute([$messageId, $r['id'], null, $r['phone'], $name, 'sms']);
+                    if ($r['phone'] && !empty($r['sms_consent'])) {
+                        $recpStmt->execute([$messageId, $r['id'], null, $r['phone'], $name, 'sms']);
+                    } elseif ($r['phone']) {
+                        $smsSkipped[] = $name;
+                    }
                 }
             }
 
@@ -312,9 +364,24 @@ switch ($method) {
                 $db->prepare("UPDATE messages SET status = 'sent', sent_count = ?, failed_count = ?, sent_at = NOW() WHERE id = ?")
                     ->execute([$sentCount, $failedCount, $messageId]);
 
-                jsonResponse(['message' => "Sent to $sentCount recipients" . ($failedCount > 0 ? " ($failedCount failed)" : ''), 'id' => $messageId, 'sent' => $sentCount, 'failed' => $failedCount], 201);
+                $skippedNote = $smsSkipped
+                    ? ' - ' . count($smsSkipped) . ' skipped for SMS (no text consent on file)'
+                    : '';
+                jsonResponse([
+                    'message' => "Sent to $sentCount recipients" . ($failedCount > 0 ? " ($failedCount failed)" : '') . $skippedNote,
+                    'id' => $messageId,
+                    'sent' => $sentCount,
+                    'failed' => $failedCount,
+                    'sms_skipped' => count($smsSkipped),
+                    'sms_skipped_names' => array_slice($smsSkipped, 0, 50),
+                ], 201);
             } else {
-                jsonResponse(['message' => 'Message scheduled', 'id' => $messageId], 201);
+                jsonResponse([
+                    'message' => 'Message scheduled',
+                    'id' => $messageId,
+                    'sms_skipped' => count($smsSkipped),
+                    'sms_skipped_names' => array_slice($smsSkipped, 0, 50),
+                ], 201);
             }
         }
 

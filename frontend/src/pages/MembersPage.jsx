@@ -13,6 +13,7 @@ import {
 
 const emptyMember = {
   first_name: '', last_name: '', email: '', phone: '',
+  sms_consent: 0, sms_consent_source: 'paper_form',
   address: '', city: '', state: '', zip: '',
   gender: '', date_of_birth: '', group_ids: [],
   household_id: '', household_role: '',
@@ -132,6 +133,8 @@ export default function MembersPage() {
       last_name: member.last_name || '',
       email: member.email || '',
       phone: member.phone || '',
+      sms_consent: member.sms_consent ? 1 : 0,
+      sms_consent_source: member.sms_consent_source || 'paper_form',
       address: member.address || '',
       city: member.city || '',
       state: member.state || '',
@@ -460,6 +463,54 @@ export default function MembersPage() {
               <label className="label">Phone</label>
               <input className="input" value={form.phone} onChange={e => updateField('phone', e.target.value)} />
             </div>
+
+            {/* Text-message consent. We may only SMS people who agreed, and we
+                have to be able to prove when and how - so tick this only from a
+                signed card or the website sign-up. */}
+            <div className="sm:col-span-2">
+              <div className={`rounded-lg border p-3 ${form.sms_consent ? 'border-green-300 bg-green-50' : 'border-gray-200 bg-gray-50'}`}>
+                <label className="flex items-start gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="mt-1"
+                    checked={!!form.sms_consent}
+                    onChange={e => updateField('sms_consent', e.target.checked ? 1 : 0)}
+                  />
+                  <span className="text-sm">
+                    <span className="font-semibold text-gray-800">
+                      This person agreed to receive text messages
+                    </span>
+                    <span className="block text-xs text-gray-600 mt-0.5">
+                      Only tick this if they signed the consent card or signed up on the website.
+                      Without it they will not receive any SMS - the law and the phone carriers
+                      require proof that they agreed.
+                    </span>
+                  </span>
+                </label>
+
+                {form.sms_consent ? (
+                  <div className="mt-2 pl-6">
+                    <label className="label text-xs">How did they agree?</label>
+                    <select
+                      className="input py-1 text-sm"
+                      value={form.sms_consent_source || 'paper_form'}
+                      onChange={e => updateField('sms_consent_source', e.target.value)}
+                    >
+                      <option value="paper_form">Signed a paper consent card</option>
+                      <option value="web_form">Signed up on the website</option>
+                      <option value="verbal">Told us in person (weakest proof)</option>
+                    </select>
+                    {editMember?.sms_consent_at && (
+                      <div className="text-xs text-gray-500 mt-1">
+                        Recorded {String(editMember.sms_consent_at).slice(0, 10)}
+                        {editMember.sms_consent_source ? ` - ${editMember.sms_consent_source.replace('_', ' ')}` : ''}
+                      </div>
+                    )}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+
             <div className="sm:col-span-2">
               <label className="label">Address</label>
               <input className="input" value={form.address} onChange={e => updateField('address', e.target.value)} />

@@ -380,6 +380,7 @@ export const messaging = {
   send: (data) => request('messaging.php', { method: 'POST', body: data, params: { action: 'send' } }),
   delete: (id) => request('messaging.php', { method: 'DELETE', params: { id } }),
   config: () => request('messaging.php', { params: { action: 'config' } }),
+  consentStats: () => request('messaging.php', { params: { action: 'consent_stats' } }),
   saveConfig: (data) => request('messaging.php', { method: 'POST', body: data, params: { action: 'config' } }),
   testEmail: (email) => request('messaging.php', { method: 'POST', body: { email }, params: { action: 'test_email' } }),
 };

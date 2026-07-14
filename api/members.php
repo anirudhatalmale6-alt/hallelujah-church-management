@@ -440,6 +440,25 @@ switch ($method) {
 
         $newId = $db->lastInsertId();
 
+        // Consent isn't part of the INSERT column list, so stamp it here -
+        // otherwise ticking the box on a brand-new person would be dropped.
+        if (!empty($data['sms_consent'])) {
+            $db->prepare("
+                UPDATE members
+                SET sms_consent = 1,
+                    sms_consent_at = NOW(),
+                    sms_consent_source = ?,
+                    sms_consent_proof = ?,
+                    sms_consent_by = ?
+                WHERE id = ?
+            ")->execute([
+                $data['sms_consent_source'] ?? 'paper_form',
+                $data['sms_consent_proof'] ?? null,
+                $currentUser['user_id'],
+                $newId,
+            ]);
+        }
+
         if (array_key_exists('group_ids', $data) && is_array($data['group_ids'])) {
             syncMemberGroups($db, (int)$newId, $data['group_ids']);
         }
@@ -466,6 +485,42 @@ switch ($method) {
 
         $data = getRequestBody();
 
+        // SMS consent is not a plain field: turning it ON has to stamp WHEN it
+        // was given, HOW, and WHO recorded it, because that record is the proof
+        // the carriers can demand. Turning it off records the opt-out instead.
+        if (array_key_exists('sms_consent', $data)) {
+            $wants = !empty($data['sms_consent']) ? 1 : 0;
+            $had = (int)$db->query("SELECT sms_consent FROM members WHERE id = " . (int)$id)->fetchColumn();
+
+            if ($wants === 1 && $had === 0) {
+                $stmt = $db->prepare("
+                    UPDATE members
+                    SET sms_consent = 1,
+                        sms_consent_at = NOW(),
+                        sms_consent_source = ?,
+                        sms_consent_proof = ?,
+                        sms_consent_by = ?,
+                        sms_opted_out_at = NULL
+                    WHERE id = ?
+                ");
+                $stmt->execute([
+                    $data['sms_consent_source'] ?? 'paper_form',
+                    $data['sms_consent_proof'] ?? null,
+                    $currentUser['user_id'],
+                    $id,
+                ]);
+            } elseif ($wants === 0 && $had === 1) {
+                $db->prepare("
+                    UPDATE members
+                    SET sms_consent = 0, sms_opted_out_at = NOW()
+                    WHERE id = ?
+                ")->execute([$id]);
+            }
+            unset($data['sms_consent'], $data['sms_consent_source'], $data['sms_consent_proof']);
+            $consentTouched = true;
+        }
+
+        $consentTouched = $consentTouched ?? false;
         $fields = [];
         $params = [];
         $allowedFields = [
@@ -492,7 +547,7 @@ switch ($method) {
 
         $hasGroups = array_key_exists('group_ids', $data) && is_array($data['group_ids']);
 
-        if (empty($fields) && !$hasGroups) {
+        if (empty($fields) && !$hasGroups && !$consentTouched) {
             jsonResponse(['error' => 'No fields to update'], 400);
         }
 
