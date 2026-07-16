@@ -9,6 +9,65 @@ $db = getDB();
 
 $isAdmin = in_array($currentUser['role'], ['pastor', 'admin']);
 
+/**
+ * When a recurring follow-up is completed, create its next occurrence.
+ * Returns the new follow-up id, or null if it isn't recurring / has no due date.
+ */
+function spawnNextRecurrence(PDO $db, int $id): ?int {
+    $stmt = $db->prepare("SELECT * FROM followups WHERE id = ?");
+    $stmt->execute([$id]);
+    $fu = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!$fu) return null;
+
+    $recurrence = $fu['recurrence'] ?? 'none';
+    $intervals = [
+        'daily'     => '+1 day',
+        'weekly'    => '+1 week',
+        'biweekly'  => '+2 weeks',
+        'monthly'   => '+1 month',
+        'quarterly' => '+3 months',
+        'yearly'    => '+1 year',
+    ];
+    if (!isset($intervals[$recurrence]) || empty($fu['due_date'])) return null;
+
+    // Advance from the current due date, then keep stepping until it lands in
+    // the future so a task finished late doesn't reappear already overdue.
+    try {
+        $next = new DateTime($fu['due_date']);
+    } catch (Exception $e) {
+        return null;
+    }
+    $today = new DateTime('today');
+    do {
+        $next->modify($intervals[$recurrence]);
+    } while ($next <= $today);
+    $nextDue = $next->format('Y-m-d');
+
+    $ins = $db->prepare("
+        INSERT INTO followups
+            (member_id, subject, assigned_to, type, custom_type, status, priority, notes, due_date,
+             can_edit, remind_email, remind_sms, reminder_days_before, recurrence, recurrence_parent_id)
+        VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ");
+    $ins->execute([
+        $fu['member_id'],
+        $fu['subject'],
+        $fu['assigned_to'],
+        $fu['type'],
+        $fu['custom_type'],
+        $fu['priority'],
+        $fu['notes'],
+        $nextDue,
+        $fu['can_edit'],
+        $fu['remind_email'],
+        $fu['remind_sms'],
+        $fu['reminder_days_before'],
+        $recurrence,
+        $id,
+    ]);
+    return (int)$db->lastInsertId();
+}
+
 switch ($method) {
     case 'GET':
         if ($action === 'stats') {
@@ -141,7 +200,11 @@ switch ($method) {
 
             $db->prepare("UPDATE followups SET status = 'completed', approved_by = ?, approved_at = NOW() WHERE id = ? AND status = 'pending_approval'")
                 ->execute([$currentUser['user_id'], $id]);
-            jsonResponse(['message' => 'Follow-up approved']);
+            $nextId = spawnNextRecurrence($db, $id);
+            jsonResponse([
+                'message' => $nextId ? 'Follow-up approved. Next occurrence scheduled.' : 'Follow-up approved',
+                'next_followup_id' => $nextId,
+            ]);
 
         } elseif ($action === 'reject_approval') {
             if (!$isAdmin) jsonResponse(['error' => 'Only administrators can reject approvals'], 403);
@@ -192,9 +255,11 @@ switch ($method) {
             $remindEmail = !empty($data['remind_email']) ? 1 : 0;
             $remindSms = !empty($data['remind_sms']) ? 1 : 0;
             $reminderDays = isset($data['reminder_days_before']) ? max(0, min(60, (int)$data['reminder_days_before'])) : 7;
+            $validRecurrence = ['none', 'daily', 'weekly', 'biweekly', 'monthly', 'quarterly', 'yearly'];
+            $recurrence = in_array($data['recurrence'] ?? 'none', $validRecurrence, true) ? $data['recurrence'] : 'none';
             $stmt = $db->prepare("
-                INSERT INTO followups (member_id, subject, assigned_to, type, custom_type, status, priority, notes, due_date, can_edit, remind_email, remind_sms, reminder_days_before)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO followups (member_id, subject, assigned_to, type, custom_type, status, priority, notes, due_date, can_edit, remind_email, remind_sms, reminder_days_before, recurrence)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ");
             $stmt->execute([
                 $memberId,
@@ -210,6 +275,7 @@ switch ($method) {
                 $remindEmail,
                 $remindSms,
                 $reminderDays,
+                $recurrence,
             ]);
 
             jsonResponse(['message' => 'Follow-up created', 'id' => (int)$db->lastInsertId()], 201);
@@ -251,7 +317,7 @@ switch ($method) {
         $fields = [];
         $params = [];
 
-        foreach (['subject', 'assigned_to', 'type', 'custom_type', 'status', 'priority', 'notes', 'due_date', 'can_edit', 'remind_email', 'remind_sms', 'reminder_days_before'] as $field) {
+        foreach (['subject', 'assigned_to', 'type', 'custom_type', 'status', 'priority', 'notes', 'due_date', 'can_edit', 'remind_email', 'remind_sms', 'reminder_days_before', 'recurrence'] as $field) {
             if (array_key_exists($field, $data)) {
                 if ($field === 'remind_email' || $field === 'remind_sms') {
                     $fields[] = "$field = ?";
@@ -285,7 +351,15 @@ switch ($method) {
         $stmt = $db->prepare("UPDATE followups SET " . implode(', ', $fields) . " WHERE id = ?");
         $stmt->execute($params);
 
-        jsonResponse(['message' => 'Follow-up updated']);
+        // If an admin just completed it directly, schedule the next occurrence.
+        $nextId = null;
+        if (($data['status'] ?? '') === 'completed' && $isAdmin) {
+            $nextId = spawnNextRecurrence($db, $id);
+        }
+        jsonResponse([
+            'message' => $nextId ? 'Follow-up updated. Next occurrence scheduled.' : 'Follow-up updated',
+            'next_followup_id' => $nextId,
+        ]);
         break;
 
     case 'DELETE':

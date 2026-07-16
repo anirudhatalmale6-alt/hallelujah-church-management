@@ -25,6 +25,7 @@ const TYPE_COLORS = {
 };
 
 const STATUS_LABELS = { pending: 'Pending', contacted: 'Contacted', pending_approval: 'Pending Approval', completed: 'Completed', cancelled: 'Cancelled' };
+const RECURRENCE_LABELS = { daily: 'Daily', weekly: 'Weekly', biweekly: 'Every 2 weeks', monthly: 'Monthly', quarterly: 'Every 3 months', yearly: 'Yearly' };
 const STATUS_COLORS = {
   pending: 'bg-yellow-100 text-yellow-700',
   contacted: 'bg-blue-100 text-blue-700',
@@ -60,7 +61,7 @@ export default function FollowupPage() {
   const [form, setForm] = useState({
     subject: '', member_id: '', member_name: '', type: 'other', custom_type: '', priority: 'medium',
     assigned_to: '', assigned_to_list: [], notes: '', due_date: '', status: 'pending', can_edit: false,
-    remind_email: false, remind_sms: false, reminder_days_before: 7,
+    remind_email: false, remind_sms: false, reminder_days_before: 7, recurrence: 'none',
   });
 
   const effectiveAdmin = isAdmin || serverIsAdmin;
@@ -133,6 +134,7 @@ export default function FollowupPage() {
           remind_email: form.remind_email ? 1 : 0,
           remind_sms: form.remind_sms ? 1 : 0,
           reminder_days_before: parseInt(form.reminder_days_before) || 7,
+          recurrence: form.recurrence || 'none',
         });
       } else {
         const assignees = form.assigned_to_list.length > 0 ? form.assigned_to_list : [form.assigned_to || null];
@@ -146,6 +148,7 @@ export default function FollowupPage() {
             remind_email: form.remind_email ? 1 : 0,
             remind_sms: form.remind_sms ? 1 : 0,
             reminder_days_before: parseInt(form.reminder_days_before) || 7,
+            recurrence: form.recurrence || 'none',
           });
         }
       }
@@ -159,7 +162,7 @@ export default function FollowupPage() {
   };
 
   const resetForm = () => {
-    setForm({ subject: '', member_id: '', member_name: '', type: 'other', custom_type: '', priority: 'medium', assigned_to: '', assigned_to_list: [], notes: '', due_date: '', status: 'pending', can_edit: false, remind_email: false, remind_sms: false, reminder_days_before: 7 });
+    setForm({ subject: '', member_id: '', member_name: '', type: 'other', custom_type: '', priority: 'medium', assigned_to: '', assigned_to_list: [], notes: '', due_date: '', status: 'pending', can_edit: false, remind_email: false, remind_sms: false, reminder_days_before: 7, recurrence: 'none' });
     setMemberSearch('');
     setMemberResults([]);
   };
@@ -174,6 +177,7 @@ export default function FollowupPage() {
       can_edit: !!f.can_edit,
       remind_email: !!Number(f.remind_email), remind_sms: !!Number(f.remind_sms),
       reminder_days_before: f.reminder_days_before ?? 7,
+      recurrence: f.recurrence || 'none',
     });
     setEditing(f.id);
     setShowForm(true);
@@ -417,6 +421,26 @@ export default function FollowupPage() {
               </div>
 
               <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Repeat</label>
+                <select value={form.recurrence} onChange={e => setForm(f => ({ ...f, recurrence: e.target.value }))} className="input">
+                  <option value="none">Does not repeat</option>
+                  <option value="daily">Daily</option>
+                  <option value="weekly">Weekly</option>
+                  <option value="biweekly">Every 2 weeks</option>
+                  <option value="monthly">Monthly</option>
+                  <option value="quarterly">Every 3 months</option>
+                  <option value="yearly">Yearly</option>
+                </select>
+                {form.recurrence !== 'none' && (
+                  <p className="text-xs text-gray-500 mt-1">
+                    {form.due_date
+                      ? 'When this follow-up is completed, the next one is created automatically on the next date.'
+                      : 'Set a due date so the next occurrence can be scheduled.'}
+                  </p>
+                )}
+              </div>
+
+              <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
                 <textarea value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
                   className="input" rows={3} placeholder="Add notes about this follow-up..." />
@@ -506,6 +530,11 @@ export default function FollowupPage() {
                     {isOverdue(f) && (
                       <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-red-100 text-red-700">
                         OVERDUE
+                      </span>
+                    )}
+                    {f.recurrence && f.recurrence !== 'none' && (
+                      <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-indigo-100 text-indigo-700 inline-flex items-center gap-1" title="Repeats automatically when completed">
+                        <RefreshCw size={10} /> {RECURRENCE_LABELS[f.recurrence] || 'Recurring'}
                       </span>
                     )}
                     {f.can_edit ? (

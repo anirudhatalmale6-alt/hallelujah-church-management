@@ -79,6 +79,148 @@ function generatePDF(title, headers, rows, filename, summaryLines) {
   doc.save(filename);
 }
 
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+const genDate = () => new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+
+// Build a PDF from a selectable set of columns. Each column is
+// { key, label, value: (row) => string|number, align?: 'right' }.
+function exportColumnsPDF({ title, subtitle, columns, rows, filename, summaryLines }) {
+  const doc = new jsPDF(columns.length > 5 ? { orientation: 'landscape' } : {});
+  doc.setFontSize(16);
+  doc.text('Hallelujah In The City', 14, 15);
+  doc.setFontSize(12);
+  doc.text(title, 14, 23);
+  doc.setFontSize(9);
+  doc.setTextColor(100);
+  doc.text(`${subtitle ? subtitle + '  |  ' : ''}Generated: ${genDate()}`, 14, 29);
+  doc.setTextColor(0);
+
+  let startY = 35;
+  if (summaryLines && summaryLines.length) {
+    doc.setFontSize(10);
+    summaryLines.forEach((line, i) => doc.text(line, 14, startY + i * 6));
+    startY += summaryLines.length * 6 + 4;
+  }
+
+  const columnStyles = {};
+  columns.forEach((c, i) => { if (c.align === 'right') columnStyles[i] = { halign: 'right' }; });
+
+  autoTable(doc, {
+    head: [columns.map(c => c.label)],
+    body: rows.map(r => columns.map(c => c.value(r))),
+    startY,
+    styles: { fontSize: 8, cellPadding: 2.5 },
+    headStyles: { fillColor: [51, 65, 85], textColor: 255 },
+    alternateRowStyles: { fillColor: [249, 250, 251] },
+    columnStyles,
+  });
+  doc.save(filename);
+}
+
+// Open a print-ready window for the same selectable columns.
+function printColumnsTable({ title, subtitle, columns, rows, summaryLines }) {
+  const head = columns.map(c => `<th style="text-align:${c.align || 'left'}">${escapeHtml(c.label)}</th>`).join('');
+  const body = rows.map(r =>
+    `<tr>${columns.map(c => `<td style="text-align:${c.align || 'left'}">${escapeHtml(c.value(r))}</td>`).join('')}</tr>`
+  ).join('');
+  const summary = (summaryLines || []).map(l => `<div class="sum">${escapeHtml(l)}</div>`).join('');
+  const win = window.open('', '_blank');
+  if (!win) { alert('Please allow pop-ups to print.'); return; }
+  win.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title>
+    <style>
+      *{box-sizing:border-box}
+      body{font-family:Arial,Helvetica,sans-serif;color:#111;margin:24px;}
+      h1{font-size:18px;margin:0}
+      h2{font-size:14px;margin:2px 0 2px;font-weight:600}
+      .meta{font-size:11px;color:#666;margin-bottom:12px}
+      .sum{font-size:12px;margin:2px 0}
+      table{width:100%;border-collapse:collapse;margin-top:10px;font-size:11px}
+      th,td{border:1px solid #d1d5db;padding:5px 7px}
+      thead th{background:#334155;color:#fff;text-align:left}
+      tbody tr:nth-child(even){background:#f9fafb}
+      @media print{body{margin:10mm}}
+    </style></head><body>
+    <h1>Hallelujah In The City</h1>
+    <h2>${escapeHtml(title)}</h2>
+    <div class="meta">${subtitle ? escapeHtml(subtitle) + ' &middot; ' : ''}Generated: ${escapeHtml(genDate())}</div>
+    ${summary}
+    <table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>
+    <script>window.onload=function(){setTimeout(function(){window.print();},250);};<\/script>
+    </body></html>`);
+  win.document.close();
+  win.focus();
+}
+
+/**
+ * PDF / Print controls with a column picker. Fetches ALL matching rows
+ * (not just the current page) via fetchRows() before exporting.
+ */
+function ExportControls({ title, subtitle, columns, defaultKeys, fetchRows, filenameBase, summaryFor }) {
+  const [open, setOpen] = useState(false);
+  const [selected, setSelected] = useState(() => new Set(defaultKeys || columns.map(c => c.key)));
+  const [busy, setBusy] = useState(false);
+
+  const toggle = (key) => setSelected(prev => {
+    const next = new Set(prev);
+    next.has(key) ? next.delete(key) : next.add(key);
+    return next;
+  });
+
+  const run = async (mode) => {
+    const chosen = columns.filter(c => selected.has(c.key));
+    if (chosen.length === 0) return;
+    setBusy(true);
+    try {
+      const rows = await fetchRows();
+      const summaryLines = summaryFor ? summaryFor(rows) : null;
+      const stamp = new Date().toISOString().split('T')[0];
+      if (mode === 'pdf') {
+        exportColumnsPDF({ title, subtitle, columns: chosen, rows, filename: `${filenameBase}-${stamp}.pdf`, summaryLines });
+      } else {
+        printColumnsTable({ title, subtitle, columns: chosen, rows, summaryLines });
+      }
+      setOpen(false);
+    } catch (e) {
+      alert(e.message || 'Export failed');
+    }
+    setBusy(false);
+  };
+
+  return (
+    <div className="relative flex items-center gap-2">
+      <div className="relative">
+        <button type="button" onClick={() => setOpen(o => !o)} className="btn-secondary" title="Choose columns">
+          <Settings size={15} /> Columns <ChevronDown size={14} />
+        </button>
+        {open && (
+          <>
+            <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+            <div className="absolute right-0 mt-1 z-20 bg-white border border-gray-200 rounded-lg shadow-lg p-2 w-56">
+              <div className="text-xs font-semibold text-gray-500 px-2 py-1">Show columns</div>
+              {columns.map(c => (
+                <label key={c.key} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-gray-50 cursor-pointer text-sm">
+                  <input type="checkbox" checked={selected.has(c.key)} onChange={() => toggle(c.key)} className="h-4 w-4" />
+                  <span>{c.label}</span>
+                </label>
+              ))}
+              {selected.size === 0 && <div className="text-xs text-red-500 px-2 py-1">Pick at least one column</div>}
+            </div>
+          </>
+        )}
+      </div>
+      <button type="button" onClick={() => run('pdf')} disabled={busy || selected.size === 0} className="btn-secondary" title="Download PDF">
+        <FileText size={15} /> {busy ? '...' : 'PDF'}
+      </button>
+      <button type="button" onClick={() => run('print')} disabled={busy || selected.size === 0} className="btn-secondary" title="Print">
+        <Printer size={15} /> Print
+      </button>
+    </div>
+  );
+}
+
 export default function FinancePage() {
   const { isAdmin, hasPermission, hasFinanceSection } = useAuth();
   const [tab, setTab] = useState(() => new URLSearchParams(window.location.search).get('tab') || 'record');
@@ -1391,9 +1533,51 @@ function HistoryTab({ setError, setMessage, isAdmin }) {
     'Loan Payment': 'bg-amber-100 text-amber-700',
   };
 
+  const historyColumns = [
+    { key: 'date', label: 'Date', value: e => formatDate(e.date) },
+    { key: 'type', label: 'Type', value: e => e.type || '' },
+    { key: 'description', label: 'Description', value: e => e.description || '' },
+    { key: 'amount', label: 'Amount', align: 'right', value: e => formatCurrency(e.amount) },
+    { key: 'method', label: 'Method', value: e => paymentMethodLabel[e.method] || e.method || '-' },
+    { key: 'account', label: 'Account', value: e => e.account || '-' },
+    { key: 'status', label: 'Status', value: e => e.source === 'expense' ? (e.status === 'approved' ? 'Approved' : 'Pending') : '-' },
+    { key: 'recorded_by', label: 'Recorded by', value: e => e.recorded_by || '-' },
+  ];
+
+  const fetchAllHistory = async () => {
+    const params = { all: 1 };
+    if (typeFilter) params.type = typeFilter;
+    if (searchFilter) params.search = searchFilter;
+    if (dateFrom) params.date_from = dateFrom;
+    if (dateTo) params.date_to = dateTo;
+    const data = await financeApi.allTransactions(params);
+    return data.entries || [];
+  };
+
+  const historySummary = (rows) => {
+    const inc = rows.filter(r => r.type === 'Income').reduce((s, r) => s + Number(r.amount || 0), 0);
+    const exp = rows.filter(r => r.type === 'Expense').reduce((s, r) => s + Number(r.amount || 0), 0);
+    return [
+      `${rows.length} transaction(s)`,
+      `Total Income: ${formatCurrency(inc)}    Total Expenses: ${formatCurrency(exp)}    Net: ${formatCurrency(inc - exp)}`,
+    ];
+  };
+
+  const historySubtitle = (dateFrom || dateTo) ? `${dateFrom || 'start'} to ${dateTo || 'today'}` : 'All dates';
+
   return (
     <>
-      <h2 className="text-lg font-semibold text-gray-900 mb-4">All Transactions</h2>
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+        <h2 className="text-lg font-semibold text-gray-900">All Transactions</h2>
+        <ExportControls
+          title="Finance - History"
+          subtitle={historySubtitle}
+          columns={historyColumns}
+          fetchRows={fetchAllHistory}
+          filenameBase="finance-history"
+          summaryFor={historySummary}
+        />
+      </div>
 
       <div className="card mb-4">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
@@ -3184,6 +3368,31 @@ function FinancialStatementsTab({ setError, setMessage, isAdmin, hasFinanceSecti
     doc.save(`balance-sheet-${data.date_from}-to-${data.date_to}.pdf`);
   };
 
+  // --- General Journal: selectable-column PDF / Print export ---
+  const journalColumns = [
+    { key: 'date', label: 'Date', value: e => formatDate(e.date) },
+    { key: 'type', label: 'Type', value: e => e.type || '' },
+    { key: 'description', label: 'Description', value: e => e.description || '' },
+    { key: 'debit', label: 'Debit', align: 'right', value: e => Number(e.debit) ? formatCurrency(e.debit) : '' },
+    { key: 'credit', label: 'Credit', align: 'right', value: e => Number(e.credit) ? formatCurrency(e.credit) : '' },
+    { key: 'method', label: 'Method', value: e => paymentMethodLabel[e.method] || e.method || '-' },
+    { key: 'recorded_by', label: 'Recorded by', value: e => e.recorded_by || '-' },
+  ];
+
+  const fetchAllJournal = async () => {
+    const res = await financeApi.journal({ date_from: dateFrom, date_to: dateTo, all: 1 });
+    return res.entries || [];
+  };
+
+  const journalSummary = (rows) => {
+    const debit = rows.reduce((s, r) => s + Number(r.debit || 0), 0);
+    const credit = rows.reduce((s, r) => s + Number(r.credit || 0), 0);
+    return [
+      `${rows.length} line(s)`,
+      `Total Debit: ${formatCurrency(debit)}    Total Credit: ${formatCurrency(credit)}`,
+    ];
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-16">
@@ -3257,13 +3466,21 @@ function FinancialStatementsTab({ setError, setMessage, isAdmin, hasFinanceSecti
       {view === 'budget_actual' && data && <BudgetActualView data={data} />}
       {view === 'journal' && data && (
         <>
-          {isAdmin && (
-            <div className="flex justify-end mb-4">
+          <div className="flex flex-wrap justify-between items-center gap-3 mb-4">
+            <ExportControls
+              title="Finance Statement - General Journal"
+              subtitle={`${data.date_from || 'start'} to ${data.date_to || 'today'}`}
+              columns={journalColumns}
+              fetchRows={fetchAllJournal}
+              filenameBase="general-journal"
+              summaryFor={journalSummary}
+            />
+            {isAdmin && (
               <button onClick={() => setShowNewJournal(true)} className="btn-primary">
                 <Plus size={16} /> New Journal Entry
               </button>
-            </div>
-          )}
+            )}
+          </div>
           <GeneralJournalView data={data} page={journalPage} setPage={setJournalPage} isAdmin={isAdmin}
             onEdit={(entry) => {
               setJournalEdit(entry);

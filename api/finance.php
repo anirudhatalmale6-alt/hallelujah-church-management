@@ -635,6 +635,7 @@ switch ($method) {
             $searchFilter = $_GET['search'] ?? '';
             $page = max(1, (int)($_GET['page'] ?? 1));
             $limit = 50;
+            $fetchAll = !empty($_GET['all']); // PDF / print export wants every matching row
 
             $entries = [];
 
@@ -793,7 +794,7 @@ switch ($method) {
             $totalEntries = count($entries);
 
             $offset = ($page - 1) * $limit;
-            $pagedEntries = array_slice($entries, $offset, $limit);
+            $pagedEntries = $fetchAll ? $entries : array_slice($entries, $offset, $limit);
 
             jsonResponse([
                 'entries' => $pagedEntries,
@@ -832,6 +833,7 @@ switch ($method) {
             $page = max(1, (int)($_GET['page'] ?? 1));
             $limit = 50;
             $offset = ($page - 1) * $limit;
+            $fetchAll = !empty($_GET['all']); // PDF / print export wants every matching row
 
             $entries = [];
 
@@ -1009,7 +1011,7 @@ switch ($method) {
             $totalDebit = array_sum(array_column($entries, 'debit'));
             $totalCredit = array_sum(array_column($entries, 'credit'));
             $totalEntries = count($entries);
-            $pagedEntries = array_slice($entries, $offset, $limit);
+            $pagedEntries = $fetchAll ? $entries : array_slice($entries, $offset, $limit);
 
             jsonResponse([
                 'entries' => $pagedEntries,
