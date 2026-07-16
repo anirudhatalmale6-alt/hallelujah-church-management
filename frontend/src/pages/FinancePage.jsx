@@ -158,7 +158,7 @@ function printColumnsTable({ title, subtitle, columns, rows, summaryLines }) {
  * PDF / Print controls with a column picker. Fetches ALL matching rows
  * (not just the current page) via fetchRows() before exporting.
  */
-function ExportControls({ title, subtitle, columns, defaultKeys, fetchRows, filenameBase, summaryFor }) {
+function ExportControls({ title, subtitle, columns, defaultKeys, fetchRows, filenameBase, summaryFor, align = 'right' }) {
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState(() => new Set(defaultKeys || columns.map(c => c.key)));
   const [busy, setBusy] = useState(false);
@@ -198,7 +198,7 @@ function ExportControls({ title, subtitle, columns, defaultKeys, fetchRows, file
         {open && (
           <>
             <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-            <div className="absolute right-0 mt-1 z-20 bg-white border border-gray-200 rounded-lg shadow-lg p-2 w-56">
+            <div className={`absolute ${align === 'left' ? 'left-0' : 'right-0'} mt-1 z-20 bg-white border border-gray-200 rounded-lg shadow-lg p-2 w-56`}>
               <div className="text-xs font-semibold text-gray-500 px-2 py-1">Show columns</div>
               {columns.map(c => (
                 <label key={c.key} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-gray-50 cursor-pointer text-sm">
@@ -3474,6 +3474,7 @@ function FinancialStatementsTab({ setError, setMessage, isAdmin, hasFinanceSecti
               fetchRows={fetchAllJournal}
               filenameBase="general-journal"
               summaryFor={journalSummary}
+              align="left"
             />
             {isAdmin && (
               <button onClick={() => setShowNewJournal(true)} className="btn-primary">
