@@ -859,6 +859,9 @@ function ManageCodes() {
   const [generating, setGenerating] = useState(false);
   const [search, setSearch] = useState('');
   const [message, setMessage] = useState('');
+  const [regenTarget, setRegenTarget] = useState(null);
+  const [regenOpts, setRegenOpts] = useState({ qr: true, barcode: true, pin: true });
+  const [regenBusy, setRegenBusy] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -884,8 +887,27 @@ function ManageCodes() {
     setGenerating(false);
   };
 
-  const handleRegenerate = async (memberId) => {
-    try { await checkin.regenerateCode(memberId); load(); } catch {}
+  const openRegen = (c) => {
+    setRegenOpts({ qr: true, barcode: true, pin: true });
+    setRegenTarget(c);
+  };
+
+  const doRegenerate = async () => {
+    if (!regenTarget) return;
+    const targets = Object.keys(regenOpts).filter(k => regenOpts[k]);
+    if (targets.length === 0) return;
+    setRegenBusy(true);
+    try {
+      await checkin.regenerateCode(regenTarget.member_id, targets);
+      setRegenTarget(null);
+      await load();
+      const labels = { qr: 'QR code', barcode: 'barcode', pin: 'PIN' };
+      setMessage(`Regenerated: ${targets.map(t => labels[t]).join(', ')}`);
+      setTimeout(() => setMessage(''), 3000);
+    } catch (err) {
+      setMessage(err.message || 'Failed to regenerate');
+    }
+    setRegenBusy(false);
   };
 
   const handleDelete = async (codeId) => {
@@ -955,11 +977,18 @@ function ManageCodes() {
                       <span className="font-mono text-lg font-bold tracking-wider text-primary-700">{c.pin_code}</span>
                     </td>
                     <td className="px-4 py-3">
-                      <span className="font-mono text-xs text-gray-500">{c.qr_code}</span>
+                      <div className="font-mono text-xs text-gray-500">
+                        <span className="text-gray-400">QR:</span> {c.qr_code}
+                      </div>
+                      {c.barcode_code && c.barcode_code !== c.qr_code && (
+                        <div className="font-mono text-xs text-gray-500">
+                          <span className="text-gray-400">Bar:</span> {c.barcode_code}
+                        </div>
+                      )}
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex gap-2">
-                        <button onClick={() => handleRegenerate(c.member_id)} className="text-blue-600 hover:text-blue-800" title="Regenerate">
+                        <button onClick={() => openRegen(c)} className="text-blue-600 hover:text-blue-800" title="Regenerate code">
                           <RefreshCw size={14} />
                         </button>
                         <button onClick={() => handleDelete(c.id)} className="text-red-400 hover:text-red-600" title="Delete">
@@ -974,6 +1003,60 @@ function ManageCodes() {
           </div>
         )}
       </div>
+
+      {regenTarget && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => !regenBusy && setRegenTarget(null)}>
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-md" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-4 border-b">
+              <h3 className="text-lg font-bold text-gray-900">Regenerate code</h3>
+              <button onClick={() => !regenBusy && setRegenTarget(null)} className="text-gray-400 hover:text-gray-600">
+                <X size={20} />
+              </button>
+            </div>
+            <div className="px-5 py-4">
+              <p className="text-sm text-gray-600 mb-1">
+                {regenTarget.first_name} {regenTarget.last_name}
+              </p>
+              <p className="text-sm text-gray-500 mb-4">
+                Tick only what you want to change. Anything you leave unticked stays the same, so a card you've already printed keeps working for those parts.
+              </p>
+              <div className="space-y-2">
+                {[
+                  { key: 'qr', label: 'QR code', note: 'the square code on the card front' },
+                  { key: 'barcode', label: 'Barcode', note: 'the striped code on the card back' },
+                  { key: 'pin', label: 'PIN', note: 'the 4-digit number' },
+                ].map(opt => (
+                  <label key={opt.key} className="flex items-start gap-3 p-3 border rounded-lg cursor-pointer hover:bg-gray-50">
+                    <input
+                      type="checkbox"
+                      checked={regenOpts[opt.key]}
+                      onChange={e => setRegenOpts(o => ({ ...o, [opt.key]: e.target.checked }))}
+                      className="mt-0.5 h-4 w-4"
+                    />
+                    <span>
+                      <span className="font-medium text-gray-800">{opt.label}</span>
+                      <span className="block text-xs text-gray-500">{opt.note}</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2 mt-3">
+                The QR code and the barcode are two different codes now, so you can change one without touching the other.
+              </p>
+            </div>
+            <div className="flex justify-end gap-2 px-5 py-4 border-t">
+              <button onClick={() => setRegenTarget(null)} disabled={regenBusy} className="btn btn-secondary">Cancel</button>
+              <button
+                onClick={doRegenerate}
+                disabled={regenBusy || !Object.values(regenOpts).some(Boolean)}
+                className="btn btn-primary"
+              >
+                <RefreshCw size={14} /> {regenBusy ? 'Regenerating...' : 'Regenerate selected'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1255,7 +1338,7 @@ function PrintCards() {
     const cardsHtml = toPrint.map((c, i) => {
       const canvas = document.createElement('canvas');
       try {
-        JsBarcode(canvas, c.qr_code, {
+        JsBarcode(canvas, c.barcode_code || c.qr_code, {
           format: 'CODE128', width: 1.5, height: 30, displayValue: false, margin: 0,
         });
       } catch { return ''; }
@@ -1321,7 +1404,7 @@ function PrintCards() {
             <div class="back-body">
               <div class="back-barcode">
                 <img src="${barcodeDataUrl}" class="barcode-img" />
-                <div class="barcode-text">${c.qr_code}</div>
+                <div class="barcode-text">${c.barcode_code || c.qr_code}</div>
               </div>
             </div>
             <div class="back-footer">
@@ -1687,7 +1770,7 @@ function PrintCards() {
               )}
               <div className="flex-1 space-y-2">
                 <div className="bg-white rounded p-1.5 border flex justify-center">
-                  <BarcodeImg value={c.qr_code} height={28} />
+                  <BarcodeImg value={c.barcode_code || c.qr_code} height={28} />
                 </div>
                 <div className="bg-white rounded p-1.5 border flex justify-center">
                   <QRCodeImg value={c.qr_code} size={64} />
@@ -1718,7 +1801,7 @@ function PrintCards() {
             </div>
             <div className="flex gap-1.5">
               <button
-                onClick={(e) => { e.stopPropagation(); downloadBarcode(c.qr_code, `${c.first_name}-${c.last_name}`); }}
+                onClick={(e) => { e.stopPropagation(); downloadBarcode(c.barcode_code || c.qr_code, `${c.first_name}-${c.last_name}`); }}
                 className="flex-1 flex items-center justify-center gap-1 text-xs py-1.5 px-2 rounded bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors"
                 title="Download Barcode"
               >
