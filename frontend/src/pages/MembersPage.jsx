@@ -63,6 +63,7 @@ export default function MembersPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [deleteId, setDeleteId] = useState(null);
+  const [dupMatches, setDupMatches] = useState(null);
   const [availableGroups, setAvailableGroups] = useState([]);
   const [availableHouseholds, setAvailableHouseholds] = useState([]);
   const [typeCounts, setTypeCounts] = useState({});
@@ -161,20 +162,26 @@ export default function MembersPage() {
     setShowModal(true);
   };
 
-  const handleSave = async (e) => {
-    e.preventDefault();
+  const handleSave = async (e, force = false) => {
+    if (e) e.preventDefault();
     setSaving(true);
     setError('');
     try {
       if (editMember) {
         await membersApi.update(editMember.id, form);
       } else {
-        await membersApi.create(form);
+        await membersApi.create(force ? { ...form, force: 1 } : form);
       }
+      setDupMatches(null);
       setShowModal(false);
       loadMembers();
     } catch (err) {
-      setError(err.message);
+      // 409 = a person with the same name / phone already exists. Ask before saving.
+      if (err.status === 409 && err.data?.duplicate) {
+        setDupMatches(err.data.matches || []);
+      } else {
+        setError(err.message);
+      }
     }
     setSaving(false);
   };
@@ -732,6 +739,46 @@ export default function MembersPage() {
             </button>
           </div>
         </form>
+      </Modal>
+
+      {/* Possible Duplicate Warning */}
+      <Modal isOpen={!!dupMatches} onClose={() => setDupMatches(null)} title="Possible duplicate" size="sm">
+        <div className="space-y-4">
+          <div className="flex items-start gap-3 p-3 rounded-lg bg-amber-50 border border-amber-200">
+            <AlertCircle size={20} className="text-amber-600 flex-shrink-0 mt-0.5" />
+            <p className="text-sm text-amber-800">
+              A person with the same name or phone number is already in the system. Please
+              check the match{(dupMatches?.length || 0) > 1 ? 'es' : ''} below before adding
+              <span className="font-semibold"> {form.first_name} {form.last_name}</span> again.
+            </p>
+          </div>
+
+          <div className="space-y-2 max-h-64 overflow-y-auto">
+            {(dupMatches || []).map(m => (
+              <div key={m.id} className="flex items-center justify-between gap-3 p-3 rounded-lg border border-gray-200 bg-gray-50">
+                <div className="min-w-0">
+                  <div className="font-medium text-gray-900 truncate">{m.first_name} {m.last_name}</div>
+                  <div className="text-xs text-gray-500 truncate">
+                    {m.phone ? m.phone : 'No phone'}{m.email ? ' · ' + m.email : ''}
+                  </div>
+                </div>
+                <span className={`flex-shrink-0 px-2 py-0.5 rounded-full text-xs font-medium ${m.match === 'phone' ? 'bg-blue-100 text-blue-700' : m.match === 'name+phone' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>
+                  {m.match === 'phone' ? 'Same phone' : m.match === 'name+phone' ? 'Same name & phone' : 'Same name'}
+                </span>
+              </div>
+            ))}
+          </div>
+
+          <p className="text-sm text-gray-600">Do you still want to register this person?</p>
+
+          <div className="flex items-center justify-end gap-3 pt-2 border-t border-gray-100">
+            <button type="button" onClick={() => setDupMatches(null)} className="btn-secondary">Cancel</button>
+            <button type="button" onClick={() => handleSave(null, true)} disabled={saving} className="btn-primary">
+              {saving ? <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" /> : <Check size={16} />}
+              Register anyway
+            </button>
+          </div>
+        </div>
       </Modal>
 
       {/* Delete Confirmation */}

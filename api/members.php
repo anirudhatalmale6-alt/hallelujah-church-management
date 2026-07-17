@@ -393,6 +393,55 @@ switch ($method) {
             jsonResponse(['error' => $error], 400);
         }
 
+        // Duplicate guard: if someone with the same name or the same phone number
+        // already exists, stop and warn the user (409) so they can decide. Sending
+        // force=1 (the "Register anyway" button) skips this and inserts.
+        if (empty($data['force'])) {
+            $fn = trim($data['first_name']);
+            $ln = trim($data['last_name']);
+            $phoneDigits = preg_replace('/\D+/', '', (string)($data['phone'] ?? ''));
+            $matches = [];
+
+            // Same full name (case-insensitive, trimmed)
+            $nameStmt = $db->prepare("
+                SELECT id, first_name, last_name, phone, email, person_type, status
+                FROM members
+                WHERE LOWER(TRIM(first_name)) = LOWER(?) AND LOWER(TRIM(last_name)) = LOWER(?)
+            ");
+            $nameStmt->execute([$fn, $ln]);
+            foreach ($nameStmt->fetchAll() as $r) {
+                $r['match'] = 'name';
+                $matches[$r['id']] = $r;
+            }
+
+            // Same phone number (compare digits only; ignore very short numbers)
+            if (strlen($phoneDigits) >= 7) {
+                $phoneStmt = $db->query("
+                    SELECT id, first_name, last_name, phone, email, person_type, status
+                    FROM members
+                    WHERE phone IS NOT NULL AND phone <> ''
+                ");
+                foreach ($phoneStmt->fetchAll() as $r) {
+                    if (preg_replace('/\D+/', '', (string)$r['phone']) === $phoneDigits) {
+                        if (isset($matches[$r['id']])) {
+                            $matches[$r['id']]['match'] = 'name+phone';
+                        } else {
+                            $r['match'] = 'phone';
+                            $matches[$r['id']] = $r;
+                        }
+                    }
+                }
+            }
+
+            if (!empty($matches)) {
+                jsonResponse([
+                    'error' => 'A person with the same name or phone number already exists.',
+                    'duplicate' => true,
+                    'matches' => array_values($matches),
+                ], 409);
+            }
+        }
+
         // Blank date/select boxes arrive as empty strings; store them as NULL so a
         // cleared birthday really is cleared instead of becoming 0000-00-00.
         foreach ([
