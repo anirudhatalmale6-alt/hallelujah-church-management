@@ -1429,6 +1429,8 @@ function HistoryTab({ setError, setMessage, isAdmin }) {
   const [deleteItem, setDeleteItem] = useState(null);
   const [categories, setCategories] = useState([]);
   const [expCategories, setExpCategories] = useState([]);
+  const [showCols, setShowCols] = useState({ type: true, description: true, method: true, account: true, status: true, by: true });
+  const toggleCol = (col) => setShowCols(prev => ({ ...prev, [col]: !prev[col] }));
 
   useEffect(() => {
     financeApi.categories().then(d => setCategories(d.categories || []));
@@ -1579,6 +1581,22 @@ function HistoryTab({ setError, setMessage, isAdmin }) {
         />
       </div>
 
+      <div className="flex flex-wrap items-center gap-2 mb-3">
+        <span className="text-xs font-medium text-gray-500">Show/Hide:</span>
+        {[{ key: 'type', label: 'Type' }, { key: 'description', label: 'Description' }, { key: 'method', label: 'Method' }, { key: 'account', label: 'Account' }, { key: 'status', label: 'Status' }, { key: 'by', label: 'By' }].map(c => (
+          <button
+            key={c.key}
+            onClick={() => toggleCol(c.key)}
+            className={`text-xs px-2.5 py-1 rounded-full font-medium transition-colors ${
+              showCols[c.key] ? 'bg-primary-100 text-primary-700' : 'bg-gray-100 text-gray-400'
+            }`}
+          >
+            {showCols[c.key] ? <Eye size={12} className="inline mr-1" /> : <EyeOff size={12} className="inline mr-1" />}
+            {c.label}
+          </button>
+        ))}
+      </div>
+
       <div className="card mb-4">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
           <div className="lg:col-span-2">
@@ -1618,12 +1636,13 @@ function HistoryTab({ setError, setMessage, isAdmin }) {
                 <thead className="bg-gray-50 border-b border-gray-200">
                   <tr>
                     <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase">Date</th>
-                    <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase">Type</th>
-                    <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase">Description</th>
+                    {showCols.type && <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase">Type</th>}
+                    {showCols.description && <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase">Description</th>}
                     <th className="text-right px-4 py-2 text-xs font-semibold text-gray-500 uppercase">Amount</th>
-                    <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase hidden md:table-cell">Method</th>
-                    <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase hidden lg:table-cell">Account</th>
-                    <th className="text-center px-4 py-2 text-xs font-semibold text-gray-500 uppercase">Status</th>
+                    {showCols.method && <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase hidden md:table-cell">Method</th>}
+                    {showCols.account && <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase hidden lg:table-cell">Account</th>}
+                    {showCols.status && <th className="text-center px-4 py-2 text-xs font-semibold text-gray-500 uppercase">Status</th>}
+                    {showCols.by && <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase hidden lg:table-cell">Recorded by</th>}
                     <th className="text-right px-4 py-2 text-xs font-semibold text-gray-500 uppercase">Actions</th>
                   </tr>
                 </thead>
@@ -1631,18 +1650,19 @@ function HistoryTab({ setError, setMessage, isAdmin }) {
                   {entries.map(e => (
                     <tr key={`${e.source}-${e.id}`} className="hover:bg-gray-50">
                       <td className="px-4 py-2 text-sm text-gray-600">{formatDate(e.date)}</td>
-                      <td className="px-4 py-2"><span className={`px-2 py-0.5 rounded-full text-xs font-medium ${typeColors[e.type]}`}>{e.type}</span></td>
-                      <td className="px-4 py-2 text-sm text-gray-700 max-w-[250px] truncate">{e.description}</td>
+                      {showCols.type && <td className="px-4 py-2"><span className={`px-2 py-0.5 rounded-full text-xs font-medium ${typeColors[e.type]}`}>{e.type}</span></td>}
+                      {showCols.description && <td className="px-4 py-2 text-sm text-gray-700 max-w-[250px] truncate">{e.description}</td>}
                       <td className={`px-4 py-2 text-sm text-right font-semibold ${e.type === 'Income' ? 'text-green-700' : e.type === 'Expense' ? 'text-red-700' : 'text-blue-700'}`}>{formatCurrency(e.amount)}</td>
-                      <td className="px-4 py-2 text-sm text-gray-500 hidden md:table-cell capitalize">{paymentMethodLabel[e.method] || e.method || '-'}</td>
-                      <td className="px-4 py-2 text-sm text-gray-500 hidden lg:table-cell">{e.account || '-'}</td>
-                      <td className="px-4 py-2 text-center">
+                      {showCols.method && <td className="px-4 py-2 text-sm text-gray-500 hidden md:table-cell capitalize">{paymentMethodLabel[e.method] || e.method || '-'}</td>}
+                      {showCols.account && <td className="px-4 py-2 text-sm text-gray-500 hidden lg:table-cell">{e.account || '-'}</td>}
+                      {showCols.status && <td className="px-4 py-2 text-center">
                         {e.source === 'expense' ? (
                           <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${e.status === 'approved' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
                             {e.status === 'approved' ? 'Approved' : 'Pending'}
                           </span>
                         ) : <span className="text-xs text-gray-400">-</span>}
-                      </td>
+                      </td>}
+                      {showCols.by && <td className="px-4 py-2 text-sm text-gray-500 hidden lg:table-cell">{e.recorded_by || '-'}</td>}
                       <td className="px-4 py-2">
                         <div className="flex items-center justify-end gap-1">
                           {isAdmin && e.source === 'expense' && e.status !== 'approved' && (
