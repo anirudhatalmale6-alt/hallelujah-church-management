@@ -26,7 +26,15 @@ switch ($method) {
                 $svcInfo = $svcCheck->fetch();
                 if ($svcInfo) {
                     $serviceEnd = strtotime($svcInfo['date'] . ' ' . $svcInfo['time']) + ($svcInfo['duration_hours'] * 3600);
-                    if (time() > $serviceEnd) {
+                    // Only fill in absentees once the service has ended AND attendance has
+                    // actually been taken (at least one person marked present or late).
+                    // Without this, a service that was never held - or was only opened in the
+                    // dropdown to look at it - would stamp every member absent and show up as a
+                    // misleading 0% attendance day, throwing off the reports.
+                    $realStmt = $db->prepare("SELECT COUNT(*) FROM attendance WHERE service_id = ? AND status IN ('present', 'late')");
+                    $realStmt->execute([$serviceId]);
+                    $hasRealAttendance = (int)$realStmt->fetchColumn() > 0;
+                    if (time() > $serviceEnd && $hasRealAttendance) {
                         // Only auto-mark absent for person types configured with auto_absent
                         // (by default: church members and non-member attendees).
                         $aaTypes = autoAbsentPersonTypes($db);

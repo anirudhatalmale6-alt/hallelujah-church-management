@@ -13,13 +13,6 @@ const emptyGroup = { name: '', description: '', category: 'ministry', department
 // Order the sections appear in, with the wording the pastor uses
 const SECTIONS = [
   {
-    key: 'department',
-    title: 'Serving Teams',
-    blurb: 'These run a department and report after each service.',
-    icon: Building2,
-    accent: 'text-blue-600 bg-blue-50 border-blue-200',
-  },
-  {
     key: 'leadership',
     title: 'Leadership & Governance',
     blurb: 'Boards and offices that oversee the church.',
@@ -29,9 +22,16 @@ const SECTIONS = [
   {
     key: 'ministry',
     title: 'Ministries & Fellowship',
-    blurb: 'Groups people belong to. They do not file a service report.',
+    blurb: 'Service, Community Outreach and Connection.',
     icon: Heart,
     accent: 'text-rose-600 bg-rose-50 border-rose-200',
+  },
+  {
+    key: 'department',
+    title: 'Serving Teams',
+    blurb: 'These run a department and report after each service.',
+    icon: Building2,
+    accent: 'text-blue-600 bg-blue-50 border-blue-200',
   },
 ];
 
@@ -232,7 +232,7 @@ export default function GroupsPage() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Groups</h1>
           <p className="text-gray-500 mt-1">
-            Sorted into serving teams, leadership and ministries. Serving teams are tied to the department they report for.
+            Sorted into leadership, ministries and serving teams. Serving teams are tied to the department they report for.
           </p>
         </div>
         {isLeader && (
