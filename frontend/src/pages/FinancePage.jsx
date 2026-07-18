@@ -726,6 +726,7 @@ function RecordGivingTab({ setError, setMessage }) {
                     <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase">Category</th>
                     <th className="text-right px-4 py-2 text-xs font-semibold text-gray-500 uppercase">Amount</th>
                     <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase hidden lg:table-cell">Method</th>
+                    <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase hidden lg:table-cell">Notes</th>
                     <th className="text-right px-4 py-2 text-xs font-semibold text-gray-500 uppercase">Actions</th>
                   </tr>
                 </thead>
@@ -737,9 +738,10 @@ function RecordGivingTab({ setError, setMessage }) {
                       <td className="px-4 py-2"><span className="badge bg-blue-50 text-blue-700">{d.category_name}</span></td>
                       <td className="px-4 py-2 text-right text-sm font-semibold text-green-700">{formatCurrency(d.amount)}</td>
                       <td className="px-4 py-2 text-sm text-gray-500 hidden lg:table-cell capitalize">{paymentMethodLabel[d.payment_method] || d.payment_method}</td>
+                      <td className="px-4 py-2 text-sm text-gray-500 hidden lg:table-cell max-w-xs truncate" title={d.notes || ''}>{d.notes || '-'}</td>
                       <td className="px-4 py-2">
                         <div className="flex items-center justify-end gap-1">
-                          <button onClick={() => { setEditDonation(d); setEditForm({ amount: d.amount, category_id: d.category_id, payment_method: d.payment_method, notes: d.notes || '', donation_date: d.donation_date }); }} className="p-1.5 text-gray-400 hover:text-primary-700 hover:bg-primary-50 rounded"><Edit2 size={14} /></button>
+                          <button onClick={() => { setEditDonation(d); setEditForm({ member_id: d.member_id || '', donor_name: d.donor_name || '', amount: d.amount, category_id: d.category_id, payment_method: d.payment_method, notes: d.notes || '', donation_date: d.donation_date }); }} className="p-1.5 text-gray-400 hover:text-primary-700 hover:bg-primary-50 rounded"><Edit2 size={14} /></button>
                           <button onClick={() => setDeleteId(d.id)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded"><Trash2 size={14} /></button>
                         </div>
                       </td>
@@ -760,7 +762,7 @@ function RecordGivingTab({ setError, setMessage }) {
                     <div className="text-right">
                       <div className="text-sm font-semibold text-green-700">{formatCurrency(d.amount)}</div>
                       <div className="flex items-center gap-1 mt-1 justify-end">
-                        <button onClick={() => { setEditDonation(d); setEditForm({ amount: d.amount, category_id: d.category_id, payment_method: d.payment_method, notes: d.notes || '', donation_date: d.donation_date }); }} className="p-1.5 text-gray-400 hover:text-primary-700 hover:bg-primary-50 rounded"><Edit2 size={14} /></button>
+                        <button onClick={() => { setEditDonation(d); setEditForm({ member_id: d.member_id || '', donor_name: d.donor_name || '', amount: d.amount, category_id: d.category_id, payment_method: d.payment_method, notes: d.notes || '', donation_date: d.donation_date }); }} className="p-1.5 text-gray-400 hover:text-primary-700 hover:bg-primary-50 rounded"><Edit2 size={14} /></button>
                         <button onClick={() => setDeleteId(d.id)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded"><Trash2 size={14} /></button>
                       </div>
                     </div>
@@ -769,6 +771,7 @@ function RecordGivingTab({ setError, setMessage }) {
                     <span className="badge bg-blue-50 text-blue-700">{d.category_name}</span>
                     <span className="text-xs text-gray-400 capitalize">{paymentMethodLabel[d.payment_method] || d.payment_method}</span>
                   </div>
+                  {d.notes && <div className="text-xs text-gray-500 mt-1.5 italic">{d.notes}</div>}
                 </div>
               ))}
             </div>
@@ -779,10 +782,12 @@ function RecordGivingTab({ setError, setMessage }) {
 
       <Modal isOpen={!!editDonation} onClose={() => setEditDonation(null)} title="Edit Donation" size="sm">
         <div className="space-y-4">
+          <div><label className="label">Name</label><MemberTypeahead membersList={membersList} vendorList={vendorList} value={editForm.member_id || ''} donorName={editForm.donor_name || ''} onChange={val => setEditForm(f => ({ ...f, member_id: val, donor_name: val ? '' : f.donor_name }))} onDonorNameChange={val => setEditForm(f => ({ ...f, donor_name: val, member_id: '' }))} onAddNew={() => { membersApi.list({ limit: 9999, sort: 'last_name' }).then(d => setMembersList(d.members || [])); financeApi.vendors().then(d => setVendorList(d.vendors || [])).catch(() => {}); }} /></div>
           <div><label className="label">Amount ($)</label><input type="number" step="0.01" className="input" value={editForm.amount || ''} onChange={e => setEditForm(f => ({ ...f, amount: e.target.value }))} /></div>
           <div><label className="label">Category</label><select className="input" value={editForm.category_id || ''} onChange={e => setEditForm(f => ({ ...f, category_id: e.target.value }))}>{categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
           <div><label className="label">Method</label><select className="input" value={editForm.payment_method || 'cash'} onChange={e => setEditForm(f => ({ ...f, payment_method: e.target.value }))}>{paymentMethods.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}</select></div>
           <div><label className="label">Date</label><input type="date" className="input" value={editForm.donation_date || ''} onChange={e => setEditForm(f => ({ ...f, donation_date: e.target.value }))} /></div>
+          <div><label className="label">Notes</label><input className="input" placeholder="Notes" value={editForm.notes || ''} onChange={e => setEditForm(f => ({ ...f, notes: e.target.value }))} /></div>
           <div className="flex justify-end gap-3 pt-2">
             <button onClick={() => setEditDonation(null)} className="btn-secondary">Cancel</button>
             <button onClick={async () => { setEditSaving(true); try { await financeApi.update(editDonation.id, editForm); setEditDonation(null); setMessage('Updated'); loadDonations(); } catch(err) { setError(err.message); } setEditSaving(false); }} disabled={editSaving} className="btn-primary"><Check size={16} /> Save</button>
