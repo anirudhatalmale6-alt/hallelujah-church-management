@@ -319,6 +319,8 @@ export const finance = {
   vendorsFull: (search) => request('finance.php', { params: { action: 'vendors_full', ...(search ? { search } : {}) } }),
   vendorSave: (data) => request('finance.php', { method: 'POST', body: data, params: { action: 'vendor_save' } }),
   vendorDelete: (id) => request('finance.php', { method: 'DELETE', params: { action: 'vendor', id } }),
+  vendorStatement: (vendorName, dateFrom, dateTo) =>
+    request('finance.php', { params: { action: 'vendor_statement', vendor_name: vendorName, date_from: dateFrom, date_to: dateTo } }),
   expenseSummary: (params) => request('finance.php', { params: { action: 'expense_summary', ...params } }),
   // Budgets
   budgets: (year) => request('finance.php', { params: { action: 'budgets', year } }),

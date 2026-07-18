@@ -2075,8 +2075,10 @@ function StatementsTab({ setError }) {
   const [mode, setMode] = useState('individual');
   const [membersList, setMembersList] = useState([]);
   const [donorsList, setDonorsList] = useState([]);
+  const [vendorsList, setVendorsList] = useState([]);
   const [selectedMemberId, setSelectedMemberId] = useState('');
   const [selectedDonorName, setSelectedDonorName] = useState('');
+  const [selectedVendor, setSelectedVendor] = useState('');
   const [categories, setCategories] = useState([]);
   const [catIds, setCatIds] = useState([]); // empty = all categories
   const [dateFrom, setDateFrom] = useState(new Date().getFullYear() + '-01-01');
@@ -2084,6 +2086,7 @@ function StatementsTab({ setError }) {
   const [statement, setStatement] = useState(null);
   const [allStatement, setAllStatement] = useState(null);
   const [nonGivers, setNonGivers] = useState(null);
+  const [vendorStatement, setVendorStatement] = useState(null);
   const [loading, setLoading] = useState(false);
   const [sortBy, setSortBy] = useState('name');
   const [includePledges, setIncludePledges] = useState(false);
@@ -2097,6 +2100,7 @@ function StatementsTab({ setError }) {
   useEffect(() => {
     membersApi.list({ limit: 9999, sort: 'last_name' }).then(d => setMembersList(d.members || []));
     financeApi.statementDonors().then(d => setDonorsList(d.donors || [])).catch(() => {});
+    financeApi.vendors().then(d => setVendorsList(d.vendors || [])).catch(() => {});
     financeApi.categories().then(d => setCategories((d.categories || []).filter(c => c.is_active == null || Number(c.is_active) === 1))).catch(() => {});
   }, []);
 
@@ -2123,6 +2127,17 @@ function StatementsTab({ setError }) {
       try {
         const data = await financeApi.nonGivers(dateFrom, dateTo, catParam);
         setNonGivers(data);
+      } catch (err) {
+        setError(err.message);
+      }
+      setLoading(false);
+    } else if (mode === 'vendor') {
+      if (!selectedVendor.trim()) { setError('Please select or type a vendor name'); return; }
+      setLoading(true);
+      setError('');
+      try {
+        const data = await financeApi.vendorStatement(selectedVendor.trim(), dateFrom, dateTo);
+        setVendorStatement(data);
       } catch (err) {
         setError(err.message);
       }
@@ -2300,27 +2315,101 @@ function StatementsTab({ setError }) {
     );
   };
 
+  const printVendorStatement = () => {
+    if (!vendorStatement) return;
+    const v = vendorStatement.vendor || {};
+    const contact = [
+      v.category ? `Category: ${v.category}` : '',
+      v.phone ? `Tel: ${v.phone}` : '',
+      v.email ? `Email: ${v.email}` : '',
+      v.website ? `Website: ${v.website}` : '',
+      v.address ? `Address: ${v.address}` : '',
+    ].filter(Boolean);
+
+    const purchaseRows = (vendorStatement.purchases || []).map(p => {
+      const date = new Date(p.expense_date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+      return `<tr>
+        <td style="padding:6px 10px;border-bottom:1px solid #f3f4f6;">${date}</td>
+        <td style="padding:6px 10px;border-bottom:1px solid #f3f4f6;">${p.category_name || '-'}</td>
+        <td style="padding:6px 10px;border-bottom:1px solid #f3f4f6;">${p.description || ''}</td>
+        <td style="padding:6px 10px;border-bottom:1px solid #f3f4f6;">${p.payment_method || ''}${p.reference_number ? ' / ' + p.reference_number : ''}</td>
+        <td style="padding:6px 10px;border-bottom:1px solid #f3f4f6;text-align:right;">${formatCurrency(p.amount)}</td>
+      </tr>`;
+    }).join('');
+
+    const incomeRows = (vendorStatement.income || []).map(d => {
+      const date = new Date(d.donation_date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+      return `<tr>
+        <td style="padding:6px 10px;border-bottom:1px solid #f3f4f6;">${date}</td>
+        <td style="padding:6px 10px;border-bottom:1px solid #f3f4f6;">${d.category_name || '-'}</td>
+        <td style="padding:6px 10px;border-bottom:1px solid #f3f4f6;">${d.notes || ''}</td>
+        <td style="padding:6px 10px;border-bottom:1px solid #f3f4f6;">${d.payment_method || ''}${d.reference_number ? ' / ' + d.reference_number : ''}</td>
+        <td style="padding:6px 10px;border-bottom:1px solid #f3f4f6;text-align:right;">${formatCurrency(d.amount)}</td>
+      </tr>`;
+    }).join('');
+
+    const purchaseSection = (vendorStatement.purchases || []).length > 0 ? `
+      <h3 style="margin-top:24px;font-size:16px;">Purchases / Payments</h3>
+      <table><thead><tr><th>Date</th><th>Category</th><th>Description</th><th>Method / Ref</th><th style="text-align:right;">Amount</th></tr></thead>
+      <tbody>${purchaseRows}
+      <tr style="border-top:2px solid #1f2937;"><td style="padding:8px 10px;font-weight:700;" colspan="4">Total Paid</td><td style="padding:8px 10px;text-align:right;font-weight:700;">${formatCurrency(vendorStatement.total_paid)}</td></tr>
+      </tbody></table>` : '<p style="margin-top:24px;font-size:14px;color:#6b7280;">No purchases recorded for this period.</p>';
+
+    const incomeSection = (vendorStatement.income || []).length > 0 ? `
+      <h3 style="margin-top:24px;font-size:16px;">Income Received</h3>
+      <table><thead><tr><th>Date</th><th>Category</th><th>Notes</th><th>Method / Ref</th><th style="text-align:right;">Amount</th></tr></thead>
+      <tbody>${incomeRows}
+      <tr style="border-top:2px solid #1f2937;"><td style="padding:8px 10px;font-weight:700;" colspan="4">Total Received</td><td style="padding:8px 10px;text-align:right;font-weight:700;">${formatCurrency(vendorStatement.total_received)}</td></tr>
+      </tbody></table>` : '';
+
+    const html = `<!DOCTYPE html><html><head><title>Vendor Statement - ${v.name || selectedVendor}</title>
+    <style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;padding:40px;color:#1f2937;max-width:820px;margin:0 auto;}
+    h1{font-size:22px;margin-bottom:4px;} .meta{color:#6b7280;font-size:14px;margin-bottom:20px;}
+    table{width:100%;border-collapse:collapse;font-size:14px;} th{text-align:left;padding:8px 10px;background:#f9fafb;border-bottom:2px solid #e5e7eb;font-weight:600;font-size:12px;text-transform:uppercase;color:#6b7280;}
+    @media print{body{padding:20px;}}</style></head>
+    <body>
+    <h1>Vendor Statement</h1>
+    <div class="meta">
+      <div><strong>Vendor:</strong> ${v.name || selectedVendor}</div>
+      ${contact.map(c => `<div>${c}</div>`).join('')}
+      <div><strong>Period:</strong> ${new Date(dateFrom + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })} - ${new Date(dateTo + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</div>
+      <div><strong>Church:</strong> Hallelujah In The City</div>
+    </div>
+    ${purchaseSection}
+    ${incomeSection}
+    <p style="margin-top:30px;font-size:12px;color:#9ca3af;">Generated ${new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}.</p>
+    </body></html>`;
+    const win = window.open('', '_blank');
+    if (win) { win.document.write(html); win.document.close(); win.focus(); setTimeout(() => win.print(), 300); }
+  };
+
   return (
     <>
       <div className="card mb-6">
         <div className="flex gap-2 mb-4">
           <button
-            onClick={() => { setMode('individual'); setAllStatement(null); setNonGivers(null); }}
+            onClick={() => { setMode('individual'); setAllStatement(null); setNonGivers(null); setVendorStatement(null); }}
             className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${mode === 'individual' ? 'bg-primary-700 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
           >
             Individual Member
           </button>
           <button
-            onClick={() => { setMode('all'); setStatement(null); setNonGivers(null); }}
+            onClick={() => { setMode('all'); setStatement(null); setNonGivers(null); setVendorStatement(null); }}
             className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${mode === 'all' ? 'bg-primary-700 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
           >
             All Givers
           </button>
           <button
-            onClick={() => { setMode('non_givers'); setStatement(null); setAllStatement(null); }}
+            onClick={() => { setMode('non_givers'); setStatement(null); setAllStatement(null); setVendorStatement(null); }}
             className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${mode === 'non_givers' ? 'bg-red-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
           >
             Non-Givers
+          </button>
+          <button
+            onClick={() => { setMode('vendor'); setStatement(null); setAllStatement(null); setNonGivers(null); }}
+            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${mode === 'vendor' ? 'bg-primary-700 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+          >
+            Vendor
           </button>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
@@ -2348,6 +2437,21 @@ function StatementsTab({ setError }) {
               </select>
             </div>
           )}
+          {mode === 'vendor' && (
+            <div className="sm:col-span-2">
+              <label className="label">Select or Type Vendor</label>
+              <input
+                className="input"
+                list="vendor-statement-list"
+                value={selectedVendor}
+                onChange={e => setSelectedVendor(e.target.value)}
+                placeholder="e.g. Amazon, HC Store..."
+              />
+              <datalist id="vendor-statement-list">
+                {vendorsList.map((name, i) => <option key={i} value={name} />)}
+              </datalist>
+            </div>
+          )}
           {mode === 'non_givers' && <div className="sm:col-span-2" />}
           <div>
             <label className="label">From</label>
@@ -2359,6 +2463,7 @@ function StatementsTab({ setError }) {
           </div>
         </div>
 
+        {mode !== 'vendor' && (
         <div className="mt-4">
           <label className="label">Filter by Account / Category</label>
           <div className="flex flex-wrap gap-2">
@@ -2378,6 +2483,7 @@ function StatementsTab({ setError }) {
           </div>
           <p className="text-xs text-gray-400 mt-1">Leave on "All Categories" to include every account, or tap one or more (Tithe, Offering, Special Seed…) to narrow the statement. Applies to individual, all givers, and non-givers.</p>
         </div>
+        )}
 
         {mode === 'individual' && !selectedDonorName && (
           <label className="mt-4 flex items-center gap-2 text-sm text-gray-700 cursor-pointer select-none">
@@ -2630,10 +2736,112 @@ function StatementsTab({ setError }) {
         </div>
       )}
 
-      {!statement && !allStatement && !nonGivers && !loading && (
+      {/* Vendor Statement */}
+      {mode === 'vendor' && vendorStatement && (
+        <div className="card">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h2 className="text-lg font-bold text-gray-900">
+                {vendorStatement.vendor?.name || selectedVendor}
+                {!vendorStatement.vendor?.registered && <span className="ml-2 inline-block px-1.5 py-0.5 rounded bg-gray-100 text-gray-500 text-[10px] font-medium uppercase tracking-wide align-middle">not registered</span>}
+              </h2>
+              <p className="text-sm text-gray-500">
+                Vendor statement | {new Date(dateFrom + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })} - {new Date(dateTo + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+              </p>
+              {vendorStatement.vendor?.registered && (
+                <p className="text-xs text-gray-400 mt-0.5">
+                  {[vendorStatement.vendor.category, vendorStatement.vendor.phone, vendorStatement.vendor.email, vendorStatement.vendor.website].filter(Boolean).join(' · ')}
+                </p>
+              )}
+            </div>
+            <div className="flex gap-2">
+              <button onClick={printVendorStatement} className="btn-secondary">
+                <Printer size={16} /> Print
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-6">
+            <div className="bg-red-50 rounded-lg p-3">
+              <div className="text-xs text-red-600 font-medium">Total Paid</div>
+              <div className="text-lg font-bold text-red-700">{formatCurrency(vendorStatement.total_paid)}</div>
+            </div>
+            <div className="bg-green-50 rounded-lg p-3">
+              <div className="text-xs text-green-600 font-medium">Total Received</div>
+              <div className="text-lg font-bold text-green-700">{formatCurrency(vendorStatement.total_received)}</div>
+            </div>
+            <div className="bg-gray-50 rounded-lg p-3">
+              <div className="text-xs text-gray-500 font-medium">Net (received - paid)</div>
+              <div className={`text-lg font-bold ${vendorStatement.net < 0 ? 'text-red-700' : 'text-gray-900'}`}>{formatCurrency(vendorStatement.net)}</div>
+            </div>
+          </div>
+
+          <h3 className="text-sm font-semibold text-gray-700 mb-2">Purchases / Payments</h3>
+          {(vendorStatement.purchases || []).length > 0 ? (
+            <div className="overflow-x-auto mb-6">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 border-b border-gray-200">
+                  <tr>
+                    <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Date</th>
+                    <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Category</th>
+                    <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase hidden md:table-cell">Description</th>
+                    <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase hidden md:table-cell">Method</th>
+                    <th className="text-right px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Amount</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {vendorStatement.purchases.map((p, i) => (
+                    <tr key={i} className="hover:bg-gray-50">
+                      <td className="px-3 py-2">{new Date(p.expense_date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</td>
+                      <td className="px-3 py-2">{p.category_name || '-'}</td>
+                      <td className="px-3 py-2 hidden md:table-cell text-gray-600">{p.description || ''}</td>
+                      <td className="px-3 py-2 hidden md:table-cell capitalize">{p.payment_method || ''}</td>
+                      <td className="px-3 py-2 text-right font-medium text-red-700">{formatCurrency(p.amount)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="text-center text-gray-500 py-6 mb-4">No purchases recorded for this period</p>
+          )}
+
+          {(vendorStatement.income || []).length > 0 && (
+            <>
+              <h3 className="text-sm font-semibold text-gray-700 mb-2">Income Received</h3>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50 border-b border-gray-200">
+                    <tr>
+                      <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Date</th>
+                      <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Category</th>
+                      <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase hidden md:table-cell">Notes</th>
+                      <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase hidden md:table-cell">Method</th>
+                      <th className="text-right px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {vendorStatement.income.map((d, i) => (
+                      <tr key={i} className="hover:bg-gray-50">
+                        <td className="px-3 py-2">{new Date(d.donation_date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</td>
+                        <td className="px-3 py-2">{d.category_name || '-'}</td>
+                        <td className="px-3 py-2 hidden md:table-cell text-gray-600">{d.notes || ''}</td>
+                        <td className="px-3 py-2 hidden md:table-cell capitalize">{d.payment_method || ''}</td>
+                        <td className="px-3 py-2 text-right font-medium text-green-700">{formatCurrency(d.amount)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {!statement && !allStatement && !nonGivers && !vendorStatement && !loading && (
         <div className="card text-center py-16">
           <FileText size={48} className="text-gray-300 mx-auto mb-3" />
-          <p className="text-gray-500">{mode === 'individual' ? 'Select a member or non-member donor and a date range to generate a giving statement' : mode === 'non_givers' ? 'Select a date range and click Generate Statement to see who did not give' : 'Select a date range and click Generate Statement to see all givers (members and non-members)'}</p>
+          <p className="text-gray-500">{mode === 'individual' ? 'Select a member or non-member donor and a date range to generate a giving statement' : mode === 'non_givers' ? 'Select a date range and click Generate Statement to see who did not give' : mode === 'vendor' ? 'Select or type a vendor and a date range to see everything paid to and received from that business' : 'Select a date range and click Generate Statement to see all givers (members and non-members)'}</p>
         </div>
       )}
     </>

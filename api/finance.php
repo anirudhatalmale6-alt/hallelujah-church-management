@@ -1667,6 +1667,81 @@ switch ($method) {
             jsonResponse(['donors' => $stmt->fetchAll()]);
         }
 
+        // Vendor statement: everything the church spent WITH a vendor (expenses)
+        // plus anything received FROM that business recorded by name (donations),
+        // over a date range. Mirrors the member giving statement but for vendors.
+        if ($action === 'vendor_statement') {
+            $vendorName = trim($_GET['vendor_name'] ?? '');
+            if ($vendorName === '') jsonResponse(['error' => 'vendor_name required'], 400);
+
+            $dateFrom = $_GET['date_from'] ?? date('Y-01-01');
+            $dateTo = $_GET['date_to'] ?? date('Y-12-31');
+
+            // Registered contact details, if this vendor is in the registry.
+            $vendor = ['name' => $vendorName, 'registered' => false];
+            try {
+                $vs = $db->prepare("SELECT name, category, phone, email, website, address, notes FROM vendors WHERE LOWER(TRIM(name)) = LOWER(?) LIMIT 1");
+                $vs->execute([$vendorName]);
+                if ($row = $vs->fetch()) {
+                    $vendor = array_merge($row, ['registered' => true]);
+                }
+            } catch (Exception $e) { /* vendors table optional */ }
+
+            // Purchases / bills paid to this vendor.
+            $purchases = [];
+            $totalPaid = 0;
+            try {
+                $pStmt = $db->prepare("
+                    SELECT e.id, e.expense_date, e.amount, e.description, e.payment_method,
+                           e.reference_number, ec.name AS category_name,
+                           a.name AS account_name
+                    FROM expenses e
+                    LEFT JOIN expense_categories ec ON ec.id = e.category_id
+                    LEFT JOIN accounts a ON a.id = e.source_account_id
+                    WHERE LOWER(TRIM(e.vendor)) = LOWER(?)
+                      AND e.expense_date BETWEEN ? AND ?
+                    ORDER BY e.expense_date ASC, e.id ASC
+                ");
+                $pStmt->execute([$vendorName, $dateFrom, $dateTo]);
+                foreach ($pStmt->fetchAll() as $r) {
+                    $purchases[] = $r;
+                    $totalPaid += (float)$r['amount'];
+                }
+            } catch (Exception $e) { /* ignore */ }
+
+            // Money received from this business, recorded as a name-only donation.
+            $income = [];
+            $totalReceived = 0;
+            try {
+                $iStmt = $db->prepare("
+                    SELECT d.id, d.donation_date, d.amount, d.payment_method,
+                           d.reference_number, d.notes, dc.name AS category_name
+                    FROM donations d
+                    LEFT JOIN donation_categories dc ON dc.id = d.category_id
+                    WHERE d.member_id IS NULL
+                      AND LOWER(TRIM(d.donor_name)) = LOWER(?)
+                      AND d.donation_date BETWEEN ? AND ?
+                    ORDER BY d.donation_date ASC, d.id ASC
+                ");
+                $iStmt->execute([$vendorName, $dateFrom, $dateTo]);
+                foreach ($iStmt->fetchAll() as $r) {
+                    $income[] = $r;
+                    $totalReceived += (float)$r['amount'];
+                }
+            } catch (Exception $e) { /* ignore */ }
+
+            jsonResponse([
+                'vendor' => $vendor,
+                'purchases' => $purchases,
+                'income' => $income,
+                'total_paid' => round($totalPaid, 2),
+                'total_received' => round($totalReceived, 2),
+                'net' => round($totalReceived - $totalPaid, 2),
+                'date_from' => $dateFrom,
+                'date_to' => $dateTo,
+            ]);
+        }
+
         // --- ONE LOAN TRANSACTION (for the edit form) ---
         if ($action === 'loan_entry') {
             $id = (int)($_GET['id'] ?? 0);
