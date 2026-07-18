@@ -12,7 +12,7 @@ import {
   Download, FileText, Search, TrendingUp, PieChart,
   Calendar, CreditCard, Users, ChevronDown, ChevronUp,
   Printer, Settings, Tag, Eye, EyeOff, ShieldCheck, Receipt,
-  BarChart3, Wallet, BookOpen, ChevronRight, Landmark
+  BarChart3, Wallet, BookOpen, ChevronRight, Landmark, Store
 } from 'lucide-react';
 
 const paymentMethods = [
@@ -242,6 +242,7 @@ export default function FinancePage() {
     { key: 'financial_statements', label: 'Fin. Statements', icon: Wallet, show: hasReports && (hasFinanceSection('financial_statements') || hasFinanceSection('income_statement') || hasFinanceSection('balance_sheet') || hasFinanceSection('budget_actual')) },
     { key: 'pledges', label: 'Pledges', icon: Calendar, show: hasGiving && hasFinanceSection('pledges') },
     { key: 'accounts', label: 'Chart of Accounts', icon: BookOpen, show: hasFullFinance && hasFinanceSection('accounts') },
+    { key: 'vendors', label: 'Vendors', icon: Store, show: (hasExpenses || hasGiving) && hasFinanceSection('vendors') },
     { key: 'audit', label: 'Activity Log', icon: Eye, show: hasFullFinance && hasFinanceSection('audit') },
     ...(isAdmin ? [{ key: 'categories', label: 'Categories', icon: Tag, show: hasFinanceSection('categories') }] : []),
   ];
@@ -295,6 +296,7 @@ export default function FinancePage() {
       {tab === 'financial_statements' && <FinancialStatementsTab setError={setError} setMessage={setMessage} isAdmin={isAdmin} hasFinanceSection={hasFinanceSection} />}
       {tab === 'pledges' && <PledgesTab setError={setError} setMessage={setMessage} isAdmin={isAdmin} />}
       {tab === 'accounts' && <ChartOfAccountsTab setError={setError} setMessage={setMessage} isAdmin={isAdmin} />}
+      {tab === 'vendors' && <VendorsTab setError={setError} setMessage={setMessage} />}
       {tab === 'audit' && <AuditLogTab setError={setError} setMessage={setMessage} isAdmin={isAdmin} />}
       {tab === 'categories' && isAdmin && <CategoriesTab setError={setError} setMessage={setMessage} />}
     </div>
@@ -345,8 +347,23 @@ function MemberTypeahead({ membersList, vendorList = [], value, donorName, onCha
   }, []);
 
   const handleAddNew = async () => {
-    if (!newName.trim()) return;
-    const parts = newName.trim().split(/\s+/);
+    const nm = newName.trim();
+    if (!nm) return;
+
+    // A vendor / business (e.g. "HC Store", "Amazon") is saved to the Vendors
+    // registry, NOT the People list, and attached to the record as a plain name.
+    if (newType === 'vendor') {
+      try { await financeApi.vendorSave({ name: nm }); } catch (err) { /* duplicate is fine, still use the name */ }
+      onChange('');
+      onDonorNameChange(nm);
+      setSearch(nm);
+      setShowAddNew(false);
+      setOpen(false);
+      if (onAddNew) onAddNew();
+      return;
+    }
+
+    const parts = nm.split(/\s+/);
     const firstName = parts[0] || '';
     const lastName = parts.slice(1).join(' ') || '';
     try {
@@ -399,19 +416,22 @@ function MemberTypeahead({ membersList, vendorList = [], value, donorName, onCha
       )}
       {showAddNew && (
         <div className="bg-white border border-gray-200 rounded-lg shadow-lg p-3">
-          <div className="text-sm font-medium text-gray-700 mb-2">Register New Person</div>
-          <input className="input py-1.5 text-sm mb-2" placeholder="Full name" value={newName} onChange={e => setNewName(e.target.value)} autoFocus />
+          <div className="text-sm font-medium text-gray-700 mb-2">{newType === 'vendor' ? 'Add New Vendor' : 'Register New'}</div>
+          <input className="input py-1.5 text-sm mb-2" placeholder={newType === 'vendor' ? 'Business / vendor name' : 'Full name'} value={newName} onChange={e => setNewName(e.target.value)} autoFocus />
           <select className="input py-1.5 text-sm mb-2" value={newType} onChange={e => setNewType(e.target.value)}>
-            <option value="church_member">Church Member</option>
-            <option value="non_member_attendee">Non-Member Attendee</option>
-            <option value="vendor">Vendor</option>
-            <option value="community">Community Contact</option>
-            <option value="companion">Companion</option>
-            <option value="other">Other</option>
+            <option value="church_member">Person - Church Member</option>
+            <option value="non_member_attendee">Person - Non-Member Attendee</option>
+            <option value="community">Person - Community Contact</option>
+            <option value="companion">Person - Companion</option>
+            <option value="other">Person - Other</option>
+            <option value="vendor">Vendor / Business (not a person)</option>
           </select>
+          {newType === 'vendor' && (
+            <div className="text-xs text-gray-500 mb-2">Saved to Vendors. Add phone, email, website and address later in the Vendors tab.</div>
+          )}
           <div className="flex justify-end gap-2">
-            <button type="button" className="btn-secondary py-1 px-2 text-xs" onClick={() => { setShowAddNew(false); onDonorNameChange(newName); onChange(''); }}>Use as Donor Name</button>
-            <button type="button" className="btn-primary py-1 px-2 text-xs" onClick={handleAddNew}><Plus size={12} /> Register & Select</button>
+            <button type="button" className="btn-secondary py-1 px-2 text-xs" onClick={() => { setShowAddNew(false); onDonorNameChange(newName); onChange(''); }}>Use name only</button>
+            <button type="button" className="btn-primary py-1 px-2 text-xs" onClick={handleAddNew}><Plus size={12} /> {newType === 'vendor' ? 'Add & Select' : 'Register & Select'}</button>
           </div>
         </div>
       )}
@@ -426,7 +446,15 @@ function MemberTypeahead({ membersList, vendorList = [], value, donorName, onCha
         className="input py-1.5 text-sm"
         placeholder="Search or type name..."
         value={open ? search : (value ? displayValue : (donorName || ''))}
-        onChange={e => { setSearch(e.target.value); updatePos(); setOpen(true); if (!e.target.value) { onChange(''); onDonorNameChange(''); } }}
+        onChange={e => {
+          const v = e.target.value;
+          setSearch(v); updatePos(); setOpen(true);
+          // Whatever is typed is kept as the name (a business like "HC Store",
+          // or a person you haven't picked yet) so it is never lost on Save.
+          // Choosing someone from the list below overrides this.
+          if (!v) { onChange(''); onDonorNameChange(''); }
+          else { onChange(''); onDonorNameChange(v); }
+        }}
         onFocus={() => { updatePos(); setOpen(true); setSearch(value ? displayValue : (donorName || '')); }}
       />
       {dropdown}
@@ -4691,6 +4719,147 @@ function PledgesTab({ setError, setMessage, isAdmin }) {
         )}
       </Modal>
     </>
+  );
+}
+
+/* ─── Vendors Tab ─── */
+const emptyVendor = { id: null, name: '', category: '', phone: '', email: '', website: '', address: '', notes: '', is_active: 1 };
+
+function VendorsTab({ setError, setMessage }) {
+  const [vendors, setVendors] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState(emptyVendor);
+  const [saving, setSaving] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const d = await financeApi.vendorsFull(search.trim() || undefined);
+      setVendors(d.vendors || []);
+      if (d.needs_migration) setError('Vendors table is not set up yet on the server.');
+    } catch (err) {
+      setError(err.message || 'Failed to load vendors');
+    } finally { setLoading(false); }
+  }, [search, setError]);
+
+  useEffect(() => { const t = setTimeout(load, 250); return () => clearTimeout(t); }, [load]);
+
+  const openNew = () => { setForm(emptyVendor); setShowForm(true); };
+  const openEdit = (v) => { setForm({ ...emptyVendor, ...v, is_active: v.is_active ? 1 : 0 }); setShowForm(true); };
+
+  const save = async () => {
+    if (!form.name.trim()) { setError('Vendor name is required'); return; }
+    setSaving(true); setError(''); setMessage('');
+    try {
+      await financeApi.vendorSave(form);
+      setMessage(form.id ? 'Vendor updated' : 'Vendor added');
+      setShowForm(false);
+      load();
+    } catch (err) {
+      setError(err.message || 'Failed to save vendor');
+    } finally { setSaving(false); }
+  };
+
+  const remove = async (v) => {
+    if (!window.confirm(`Delete vendor "${v.name}"? This only removes it from the vendor list — it does not change any recorded transactions.`)) return;
+    setError(''); setMessage('');
+    try { await financeApi.vendorDelete(v.id); setMessage('Vendor deleted'); load(); }
+    catch (err) { setError(err.message || 'Failed to delete vendor'); }
+  };
+
+  return (
+    <div>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+        <div>
+          <h2 className="text-lg font-semibold text-gray-900">Vendors</h2>
+          <p className="text-sm text-gray-500">Businesses you buy from or receive funds from (Amazon, a store, a supplier). These are not people, and they appear in the name search when you record income or an expense.</p>
+        </div>
+        <button className="btn-primary shrink-0" onClick={openNew}><Plus size={15} /> Add Vendor</button>
+      </div>
+
+      <div className="relative mb-4 max-w-xs">
+        <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+        <input className="input pl-9" placeholder="Search vendors..." value={search} onChange={e => setSearch(e.target.value)} />
+      </div>
+
+      {loading ? (
+        <div className="text-gray-400 text-sm py-8 text-center">Loading vendors...</div>
+      ) : vendors.length === 0 ? (
+        <div className="text-gray-400 text-sm py-8 text-center border border-dashed border-gray-200 rounded-lg">
+          No vendors yet. Click "Add Vendor" to create your first one (e.g. HC Store, Amazon).
+        </div>
+      ) : (
+        <div className="bg-white border border-gray-200 rounded-lg overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-gray-200 bg-gray-50">
+                <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase">Name</th>
+                <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase hidden sm:table-cell">Category</th>
+                <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase hidden md:table-cell">Contact</th>
+                <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase hidden lg:table-cell">Used</th>
+                <th className="px-4 py-2"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {vendors.map(v => (
+                <tr key={v.id} className={`border-b border-gray-100 last:border-0 ${v.is_active ? '' : 'opacity-50'}`}>
+                  <td className="px-4 py-2">
+                    <div className="font-medium text-gray-900">{v.name}{!v.is_active && <span className="ml-2 text-xs text-gray-400">(inactive)</span>}</div>
+                    {v.website && <a href={v.website.startsWith('http') ? v.website : `https://${v.website}`} target="_blank" rel="noreferrer" className="text-xs text-primary-600 hover:underline">{v.website}</a>}
+                  </td>
+                  <td className="px-4 py-2 text-gray-600 hidden sm:table-cell">{v.category || '-'}</td>
+                  <td className="px-4 py-2 text-gray-600 hidden md:table-cell">
+                    {v.phone && <div>{v.phone}</div>}
+                    {v.email && <div className="text-xs text-gray-400">{v.email}</div>}
+                    {!v.phone && !v.email && '-'}
+                  </td>
+                  <td className="px-4 py-2 text-gray-500 text-xs hidden lg:table-cell">
+                    {(Number(v.donation_count) > 0 || Number(v.expense_count) > 0)
+                      ? [Number(v.expense_count) > 0 ? `${v.expense_count} expense${v.expense_count > 1 ? 's' : ''}` : '', Number(v.donation_count) > 0 ? `${v.donation_count} income` : ''].filter(Boolean).join(', ')
+                      : 'Not used yet'}
+                  </td>
+                  <td className="px-4 py-2 text-right whitespace-nowrap">
+                    <button className="text-gray-400 hover:text-primary-700 mr-3" onClick={() => openEdit(v)} title="Edit"><Edit2 size={15} /></button>
+                    <button className="text-gray-400 hover:text-red-600" onClick={() => remove(v)} title="Delete"><Trash2 size={15} /></button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <Modal isOpen={showForm} onClose={() => setShowForm(false)} title={form.id ? 'Edit Vendor' : 'Add Vendor'}>
+        <div className="space-y-3">
+          <div><label className="label">Name <span className="text-red-500">*</span></label>
+            <input className="input" placeholder="e.g. HC Store" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} autoFocus /></div>
+          <div><label className="label">Category</label>
+            <input className="input" placeholder="e.g. Store, Supplies, Utilities" value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))} /></div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div><label className="label">Phone</label>
+              <input className="input" placeholder="Optional" value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} /></div>
+            <div><label className="label">Email</label>
+              <input className="input" placeholder="Optional" value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} /></div>
+          </div>
+          <div><label className="label">Website</label>
+            <input className="input" placeholder="Optional" value={form.website} onChange={e => setForm(f => ({ ...f, website: e.target.value }))} /></div>
+          <div><label className="label">Address</label>
+            <input className="input" placeholder="Optional" value={form.address} onChange={e => setForm(f => ({ ...f, address: e.target.value }))} /></div>
+          <div><label className="label">Notes</label>
+            <textarea className="input" rows={2} placeholder="Optional" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} /></div>
+          <label className="flex items-center gap-2 text-sm text-gray-700">
+            <input type="checkbox" checked={!!form.is_active} onChange={e => setForm(f => ({ ...f, is_active: e.target.checked ? 1 : 0 }))} />
+            Active (show in the name search)
+          </label>
+          <div className="flex justify-end gap-2 pt-2">
+            <button className="btn-secondary" onClick={() => setShowForm(false)}>Cancel</button>
+            <button className="btn-primary" onClick={save} disabled={saving}>{saving ? 'Saving...' : (form.id ? 'Save Changes' : 'Add Vendor')}</button>
+          </div>
+        </div>
+      </Modal>
+    </div>
   );
 }
 
