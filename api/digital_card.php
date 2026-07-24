@@ -48,7 +48,7 @@ if (!$member) {
     exit;
 }
 
-$settingsStmt = $db->query("SELECT `key`, value FROM settings WHERE `key` IN ('church_name', 'church_address')");
+$settingsStmt = $db->query("SELECT `key`, value FROM settings WHERE `key` IN ('church_name', 'church_address', 'person_types')");
 $settings = [];
 while ($row = $settingsStmt->fetch()) {
     $settings[$row['key']] = $row['value'];
@@ -62,12 +62,25 @@ $memberName = htmlspecialchars($member['first_name'] . ' ' . $member['last_name'
 $qrCode = htmlspecialchars($member['qr_code']);
 $pinCode = htmlspecialchars($member['pin_code']);
 
+// Person-type labels come from the church's Settings, so a renamed type
+// (e.g. "Non-Member Attendee" -> "Congregant") shows correctly on the card.
+// The hardcoded values are only a fallback for types not in the custom list.
 $typeLabels = [
     'church_member' => 'Member',
     'non_member_attendee' => 'Attendee',
     'community' => 'Community',
     'companion' => 'Companion',
 ];
+if (!empty($settings['person_types'])) {
+    $decodedTypes = json_decode($settings['person_types'], true);
+    if (is_array($decodedTypes)) {
+        foreach ($decodedTypes as $t) {
+            if (empty($t['value'])) continue;
+            $tv = preg_replace('/[^a-z0-9_]/', '', strtolower(str_replace(' ', '_', $t['value'])));
+            $typeLabels[$tv] = $t['label'] ?? $t['value'];
+        }
+    }
+}
 $title = htmlspecialchars($member['card_title'] ?: ($typeLabels[$member['person_type']] ?? ''));
 
 $initials = strtoupper(

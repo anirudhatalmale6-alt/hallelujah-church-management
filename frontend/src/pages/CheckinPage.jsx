@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import OfflineCheckin from '../components/OfflineCheckin';
 import { CameraScanner, PhotoScanner, PhotoCapture } from '../components/CheckinCapture';
+import { loadPersonTypes, labelFor } from '../utils/personTypes';
 
 const TABS = [
   { key: 'kiosk', label: 'Check-In Kiosk', icon: QrCode, perm: 'kiosk' },
@@ -1094,20 +1095,13 @@ function QRCodeImg({ value, size = 80 }) {
   return <canvas ref={canvasRef} style={{ width: size, height: size }} />;
 }
 
-const PERSON_TYPE_LABELS = {
-  church_member: 'Member',
-  non_member_attendee: 'Attendee',
-  community: 'Community',
-  companion: 'Companion',
-  other: '',
-};
-
 function PrintCards() {
   const [codes, setCodes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState(new Set());
   const [churchSettings, setChurchSettings] = useState({});
+  const [personTypes, setPersonTypes] = useState([]);
   const [cardPrinterMode, setCardPrinterMode] = useState(true);
   const [cardOrientation, setCardOrientation] = useState('landscape');
   // 'both' = front+back interleaved (dual-sided printers).
@@ -1119,11 +1113,13 @@ function PrintCards() {
     Promise.all([
       checkin.codes(),
       settingsApi.get(),
-    ]).then(([codesRes, settingsRes]) => {
+      loadPersonTypes(true),
+    ]).then(([codesRes, settingsRes, typesRes]) => {
       const c = codesRes.codes || [];
       setCodes(c);
       setSelected(new Set(c.map(x => x.id)));
       setChurchSettings(settingsRes.settings || {});
+      setPersonTypes(typesRes || []);
     }).catch(() => {}).finally(() => setLoading(false));
   }, []);
 
@@ -1345,7 +1341,7 @@ function PrintCards() {
       const barcodeDataUrl = canvas.toDataURL('image/png');
       const qrDataUrl = qrDataUrls[i];
       const photoSrc = photoUrls[i];
-      const title = c.card_title || PERSON_TYPE_LABELS[c.person_type] || '';
+      const title = c.card_title || (c.person_type ? labelFor(personTypes, c.person_type) : '') || '';
       const expiryFormatted = c.card_expiry_date ? new Date(c.card_expiry_date + 'T00:00:00').toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' }) : '';
 
       const photoHtml = photoSrc
@@ -1752,9 +1748,9 @@ function PrintCards() {
                 />
                 <div>
                   <span className="font-medium text-gray-900">{c.first_name} {c.last_name}</span>
-                  {(c.card_title || (c.person_type && PERSON_TYPE_LABELS[c.person_type])) && (
+                  {(c.card_title || (c.person_type && labelFor(personTypes, c.person_type))) && (
                     <span className="ml-2 text-xs bg-primary-100 text-primary-700 px-1.5 py-0.5 rounded">
-                      {c.card_title || PERSON_TYPE_LABELS[c.person_type]}
+                      {c.card_title || labelFor(personTypes, c.person_type)}
                     </span>
                   )}
                 </div>
