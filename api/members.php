@@ -92,10 +92,31 @@ switch ($method) {
             $where = [];
             $params = [];
 
-            if ($search) {
-                $where[] = "(first_name LIKE ? OR last_name LIKE ? OR email LIKE ? OR phone LIKE ?)";
-                $searchTerm = "%$search%";
-                $params = array_merge($params, [$searchTerm, $searchTerm, $searchTerm, $searchTerm]);
+            if ($search !== '') {
+                // Split the query into words and require EACH word to appear
+                // somewhere in the person's name / email / phone. This lets a
+                // full-name search like "Marc Bien" match a first name of
+                // "Marc Hubert" and a last name of "Bien Aime" (previously the
+                // words were matched per-column, so any cross-field full name
+                // returned nothing). Phone digits are also matched with spaces
+                // and punctuation stripped so "215 478" finds "2154785996".
+                $haystack = "CONCAT_WS(' ', first_name, last_name, email, phone)";
+                $phoneDigits = "REPLACE(REPLACE(REPLACE(REPLACE(phone, ' ', ''), '-', ''), '(', ''), ')', '')";
+                $tokens = preg_split('/\s+/', trim($search));
+                foreach ($tokens as $token) {
+                    if ($token === '') continue;
+                    $digits = preg_replace('/[^0-9]/', '', $token);
+                    if ($digits !== '') {
+                        // Token has digits: match the name haystack OR the
+                        // digit-only phone (so "215-478" finds "2154785996").
+                        $where[] = "($haystack LIKE ? OR $phoneDigits LIKE ?)";
+                        $params[] = '%' . $token . '%';
+                        $params[] = '%' . $digits . '%';
+                    } else {
+                        $where[] = "$haystack LIKE ?";
+                        $params[] = '%' . $token . '%';
+                    }
+                }
             }
             if ($status) {
                 $where[] = "status = ?";

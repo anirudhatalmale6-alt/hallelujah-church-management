@@ -5969,6 +5969,9 @@ function AuditLogTab({ setError, setMessage, isAdmin }) {
   const [entityFilter, setEntityFilter] = useState('all');
   const [expandedId, setExpandedId] = useState(null);
   const [deleteId, setDeleteId] = useState(null);
+  const [selectedIds, setSelectedIds] = useState([]);
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
 
   const loadLogs = useCallback(async () => {
     setLoading(true);
@@ -5982,6 +5985,7 @@ function AuditLogTab({ setError, setMessage, isAdmin }) {
       setLogs(data.logs || []);
       setTotal(data.total || 0);
       setPages(data.pages || 1);
+      setSelectedIds([]);
     } catch (err) {
       setError(err.message);
     }
@@ -5989,6 +5993,12 @@ function AuditLogTab({ setError, setMessage, isAdmin }) {
   }, [page, dateFrom, dateTo, actionFilter, entityFilter, setError]);
 
   useEffect(() => { loadLogs(); }, [loadLogs]);
+
+  const toggleOne = (id) =>
+    setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  const allOnPageSelected = logs.length > 0 && logs.every(l => selectedIds.includes(l.id));
+  const toggleAll = () =>
+    setSelectedIds(allOnPageSelected ? [] : logs.map(l => l.id));
 
   const handleDelete = async () => {
     if (!deleteId) return;
@@ -6000,6 +6010,20 @@ function AuditLogTab({ setError, setMessage, isAdmin }) {
     } catch (err) {
       setError(err.message);
     }
+  };
+
+  const handleBulkDelete = async () => {
+    if (!selectedIds.length) return;
+    setBulkDeleting(true);
+    try {
+      const res = await auditLogApi.bulkDelete(selectedIds);
+      setBulkOpen(false);
+      setMessage(res.message || 'Entries deleted');
+      loadLogs();
+    } catch (err) {
+      setError(err.message);
+    }
+    setBulkDeleting(false);
   };
 
   const exportCSV = () => {
@@ -6127,6 +6151,20 @@ function AuditLogTab({ setError, setMessage, isAdmin }) {
         </div>
       </div>
 
+      {isAdmin && selectedIds.length > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-4 px-4 py-3 rounded-lg bg-primary-50 border border-primary-200">
+          <span className="text-sm font-medium text-primary-800">
+            {selectedIds.length} selected
+          </span>
+          <div className="flex gap-2">
+            <button onClick={() => setSelectedIds([])} className="btn-secondary text-sm">Clear</button>
+            <button onClick={() => setBulkOpen(true)} className="btn-danger text-sm">
+              <Trash2 size={14} /> Delete selected
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="card mb-4">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           <input
@@ -6182,6 +6220,17 @@ function AuditLogTab({ setError, setMessage, isAdmin }) {
               <table className="w-full">
                 <thead className="bg-gray-50 border-b border-gray-200">
                   <tr>
+                    {isAdmin && (
+                      <th className="px-4 py-3 w-10">
+                        <input
+                          type="checkbox"
+                          checked={allOnPageSelected}
+                          onChange={toggleAll}
+                          className="h-4 w-4 rounded border-gray-300 text-primary-700 focus:ring-primary-500 cursor-pointer"
+                          title="Select all on this page"
+                        />
+                      </th>
+                    )}
                     <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Date/Time</th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">User</th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Action</th>
@@ -6193,7 +6242,17 @@ function AuditLogTab({ setError, setMessage, isAdmin }) {
                 <tbody className="divide-y divide-gray-100">
                   {logs.map(log => (
                     <React.Fragment key={log.id}>
-                      <tr className="hover:bg-gray-50">
+                      <tr className={selectedIds.includes(log.id) ? 'bg-primary-50' : 'hover:bg-gray-50'}>
+                        {isAdmin && (
+                          <td className="px-4 py-3">
+                            <input
+                              type="checkbox"
+                              checked={selectedIds.includes(log.id)}
+                              onChange={() => toggleOne(log.id)}
+                              className="h-4 w-4 rounded border-gray-300 text-primary-700 focus:ring-primary-500 cursor-pointer"
+                            />
+                          </td>
+                        )}
                         <td className="px-4 py-3 text-sm text-gray-600">
                           {new Date(log.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
                           <div className="text-xs text-gray-400">{new Date(log.created_at).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</div>
@@ -6233,7 +6292,7 @@ function AuditLogTab({ setError, setMessage, isAdmin }) {
                       </tr>
                       {expandedId === log.id && (
                         <tr>
-                          <td colSpan={6} className="px-4 py-3 bg-gray-50 border-b border-gray-200">
+                          <td colSpan={isAdmin ? 7 : 6} className="px-4 py-3 bg-gray-50 border-b border-gray-200">
                             <div className="flex items-center gap-4 mb-2 text-xs text-gray-500">
                               <span>Entity ID: #{log.entity_id}</span>
                               {log.ip_address && <span>IP: {log.ip_address}</span>}
@@ -6262,6 +6321,19 @@ function AuditLogTab({ setError, setMessage, isAdmin }) {
         <div className="flex justify-end gap-3">
           <button onClick={() => setDeleteId(null)} className="btn-secondary">Cancel</button>
           <button onClick={handleDelete} className="btn-danger"><Trash2 size={16} /> Delete</button>
+        </div>
+      </Modal>
+
+      {/* Bulk Delete Confirmation Modal */}
+      <Modal isOpen={bulkOpen} onClose={() => !bulkDeleting && setBulkOpen(false)} title="Delete Selected Entries" size="sm">
+        <p className="text-gray-600 mb-6">
+          Are you sure you want to delete {selectedIds.length} selected log {selectedIds.length === 1 ? 'entry' : 'entries'}? This action cannot be undone.
+        </p>
+        <div className="flex justify-end gap-3">
+          <button onClick={() => setBulkOpen(false)} className="btn-secondary" disabled={bulkDeleting}>Cancel</button>
+          <button onClick={handleBulkDelete} className="btn-danger" disabled={bulkDeleting}>
+            <Trash2 size={16} /> {bulkDeleting ? 'Deleting...' : `Delete ${selectedIds.length}`}
+          </button>
         </div>
       </Modal>
     </>

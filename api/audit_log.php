@@ -70,13 +70,30 @@ switch ($method) {
         break;
 
     case 'DELETE':
-        // Admin only - delete a specific log entry
+        // Admin only - delete one or many log entries. Accepts a single ?id=
+        // or a comma-separated ?ids=1,2,3 for bulk deletion.
         requireRole($currentUser, ['pastor', 'admin']);
-        $id = (int)($_GET['id'] ?? 0);
-        if (!$id) jsonResponse(['error' => 'Log ID required'], 400);
 
-        $db->prepare("DELETE FROM audit_log WHERE id = ?")->execute([$id]);
-        jsonResponse(['message' => 'Audit log entry deleted']);
+        $ids = [];
+        if (!empty($_GET['ids'])) {
+            foreach (explode(',', $_GET['ids']) as $part) {
+                $n = (int)trim($part);
+                if ($n > 0) $ids[] = $n;
+            }
+        } elseif (!empty($_GET['id'])) {
+            $ids[] = (int)$_GET['id'];
+        }
+        $ids = array_values(array_unique($ids));
+
+        if (!$ids) jsonResponse(['error' => 'Log ID required'], 400);
+
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+        $stmt = $db->prepare("DELETE FROM audit_log WHERE id IN ($placeholders)");
+        $stmt->execute($ids);
+        jsonResponse([
+            'message' => $stmt->rowCount() . ' log ' . ($stmt->rowCount() === 1 ? 'entry' : 'entries') . ' deleted',
+            'deleted' => $stmt->rowCount(),
+        ]);
         break;
 
     default:

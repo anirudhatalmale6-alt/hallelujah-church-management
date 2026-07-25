@@ -496,6 +496,7 @@ export const meetingNotes = {
 export const auditLog = {
   list: (params) => request('audit_log.php', { params }),
   delete: (id) => request('audit_log.php', { method: 'DELETE', params: { id } }),
+  bulkDelete: (ids) => request('audit_log.php', { method: 'DELETE', params: { ids: ids.join(',') } }),
 };
 
 export { getToken, setToken, removeToken, getUser, setUser, ApiError };
