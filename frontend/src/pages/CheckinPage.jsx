@@ -1099,6 +1099,7 @@ function PrintCards() {
   const [codes, setCodes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [typeFilter, setTypeFilter] = useState('');
   const [selected, setSelected] = useState(new Set());
   const [churchSettings, setChurchSettings] = useState({});
   const [personTypes, setPersonTypes] = useState([]);
@@ -1117,7 +1118,9 @@ function PrintCards() {
     ]).then(([codesRes, settingsRes, typesRes]) => {
       const c = codesRes.codes || [];
       setCodes(c);
-      setSelected(new Set(c.map(x => x.id)));
+      // Start with nothing selected so the user picks exactly who they want
+      // (filter by person type, then Select All, then Print).
+      setSelected(new Set());
       setChurchSettings(settingsRes.settings || {});
       setPersonTypes(typesRes || []);
     }).catch(() => {}).finally(() => setLoading(false));
@@ -1130,11 +1133,22 @@ function PrintCards() {
   const [editingExpiry, setEditingExpiry] = useState(null);
   const [expiryValue, setExpiryValue] = useState('');
 
-  const filtered = search
-    ? codes.filter(c => `${c.first_name} ${c.last_name}`.toLowerCase().includes(search.toLowerCase()))
-    : codes;
+  const filtered = codes.filter(c => {
+    if (typeFilter && c.person_type !== typeFilter) return false;
+    if (search && !`${c.first_name} ${c.last_name}`.toLowerCase().includes(search.toLowerCase())) return false;
+    return true;
+  });
 
-  const toPrint = filtered.filter(c => selected.has(c.id));
+  // Print everything the user has selected, regardless of the current filter,
+  // so they can select some of one type, switch the filter, add another type,
+  // and print them all together.
+  const toPrint = codes.filter(c => selected.has(c.id));
+
+  // Counts per person type for the filter dropdown.
+  const typeCounts = codes.reduce((acc, c) => {
+    acc[c.person_type] = (acc[c.person_type] || 0) + 1;
+    return acc;
+  }, {});
 
   const toggleSelect = (id) => {
     setSelected(prev => {
@@ -1650,16 +1664,34 @@ function PrintCards() {
               className="input pl-9" placeholder="Search by name..."
             />
           </div>
+          <select
+            value={typeFilter}
+            onChange={e => setTypeFilter(e.target.value)}
+            className="input w-auto"
+            title="Filter the list by person type"
+          >
+            <option value="">All types ({codes.length})</option>
+            {Object.keys(typeCounts).sort((a, b) =>
+              labelFor(personTypes, a).localeCompare(labelFor(personTypes, b))
+            ).map(t => (
+              <option key={t} value={t}>{labelFor(personTypes, t)} ({typeCounts[t]})</option>
+            ))}
+          </select>
           <div className="flex items-center gap-3">
-            <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <label className="flex items-center gap-2 text-sm cursor-pointer" title="Select or deselect everyone currently shown in the list">
               <input
                 type="checkbox"
                 checked={filtered.length > 0 && filtered.every(c => selected.has(c.id))}
                 onChange={toggleAll}
                 className="rounded"
               />
-              Select All ({filtered.length})
+              Select all shown ({filtered.length})
             </label>
+            {selected.size > 0 && (
+              <button onClick={() => setSelected(new Set())} className="text-sm text-gray-500 hover:text-gray-700 underline">
+                Clear ({selected.size})
+              </button>
+            )}
             <button onClick={handlePrint} disabled={toPrint.length === 0} className="btn btn-primary">
               <Printer size={14} /> Print {toPrint.length} Card{toPrint.length !== 1 ? 's' : ''}
             </button>
@@ -1730,7 +1762,7 @@ function PrintCards() {
           <div className="col-span-full p-8 text-center text-gray-400">Loading...</div>
         ) : filtered.length === 0 ? (
           <div className="col-span-full p-8 text-center text-gray-400">
-            {search ? 'No matching members' : 'No codes generated. Go to "Manage Codes" tab first.'}
+            {(search || typeFilter) ? 'No people match this filter' : 'No people found.'}
           </div>
         ) : filtered.map(c => (
           <div

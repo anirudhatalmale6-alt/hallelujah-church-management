@@ -234,6 +234,27 @@ $currentUser = authenticate();
 switch ($method) {
     case 'GET':
         if ($action === 'codes') {
+            // Make sure EVERY member has a code so the card list is complete
+            // (any status/person type). Previously only active members ever got
+            // codes, so people without one never appeared on the print list.
+            $missing = $db->query("
+                SELECT m.id FROM members m
+                LEFT JOIN member_checkin_codes c ON c.member_id = m.id
+                WHERE c.id IS NULL
+            ")->fetchAll(PDO::FETCH_COLUMN);
+            foreach ($missing as $mid) {
+                $qrCode = strtoupper(bin2hex(random_bytes(8)));
+                $attempts = 0;
+                do {
+                    $pin = str_pad(random_int(1000, 9999), 4, '0', STR_PAD_LEFT);
+                    $pinCheck = $db->prepare("SELECT id FROM member_checkin_codes WHERE pin_code = ?");
+                    $pinCheck->execute([$pin]);
+                    $attempts++;
+                } while ($pinCheck->fetch() && $attempts < 100);
+                $ins = $db->prepare("INSERT INTO member_checkin_codes (member_id, qr_code, barcode_code, pin_code) VALUES (?, ?, ?, ?)");
+                $ins->execute([(int)$mid, $qrCode, $qrCode, $pin]);
+            }
+
             // Get all member codes
             $stmt = $db->query("
                 SELECT c.*, m.first_name, m.last_name, m.email, m.phone, m.photo_url, m.person_type, m.card_title, m.card_expiry_date, m.status as member_status
