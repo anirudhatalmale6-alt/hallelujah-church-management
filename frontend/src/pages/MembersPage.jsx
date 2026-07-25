@@ -63,6 +63,9 @@ export default function MembersPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [deleteId, setDeleteId] = useState(null);
+  const [selectedIds, setSelectedIds] = useState([]);
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
   const [dupMatches, setDupMatches] = useState(null);
   const [availableGroups, setAvailableGroups] = useState([]);
   const [availableHouseholds, setAvailableHouseholds] = useState([]);
@@ -85,6 +88,7 @@ export default function MembersPage() {
       if (personTypeFilter) params.person_type = personTypeFilter;
       const data = await membersApi.list(params);
       setMembers(data.members);
+      setSelectedIds([]);
       setTotal(data.total);
       setPages(data.pages);
       setFamilyGroups(data.family_groups || []);
@@ -195,6 +199,25 @@ export default function MembersPage() {
     } catch (err) {
       alert(err.message);
     }
+  };
+
+  const toggleOne = (id) =>
+    setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  const allOnPageSelected = members.length > 0 && members.every(m => selectedIds.includes(m.id));
+  const toggleAll = () =>
+    setSelectedIds(allOnPageSelected ? [] : members.map(m => m.id));
+
+  const handleBulkDelete = async () => {
+    if (!selectedIds.length) return;
+    setBulkDeleting(true);
+    try {
+      await membersApi.bulkDelete(selectedIds);
+      setBulkOpen(false);
+      loadMembers();
+    } catch (err) {
+      alert(err.message);
+    }
+    setBulkDeleting(false);
   };
 
   const statusBadge = (status) => {
@@ -348,6 +371,19 @@ export default function MembersPage() {
         </div>
       </div>
 
+      {/* Bulk action bar */}
+      {isAdmin && selectedIds.length > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-4 px-4 py-3 rounded-lg bg-primary-50 border border-primary-200">
+          <span className="text-sm font-medium text-primary-800">{selectedIds.length} selected</span>
+          <div className="flex gap-2">
+            <button onClick={() => setSelectedIds([])} className="btn-secondary text-sm">Clear</button>
+            <button onClick={() => setBulkOpen(true)} className="btn-danger text-sm">
+              <Trash2 size={14} /> Delete selected
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Members Table */}
       <div className="card p-0 overflow-hidden">
         {loading ? (
@@ -368,6 +404,17 @@ export default function MembersPage() {
               <table className="w-full">
                 <thead className="bg-gray-50 border-b border-gray-200">
                   <tr>
+                    {isAdmin && (
+                      <th className="px-4 py-3 w-10">
+                        <input
+                          type="checkbox"
+                          checked={allOnPageSelected}
+                          onChange={toggleAll}
+                          className="h-4 w-4 rounded border-gray-300 text-primary-700 focus:ring-primary-500 cursor-pointer"
+                          title="Select all on this page"
+                        />
+                      </th>
+                    )}
                     <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Name</th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider hidden md:table-cell">Contact</th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider hidden lg:table-cell">Group</th>
@@ -378,7 +425,17 @@ export default function MembersPage() {
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {members.map(m => (
-                    <tr key={m.id} className="hover:bg-gray-50 transition-colors">
+                    <tr key={m.id} className={`transition-colors ${selectedIds.includes(m.id) ? 'bg-primary-50' : 'hover:bg-gray-50'}`}>
+                      {isAdmin && (
+                        <td className="px-4 py-3">
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.includes(m.id)}
+                            onChange={() => toggleOne(m.id)}
+                            className="h-4 w-4 rounded border-gray-300 text-primary-700 focus:ring-primary-500 cursor-pointer"
+                          />
+                        </td>
+                      )}
                       <td className="px-4 py-3">
                         <Link to={`/system/public/members/${m.id}`} className="flex items-center gap-3">
                           <div className="w-9 h-9 bg-primary-700 rounded-full flex items-center justify-center text-white text-sm font-medium shrink-0">
@@ -788,6 +845,19 @@ export default function MembersPage() {
           <button onClick={() => setDeleteId(null)} className="btn-secondary">Cancel</button>
           <button onClick={handleDelete} className="btn-danger">
             <Trash2 size={16} /> Delete
+          </button>
+        </div>
+      </Modal>
+
+      {/* Bulk Delete Confirmation */}
+      <Modal isOpen={bulkOpen} onClose={() => !bulkDeleting && setBulkOpen(false)} title="Delete Selected People" size="sm">
+        <p className="text-gray-600 mb-6">
+          Are you sure you want to delete {selectedIds.length} selected {selectedIds.length === 1 ? 'person' : 'people'}? This action cannot be undone and will also remove all their attendance records.
+        </p>
+        <div className="flex items-center justify-end gap-3">
+          <button onClick={() => setBulkOpen(false)} className="btn-secondary" disabled={bulkDeleting}>Cancel</button>
+          <button onClick={handleBulkDelete} className="btn-danger" disabled={bulkDeleting}>
+            <Trash2 size={16} /> {bulkDeleting ? 'Deleting...' : `Delete ${selectedIds.length}`}
           </button>
         </div>
       </Modal>

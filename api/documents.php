@@ -190,19 +190,37 @@ switch ($method) {
         break;
 
     case 'DELETE':
-        $id = (int)($_GET['id'] ?? 0);
-        if (!$id) jsonResponse(['error' => 'ID required'], 400);
+        // Accept a single ?id= or a comma-separated ?ids=1,2,3 for bulk delete.
+        $ids = [];
+        if (!empty($_GET['ids'])) {
+            foreach (explode(',', $_GET['ids']) as $part) {
+                $n = (int)trim($part);
+                if ($n > 0) $ids[] = $n;
+            }
+        } elseif (!empty($_GET['id'])) {
+            $ids[] = (int)$_GET['id'];
+        }
+        $ids = array_values(array_unique($ids));
+        if (!$ids) jsonResponse(['error' => 'ID required'], 400);
 
-        $stmt = $db->prepare("SELECT file_path FROM documents WHERE id = ?");
-        $stmt->execute([$id]);
-        $doc = $stmt->fetch();
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
 
-        if ($doc && $doc['file_path'] && file_exists($doc['file_path'])) {
-            unlink($doc['file_path']);
+        // Remove the underlying files first, then the rows.
+        $sel = $db->prepare("SELECT file_path FROM documents WHERE id IN ($placeholders)");
+        $sel->execute($ids);
+        foreach ($sel->fetchAll() as $doc) {
+            if ($doc['file_path'] && file_exists($doc['file_path'])) {
+                unlink($doc['file_path']);
+            }
         }
 
-        $db->prepare("DELETE FROM documents WHERE id = ?")->execute([$id]);
-        jsonResponse(['message' => 'Document deleted']);
+        $del = $db->prepare("DELETE FROM documents WHERE id IN ($placeholders)");
+        $del->execute($ids);
+        $n = $del->rowCount();
+        jsonResponse([
+            'message' => $n . ' ' . ($n === 1 ? 'document' : 'documents') . ' deleted',
+            'deleted' => $n,
+        ]);
         break;
 
     default:

@@ -643,18 +643,36 @@ switch ($method) {
 
     case 'DELETE':
         requireRole($currentUser, ['pastor', 'admin']);
-        if (!$id) {
+
+        // Accept a single ?id= or a comma-separated ?ids=1,2,3 for bulk delete.
+        $ids = [];
+        if (!empty($_GET['ids'])) {
+            foreach (explode(',', $_GET['ids']) as $part) {
+                $n = (int)trim($part);
+                if ($n > 0) $ids[] = $n;
+            }
+        } elseif ($id) {
+            $ids[] = $id;
+        }
+        $ids = array_values(array_unique($ids));
+
+        if (!$ids) {
             jsonResponse(['error' => 'Member ID required'], 400);
         }
 
-        $stmt = $db->prepare("DELETE FROM members WHERE id = ?");
-        $stmt->execute([$id]);
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+        $stmt = $db->prepare("DELETE FROM members WHERE id IN ($placeholders)");
+        $stmt->execute($ids);
 
         if ($stmt->rowCount() === 0) {
             jsonResponse(['error' => 'Member not found'], 404);
         }
 
-        jsonResponse(['message' => 'Member deleted successfully']);
+        $n = $stmt->rowCount();
+        jsonResponse([
+            'message' => $n . ' ' . ($n === 1 ? 'person' : 'people') . ' deleted successfully',
+            'deleted' => $n,
+        ]);
         break;
 
     default:

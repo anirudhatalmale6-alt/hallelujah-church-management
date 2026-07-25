@@ -139,6 +139,8 @@ function DocumentsTab() {
   const [editing, setEditing] = useState(null);
   const [editForm, setEditForm] = useState({ title: '', category: '', description: '' });
   const [viewing, setViewing] = useState(null);
+  const [selectedIds, setSelectedIds] = useState([]);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
 
   const [uploadFiles, setUploadFiles] = useState([]);
   const [uploadCategory, setUploadCategory] = useState('other');
@@ -153,6 +155,7 @@ function DocumentsTab() {
       if (search) params.search = search;
       const res = await documents.list(params);
       setDocs(res.documents || []);
+      setSelectedIds([]);
     } catch {}
     setLoading(false);
   };
@@ -218,6 +221,26 @@ function DocumentsTab() {
     } catch (err) {
       alert(err.message || 'Delete failed');
     }
+  };
+
+  const toggleOne = (id) =>
+    setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  const allSelected = docs.length > 0 && docs.every(d => selectedIds.includes(d.id));
+  const toggleAll = () =>
+    setSelectedIds(allSelected ? [] : docs.map(d => d.id));
+
+  const handleBulkDelete = async () => {
+    if (!selectedIds.length) return;
+    const n = selectedIds.length;
+    if (!confirm(`Delete ${n} selected ${n === 1 ? 'document' : 'documents'}? The files will be permanently removed.`)) return;
+    setBulkDeleting(true);
+    try {
+      await documents.bulkDelete(selectedIds);
+      load();
+    } catch (err) {
+      alert(err.message || 'Delete failed');
+    }
+    setBulkDeleting(false);
   };
 
   const categoryCounts = {};
@@ -332,8 +355,36 @@ function DocumentsTab() {
           <div className="p-8 text-center text-gray-400">No documents found</div>
         ) : (
           <div className="divide-y">
+            <div className="flex items-center gap-4 px-4 py-2.5 bg-gray-50 border-b border-gray-200">
+              <input
+                type="checkbox"
+                checked={allSelected}
+                onChange={toggleAll}
+                className="h-4 w-4 rounded border-gray-300 text-primary-700 focus:ring-primary-500 cursor-pointer"
+                title="Select all"
+              />
+              {selectedIds.length > 0 ? (
+                <>
+                  <span className="text-sm font-medium text-primary-800">{selectedIds.length} selected</span>
+                  <div className="ml-auto flex gap-2">
+                    <button onClick={() => setSelectedIds([])} className="btn-secondary text-sm">Clear</button>
+                    <button onClick={handleBulkDelete} disabled={bulkDeleting} className="btn-danger text-sm">
+                      <Trash2 size={14} /> {bulkDeleting ? 'Deleting...' : 'Delete selected'}
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <span className="text-xs text-gray-500">Select all</span>
+              )}
+            </div>
             {docs.map(doc => (
-              <div key={doc.id} className="flex items-center gap-4 px-4 py-3 hover:bg-gray-50">
+              <div key={doc.id} className={`flex items-center gap-4 px-4 py-3 ${selectedIds.includes(doc.id) ? 'bg-primary-50' : 'hover:bg-gray-50'}`}>
+                <input
+                  type="checkbox"
+                  checked={selectedIds.includes(doc.id)}
+                  onChange={() => toggleOne(doc.id)}
+                  className="h-4 w-4 rounded border-gray-300 text-primary-700 focus:ring-primary-500 cursor-pointer flex-shrink-0"
+                />
                 <div className="flex-shrink-0">
                   {getFileIcon(doc.file_type)}
                 </div>

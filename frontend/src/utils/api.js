@@ -123,6 +123,7 @@ export const members = {
   create: (data) => request('members.php', { method: 'POST', body: data }),
   update: (id, data) => request('members.php', { method: 'PUT', body: data, params: { id } }),
   delete: (id) => request('members.php', { method: 'DELETE', params: { id } }),
+  bulkDelete: (ids) => request('members.php', { method: 'DELETE', params: { ids: ids.join(',') } }),
   import: (contacts) => request('members.php', { method: 'POST', body: { contacts }, params: { action: 'import' } }),
   autoStatus: () => request('members.php', { method: 'POST', params: { action: 'auto_status' } }),
   uploadPhoto: async (memberId, file) => {
@@ -460,6 +461,7 @@ export const documents = {
   },
   update: (id, data) => request('documents.php', { method: 'PUT', body: data, params: { id } }),
   delete: (id) => request('documents.php', { method: 'DELETE', params: { id } }),
+  bulkDelete: (ids) => request('documents.php', { method: 'DELETE', params: { ids: ids.join(',') } }),
   downloadUrl: (id) => `${API_BASE}/documents.php?action=download&id=${id}&token=${getToken()}`,
   viewUrl: (id) => `${API_BASE}/documents.php?action=view&id=${id}&token=${getToken()}`,
 };
