@@ -650,7 +650,7 @@ switch ($method) {
             if (!$typeFilter || $typeFilter === 'income') {
                 $stmt = $db->prepare("
                     SELECT d.id, d.donation_date as date, d.amount, d.payment_method, d.notes,
-                        d.created_at, d.recorded_by,
+                        d.created_at, d.recorded_by, d.routed_account_id,
                         COALESCE(CONCAT(m.first_name, ' ', m.last_name), d.donor_name, 'Anonymous') as who,
                         dc.name as category_name, u.name as recorded_by_name,
                         a.name as account_name
@@ -669,6 +669,7 @@ switch ($method) {
                         'date' => $r['date'], 'amount' => (float)$r['amount'],
                         'description' => $r['category_name'] . ' - ' . $r['who'],
                         'method' => $r['payment_method'], 'account' => $r['account_name'] ?: '',
+                        'routed_account_id' => $r['routed_account_id'] ? (int)$r['routed_account_id'] : null,
                         'recorded_by' => $r['recorded_by_name'], 'created_at' => $r['created_at'],
                         'status' => 'recorded', 'notes' => $r['notes'],
                     ];
@@ -2934,9 +2935,57 @@ switch ($method) {
                 $params[] = $val;
             }
         }
+
+        // "Deposit To" = which bank account the money lands in (routed_account_id).
+        // Accept it as deposit_to (what the form sends) or routed_account_id. Empty = unassigned.
+        $changingRouting = array_key_exists('deposit_to', $data) || array_key_exists('routed_account_id', $data);
+        if ($changingRouting) {
+            $rawRoute = array_key_exists('deposit_to', $data) ? $data['deposit_to'] : $data['routed_account_id'];
+            $newRoutedAccountId = ($rawRoute === '' || $rawRoute === null) ? null : (int)$rawRoute;
+            $fields[] = "routed_account_id = ?";
+            $params[] = $newRoutedAccountId;
+        }
+
         if (empty($fields)) jsonResponse(['error' => 'Nothing to update'], 400);
         $params[] = $id;
-        $db->prepare("UPDATE donations SET " . implode(', ', $fields) . " WHERE id = ?")->execute($params);
+
+        $db->beginTransaction();
+        try {
+            $db->prepare("UPDATE donations SET " . implode(', ', $fields) . " WHERE id = ?")->execute($params);
+
+            // Re-sync the account ledger so balances follow any change to amount or
+            // deposit account. Reverse every existing ledger row for this donation,
+            // then re-create one for its current routing. Idempotent when nothing changed.
+            $existing = $db->prepare("SELECT id, account_id, amount FROM account_ledger WHERE reference_type = 'donation' AND reference_id = ?");
+            $existing->execute([$id]);
+            $revert = $db->prepare("UPDATE accounts SET current_balance = current_balance - ? WHERE id = ?");
+            $delLedger = $db->prepare("DELETE FROM account_ledger WHERE id = ?");
+            foreach ($existing->fetchAll() as $er) {
+                $revert->execute([(float)$er['amount'], $er['account_id']]);
+                $delLedger->execute([$er['id']]);
+            }
+
+            // Reload the donation (post-update) for its current amount + routing.
+            $cur = $db->prepare("
+                SELECT d.*, COALESCE(CONCAT(m.first_name, ' ', m.last_name), d.donor_name, 'Anonymous') as who
+                FROM donations d LEFT JOIN members m ON m.id = d.member_id WHERE d.id = ?
+            ");
+            $cur->execute([$id]);
+            $don = $cur->fetch();
+
+            if ($don && !empty($don['routed_account_id'])) {
+                $acctId = (int)$don['routed_account_id'];
+                $amt = (float)$don['amount'];
+                $db->prepare("INSERT INTO account_ledger (account_id, entry_date, entry_type, amount, description, reference_type, reference_id, created_by) VALUES (?, ?, 'deposit', ?, ?, 'donation', ?, ?)")
+                    ->execute([$acctId, $don['donation_date'], $amt, 'Donation: ' . $don['who'] . ' (' . $don['payment_method'] . ')', $id, $currentUser['user_id']]);
+                $db->prepare("UPDATE accounts SET current_balance = current_balance + ? WHERE id = ?")->execute([$amt, $acctId]);
+            }
+
+            $db->commit();
+        } catch (Exception $e) {
+            $db->rollBack();
+            jsonResponse(['error' => 'Failed to update donation: ' . $e->getMessage()], 500);
+        }
 
         // Audit log
         try {
