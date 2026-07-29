@@ -255,8 +255,13 @@ function rebuildGroupCache(PDO $db, ?int $memberId = null): void {
     }
 }
 
-/** Replace a member's groups with $groupIds and refresh the cache. */
-function syncMemberGroups(PDO $db, int $memberId, array $groupIds): void {
+/**
+ * Replace a member's groups with $groupIds and refresh the cache.
+ * $titles, when given, is a map of group_id => role/title for THIS person in
+ * THAT group (per-group function title). A blank/absent title clears the role
+ * for that group. Titles for groups not in the map are left untouched.
+ */
+function syncMemberGroups(PDO $db, int $memberId, array $groupIds, ?array $titles = null): void {
     $ids = array_values(array_unique(array_filter(array_map('intval', $groupIds))));
 
     if ($ids) {
@@ -270,7 +275,17 @@ function syncMemberGroups(PDO $db, int $memberId, array $groupIds): void {
         $db->prepare("DELETE FROM member_groups WHERE member_id = ?")->execute([$memberId]);
     }
 
+    if ($titles !== null) {
+        $upd = $db->prepare("UPDATE member_groups SET function_title = ? WHERE member_id = ? AND group_id = ?");
+        foreach ($ids as $gid) {
+            if (!array_key_exists($gid, $titles)) continue;
+            $t = trim((string)$titles[$gid]);
+            $upd->execute([$t === '' ? null : $t, $memberId, $gid]);
+        }
+    }
+
     rebuildGroupCache($db, $memberId);
+    refreshMemberPrimaryTitle($db, $memberId);
 }
 
 /** Group ids a member belongs to. */
@@ -278,4 +293,25 @@ function memberGroupIds(PDO $db, int $memberId): array {
     $s = $db->prepare("SELECT group_id FROM member_groups WHERE member_id = ?");
     $s->execute([$memberId]);
     return array_map('intval', $s->fetchAll(PDO::FETCH_COLUMN));
+}
+
+/**
+ * Keep members.function_title as a derived "headline" title = the person's
+ * first non-empty per-group role (by group order). This is only a cache so the
+ * member list / profile keep showing a title; the Groups page uses the real
+ * per-group titles. Called whenever a person's group titles change.
+ */
+function refreshMemberPrimaryTitle(PDO $db, int $memberId): void {
+    $s = $db->prepare("
+        SELECT mg.function_title
+        FROM member_groups mg
+        JOIN `groups` g ON g.id = mg.group_id
+        WHERE mg.member_id = ? AND mg.function_title IS NOT NULL AND mg.function_title <> ''
+        ORDER BY g.sort_order ASC, g.name ASC
+        LIMIT 1
+    ");
+    $s->execute([$memberId]);
+    $t = $s->fetchColumn();
+    $db->prepare("UPDATE members SET function_title = ? WHERE id = ?")
+       ->execute([$t !== false ? $t : null, $memberId]);
 }

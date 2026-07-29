@@ -244,6 +244,9 @@ export default function MemberDetailPage() {
                           title={g.department_name ? `Serves the ${g.department_name} department` : undefined}
                         >
                           {g.name}
+                          {g.function_title && (
+                            <span className="font-semibold text-amber-700">&middot; {g.function_title}</span>
+                          )}
                           {g.department_name && (
                             <span className="text-blue-600">&middot; {g.department_name}</span>
                           )}

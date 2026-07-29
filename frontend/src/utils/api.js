@@ -177,6 +177,7 @@ export const groups = {
   delete: (id) => request('groups.php', { method: 'DELETE', params: { id } }),
   reorder: (groupIds) => request('groups.php', { method: 'PUT', body: { group_ids: groupIds }, params: { action: 'reorder' } }),
   reorderMembers: (groupId, memberIds) => request('groups.php', { method: 'PUT', body: { group_id: groupId, member_ids: memberIds }, params: { action: 'reorder_members' } }),
+  setMemberTitle: (groupId, memberId, functionTitle) => request('groups.php', { method: 'PUT', body: { group_id: groupId, member_id: memberId, function_title: functionTitle }, params: { action: 'set_title' } }),
 };
 
 // Households

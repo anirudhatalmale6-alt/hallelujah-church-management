@@ -6,7 +6,7 @@ import Modal from '../components/Modal';
 import {
   Users, Plus, Edit2, Trash2, AlertCircle, Check,
   FolderOpen, ChevronDown, ChevronUp, Building2, Shield, Heart,
-  ArrowUp, ArrowDown,
+  ArrowUp, ArrowDown, Tag,
 } from 'lucide-react';
 
 const emptyGroup = { name: '', description: '', category: 'ministry', department_id: '' };
@@ -38,6 +38,7 @@ const SECTIONS = [
 
 export default function GroupsPage() {
   const { isAdmin, isLeader } = useAuth();
+  const canManage = isLeader || isAdmin;
   const [groups, setGroups] = useState([]);
   const [depts, setDepts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -50,6 +51,10 @@ export default function GroupsPage() {
   const [expandedId, setExpandedId] = useState(null);
   const [expandedMembers, setExpandedMembers] = useState([]);
   const [expandedLoading, setExpandedLoading] = useState(false);
+  // Editing one person's role/title inside the currently expanded group
+  const [titleEdit, setTitleEdit] = useState(null); // the member being edited
+  const [titleValue, setTitleValue] = useState('');
+  const [titleSaving, setTitleSaving] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -168,6 +173,23 @@ export default function GroupsPage() {
     try { await groupsApi.reorderMembers(expandedId, combined.map(m => m.id)); } catch { /* keep optimistic order */ }
   };
 
+  // Set/clear a person's role INSIDE this group (per-group title).
+  const openTitleEdit = (m) => { setTitleEdit(m); setTitleValue(m.function_title || ''); };
+
+  const saveTitle = async () => {
+    if (!titleEdit) return;
+    setTitleSaving(true);
+    try {
+      await groupsApi.setMemberTitle(expandedId, titleEdit.id, titleValue.trim());
+      const res = await groupsApi.members(expandedId);
+      setExpandedMembers(res.members || []);
+      setTitleEdit(null);
+    } catch (err) {
+      alert(err.message);
+    }
+    setTitleSaving(false);
+  };
+
   const updateField = (field, value) => setForm(f => ({ ...f, [field]: value }));
 
   // Choosing a department implies this group is a serving team, and vice versa
@@ -260,28 +282,25 @@ export default function GroupsPage() {
                       {m.email && <div className="text-xs text-gray-500 truncate">{m.email}</div>}
                     </div>
                   </Link>
-                  {isLeader && list.length > 1 && (
+                  {canManage && (
                     <div className="flex items-center shrink-0">
-                      <button onClick={() => moveMember(list, i, -1, isLeader)} disabled={i === 0}
-                        className="p-1.5 text-gray-400 hover:text-amber-700 hover:bg-white rounded-md disabled:opacity-30 disabled:hover:bg-transparent disabled:cursor-default" title="Move up">
-                        <ArrowUp size={15} />
+                      <button onClick={() => openTitleEdit(m)}
+                        className={`p-1.5 text-gray-400 ${isLeader ? 'hover:text-amber-700' : 'hover:text-primary-700'} hover:bg-white rounded-md`}
+                        title={isLeader ? 'Change or remove their role in this group' : 'Give this person a role in this group'}>
+                        <Tag size={15} />
                       </button>
-                      <button onClick={() => moveMember(list, i, 1, isLeader)} disabled={i === list.length - 1}
-                        className="p-1.5 text-gray-400 hover:text-amber-700 hover:bg-white rounded-md disabled:opacity-30 disabled:hover:bg-transparent disabled:cursor-default" title="Move down">
-                        <ArrowDown size={15} />
-                      </button>
-                    </div>
-                  )}
-                  {!isLeader && list.length > 1 && (
-                    <div className="flex items-center shrink-0">
-                      <button onClick={() => moveMember(list, i, -1, isLeader)} disabled={i === 0}
-                        className="p-1.5 text-gray-400 hover:text-primary-700 hover:bg-white rounded-md disabled:opacity-30 disabled:hover:bg-transparent disabled:cursor-default" title="Move up">
-                        <ArrowUp size={15} />
-                      </button>
-                      <button onClick={() => moveMember(list, i, 1, isLeader)} disabled={i === list.length - 1}
-                        className="p-1.5 text-gray-400 hover:text-primary-700 hover:bg-white rounded-md disabled:opacity-30 disabled:hover:bg-transparent disabled:cursor-default" title="Move down">
-                        <ArrowDown size={15} />
-                      </button>
+                      {list.length > 1 && (
+                        <>
+                          <button onClick={() => moveMember(list, i, -1, isLeader)} disabled={i === 0}
+                            className={`p-1.5 text-gray-400 ${isLeader ? 'hover:text-amber-700' : 'hover:text-primary-700'} hover:bg-white rounded-md disabled:opacity-30 disabled:hover:bg-transparent disabled:cursor-default`} title="Move up">
+                            <ArrowUp size={15} />
+                          </button>
+                          <button onClick={() => moveMember(list, i, 1, isLeader)} disabled={i === list.length - 1}
+                            className={`p-1.5 text-gray-400 ${isLeader ? 'hover:text-amber-700' : 'hover:text-primary-700'} hover:bg-white rounded-md disabled:opacity-30 disabled:hover:bg-transparent disabled:cursor-default`} title="Move down">
+                            <ArrowDown size={15} />
+                          </button>
+                        </>
+                      )}
                     </div>
                   )}
                 </li>
@@ -468,6 +487,40 @@ export default function GroupsPage() {
                 ? <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" />
                 : <Check size={16} />}
               {editGroup ? 'Save Changes' : 'Add Group'}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Set a person's role inside this group */}
+      <Modal isOpen={!!titleEdit} onClose={() => setTitleEdit(null)} title="Role in this group" size="sm">
+        <p className="text-gray-600 text-sm mb-4">
+          {titleEdit && (
+            <>
+              What is <span className="font-medium text-gray-900">{titleEdit.first_name} {titleEdit.last_name}</span>'s
+              role in <span className="font-medium text-gray-900">{groups.find(g => g.id === expandedId)?.name}</span>?
+            </>
+          )}
+        </p>
+        <form onSubmit={(e) => { e.preventDefault(); saveTitle(); }}>
+          <label className="label">Role / title</label>
+          <input
+            className="input"
+            value={titleValue}
+            onChange={e => setTitleValue(e.target.value)}
+            placeholder="e.g. President, Vice-President, Secretary"
+            autoFocus
+          />
+          <p className="text-xs text-gray-400 mt-1">
+            People with a role show at the top of this group. Leave it blank so they appear as a regular member here (their role in other groups is untouched).
+          </p>
+          <div className="flex items-center justify-end gap-3 mt-6">
+            <button type="button" onClick={() => setTitleEdit(null)} className="btn-secondary">Cancel</button>
+            <button type="submit" disabled={titleSaving} className="btn-primary">
+              {titleSaving
+                ? <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" />
+                : <Check size={16} />}
+              Save
             </button>
           </div>
         </form>

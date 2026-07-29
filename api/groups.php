@@ -13,15 +13,17 @@ switch ($method) {
     case 'GET':
         // Members of one group (used by the expandable card on the Groups page)
         if (($_GET['action'] ?? '') === 'members' && $id) {
-            // People with a function_title (President, Pastor, Assistant...) are
-            // the "committee" running this group, so they list first.
+            // People with a role IN THIS GROUP (President, Pastor, Assistant...)
+            // are the "committee" running it, so they list first. The title is
+            // per-group: someone can be an officer here and a plain member of
+            // another group.
             $stmt = $db->prepare("
                 SELECT m.id, m.first_name, m.last_name, m.email, m.phone,
-                       m.person_type, m.status, m.function_title
+                       m.person_type, m.status, mg.function_title
                 FROM member_groups mg
                 JOIN members m ON m.id = mg.member_id
                 WHERE mg.group_id = ?
-                ORDER BY (m.function_title IS NULL OR m.function_title = '') ASC,
+                ORDER BY (mg.function_title IS NULL OR mg.function_title = '') ASC,
                          mg.position ASC, m.last_name ASC, m.first_name ASC
             ");
             $stmt->execute([$id]);
@@ -110,6 +112,20 @@ switch ($method) {
                 foreach ($ids as $pos => $mid) $upd->execute([$pos, $gid, $mid]);
             }
             jsonResponse(['message' => 'Order saved', 'count' => count($ids)]);
+        }
+
+        // Set (or clear) one person's role/title INSIDE one group. Used by the
+        // little tag editor on the expanded Groups card.
+        if (($_GET['action'] ?? '') === 'set_title') {
+            $data = getRequestBody();
+            $gid = (int)($data['group_id'] ?? 0);
+            $mid = (int)($data['member_id'] ?? 0);
+            if (!$gid || !$mid) jsonResponse(['error' => 'Group and member required'], 400);
+            $title = trim((string)($data['function_title'] ?? ''));
+            $db->prepare("UPDATE member_groups SET function_title = ? WHERE group_id = ? AND member_id = ?")
+               ->execute([$title === '' ? null : $title, $gid, $mid]);
+            refreshMemberPrimaryTitle($db, $mid);
+            jsonResponse(['message' => 'Role saved']);
         }
 
         if (!$id) jsonResponse(['error' => 'Group ID required'], 400);

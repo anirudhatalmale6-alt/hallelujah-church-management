@@ -20,7 +20,8 @@ const emptyMember = {
   membership_date: '', status: 'active', person_type: 'church_member', notes: '',
   baptism_date: '', salvation_date: '', first_visit_date: '',
   membership_class_date: '', dedication_date: '', wedding_date: '',
-  card_title: '', card_expiry_date: '', function_title: '',
+  card_title: '', card_expiry_date: '',
+  group_titles: {}, // per-group role, keyed by group id
 };
 
 const personTypeLabels = {
@@ -131,8 +132,16 @@ export default function MembersPage() {
     setShowModal(true);
   };
 
-  const openEdit = (member) => {
+  const openEdit = async (member) => {
     setEditMember(member);
+    // Pull the full record so we get each group's per-person role/title
+    let full = member;
+    try {
+      const res = await membersApi.get(member.id);
+      if (res && res.member) full = res.member;
+    } catch { /* fall back to the list row */ }
+    const groupTitles = {};
+    (full.groups || []).forEach(g => { groupTitles[Number(g.id)] = g.function_title || ''; });
     setForm({
       first_name: member.first_name || '',
       last_name: member.last_name || '',
@@ -146,7 +155,8 @@ export default function MembersPage() {
       zip: member.zip || '',
       gender: member.gender || '',
       date_of_birth: member.date_of_birth || '',
-      group_ids: (member.group_ids || []).map(Number),
+      group_ids: (full.group_ids || member.group_ids || []).map(Number),
+      group_titles: groupTitles,
       household_id: member.household_id || '',
       household_role: member.household_role || '',
       membership_date: member.membership_date || '',
@@ -160,7 +170,6 @@ export default function MembersPage() {
       wedding_date: member.wedding_date || '',
       card_title: member.card_title || '',
       card_expiry_date: member.card_expiry_date || '',
-      function_title: member.function_title || '',
       photo_url: member.photo_url || '',
     });
     setError('');
@@ -237,13 +246,19 @@ export default function MembersPage() {
   const toggleGroup = (groupId) => {
     setForm(f => {
       const current = f.group_ids || [];
+      const isOn = current.includes(groupId);
+      const titles = { ...(f.group_titles || {}) };
+      if (isOn) delete titles[groupId]; // leaving the group drops its role too
       return {
         ...f,
-        group_ids: current.includes(groupId)
-          ? current.filter(id => id !== groupId)
-          : [...current, groupId],
+        group_ids: isOn ? current.filter(id => id !== groupId) : [...current, groupId],
+        group_titles: titles,
       };
     });
+  };
+
+  const setGroupTitle = (groupId, value) => {
+    setForm(f => ({ ...f, group_titles: { ...(f.group_titles || {}), [groupId]: value } }));
   };
 
   const exportCSV = async () => {
@@ -638,30 +653,43 @@ export default function MembersPage() {
             <div className="sm:col-span-2">
               <label className="label">Groups</label>
               {availableGroups.length > 0 ? (
-                <div className="border border-gray-200 rounded-lg p-2 grid grid-cols-1 sm:grid-cols-2 gap-1 max-h-52 overflow-y-auto">
+                <div className="border border-gray-200 rounded-lg p-2 grid grid-cols-1 sm:grid-cols-2 gap-1 max-h-72 overflow-y-auto">
                   {availableGroups.map(g => {
                     const selected = (form.group_ids || []).includes(g.id);
                     return (
-                      <label key={g.id} className={`flex items-start gap-2 p-1.5 rounded cursor-pointer transition-colors ${selected ? 'bg-primary-50' : 'hover:bg-gray-50'}`}>
-                        <input
-                          type="checkbox"
-                          checked={selected}
-                          onChange={() => toggleGroup(g.id)}
-                          className="mt-0.5 w-4 h-4 text-primary-700 rounded border-gray-300 focus:ring-primary-500"
-                        />
-                        <span className="min-w-0">
-                          <span className="block text-sm text-gray-700 truncate">{g.name}</span>
-                          {g.department_name && (
-                            <span className="block text-xs text-blue-600 truncate">serves {g.department_name}</span>
-                          )}
-                        </span>
-                      </label>
+                      <div key={g.id} className={`p-1.5 rounded transition-colors ${selected ? 'bg-primary-50' : 'hover:bg-gray-50'}`}>
+                        <label className="flex items-start gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={selected}
+                            onChange={() => toggleGroup(g.id)}
+                            className="mt-0.5 w-4 h-4 text-primary-700 rounded border-gray-300 focus:ring-primary-500"
+                          />
+                          <span className="min-w-0">
+                            <span className="block text-sm text-gray-700 truncate">{g.name}</span>
+                            {g.department_name && (
+                              <span className="block text-xs text-blue-600 truncate">serves {g.department_name}</span>
+                            )}
+                          </span>
+                        </label>
+                        {selected && (
+                          <input
+                            className="input mt-1.5 py-1 text-sm"
+                            value={(form.group_titles || {})[g.id] || ''}
+                            onChange={e => setGroupTitle(g.id, e.target.value)}
+                            placeholder="Role in this group (optional)"
+                          />
+                        )}
+                      </div>
                     );
                   })}
                 </div>
               ) : (
                 <p className="text-xs text-gray-400 p-2 border border-gray-200 rounded-lg">No groups created yet. Create groups from the Groups page.</p>
               )}
+              <p className="text-xs text-gray-400 mt-1">
+                Tick the groups this person belongs to. Add a role (e.g. President, Vice-President) only where they hold one - people with a role show at the top of that group. Leave the role blank and they appear as a regular member there.
+              </p>
             </div>
             <div>
               <label className="label">Membership Date</label>
@@ -674,11 +702,6 @@ export default function MembersPage() {
                   <option key={t.value} value={t.value}>{t.label}</option>
                 ))}
               </select>
-            </div>
-            <div>
-              <label className="label">Function</label>
-              <input className="input" value={form.function_title || ''} onChange={e => updateField('function_title', e.target.value)} placeholder="e.g., President, Senior Pastor, Assistant" />
-              <p className="text-xs text-gray-400 mt-1">Their role in the church. People with a function show at the top of each of their groups. Leave blank if none.</p>
             </div>
             <div>
               <label className="label">Status</label>

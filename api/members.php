@@ -67,7 +67,8 @@ switch ($method) {
 
             // Groups this person belongs to, with the department each one serves
             $stmt = $db->prepare("
-                SELECT g.id, g.name, g.category, g.department_id, d.name AS department_name
+                SELECT g.id, g.name, g.category, g.department_id, d.name AS department_name,
+                       mg.function_title
                 FROM member_groups mg
                 JOIN `groups` g ON g.id = mg.group_id
                 LEFT JOIN departments d ON d.id = g.department_id
@@ -531,7 +532,8 @@ switch ($method) {
         }
 
         if (array_key_exists('group_ids', $data) && is_array($data['group_ids'])) {
-            syncMemberGroups($db, (int)$newId, $data['group_ids']);
+            $titles = (isset($data['group_titles']) && is_array($data['group_titles'])) ? $data['group_titles'] : null;
+            syncMemberGroups($db, (int)$newId, $data['group_ids'], $titles);
         }
 
         $stmt = $db->prepare("SELECT * FROM members WHERE id = ?");
@@ -629,9 +631,11 @@ switch ($method) {
             $stmt->execute($params);
         }
 
-        // Runs after the UPDATE so it also refreshes the family_group cache
+        // Runs after the UPDATE so it also refreshes the family_group cache and
+        // the derived headline title from the per-group roles.
         if ($hasGroups) {
-            syncMemberGroups($db, (int)$id, $data['group_ids']);
+            $titles = (isset($data['group_titles']) && is_array($data['group_titles'])) ? $data['group_titles'] : null;
+            syncMemberGroups($db, (int)$id, $data['group_ids'], $titles);
         }
 
         $stmt = $db->prepare("SELECT * FROM members WHERE id = ?");
