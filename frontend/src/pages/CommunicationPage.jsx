@@ -629,14 +629,33 @@ function fmtSmsTime(ts) {
   return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + d.toLocaleTimeString([], opts);
 }
 
+const SMS_STATUS = {
+  new:      { label: 'New',         cls: 'bg-red-100 text-red-700' },
+  awaiting: { label: 'Needs reply', cls: 'bg-amber-100 text-amber-700' },
+  replied:  { label: 'Replied',     cls: 'bg-green-100 text-green-700' },
+  done:     { label: 'Done',        cls: 'bg-gray-100 text-gray-500' },
+};
+
 function InboxTab({ setError, onRead }) {
   const [convos, setConvos] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(null); // phone
-  const [thread, setThread] = useState(null);      // { phone, messages, member }
+  const [thread, setThread] = useState(null);      // { phone, messages, member, state }
   const [threadLoading, setThreadLoading] = useState(false);
   const [reply, setReply] = useState('');
   const [sending, setSending] = useState(false);
+  const [statusBusy, setStatusBusy] = useState(false);
+
+  const markStatus = async (status) => {
+    if (!thread) return;
+    setStatusBusy(true);
+    try {
+      await msgApi.setSmsStatus(thread.phone, status);
+      setThread(t => ({ ...t, state: status }));
+      loadInbox();
+    } catch (e) { setError(e.message); }
+    setStatusBusy(false);
+  };
 
   const loadInbox = useCallback(async () => {
     setLoading(true);
@@ -705,7 +724,11 @@ function InboxTab({ setError, onRead }) {
                     <span className={`text-xs truncate ${c.unread > 0 ? 'text-gray-900 font-medium' : 'text-gray-500'}`}>
                       {c.last_dir === 'out' ? 'You: ' : ''}{c.last_body}
                     </span>
-                    {c.unread > 0 && <span className="ml-auto shrink-0 w-2 h-2 rounded-full bg-red-600" />}
+                    {SMS_STATUS[c.status] && (
+                      <span className={`ml-auto shrink-0 text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${SMS_STATUS[c.status].cls}`}>
+                        {SMS_STATUS[c.status].label}
+                      </span>
+                    )}
                   </div>
                 </div>
               </button>
@@ -724,6 +747,13 @@ function InboxTab({ setError, onRead }) {
                 <div className="min-w-0">
                   <div className="font-semibold text-gray-900 truncate">{thread?.member ? `${thread.member.first_name} ${thread.member.last_name}` : selected}</div>
                   <div className="text-xs text-gray-400">{selected}{thread?.member && thread.member.sms_opted_out_at ? ' · opted out of texts' : ''}</div>
+                </div>
+                <div className="ml-auto shrink-0">
+                  {thread?.state === 'done' ? (
+                    <button onClick={() => markStatus('open')} disabled={statusBusy} className="text-xs px-2.5 py-1.5 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50">Reopen</button>
+                  ) : (
+                    <button onClick={() => markStatus('done')} disabled={statusBusy} className="text-xs px-2.5 py-1.5 rounded-lg bg-green-600 text-white hover:bg-green-700 flex items-center gap-1"><Check size={13} /> Mark done</button>
+                  )}
                 </div>
               </div>
               <div className="flex-1 overflow-y-auto px-4 py-4 space-y-2 bg-gray-50" style={{ maxHeight: 460 }}>

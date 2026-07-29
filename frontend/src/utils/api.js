@@ -396,6 +396,7 @@ export const messaging = {
   inboxUnread: () => request('messaging.php', { params: { action: 'inbox_unread' } }),
   thread: (phone, memberId) => request('messaging.php', { params: { action: 'thread', phone, id: memberId } }),
   reply: (data) => request('messaging.php', { method: 'POST', body: data, params: { action: 'reply' } }),
+  setSmsStatus: (phone, status) => request('messaging.php', { method: 'POST', body: { phone, status }, params: { action: 'set_status' } }),
 };
 
 // Surveys

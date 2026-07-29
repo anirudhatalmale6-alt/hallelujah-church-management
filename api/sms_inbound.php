@@ -70,5 +70,12 @@ if ($memberId && in_array($word, $STOP, true)) {
 // --- Record the reply for the Inbox ---
 logSmsConversation($db, $memberId, $from, 'in', $body, $sid ?: null, null, false);
 
+// A new reply re-opens the thread even if it had been marked Done, so it can't
+// be missed.
+try {
+    $db->prepare("INSERT INTO sms_conversation_state (phone, status, updated_at) VALUES (?, 'open', NOW())
+                  ON DUPLICATE KEY UPDATE status = 'open', updated_at = NOW()")->execute([$from]);
+} catch (Exception $e) { /* table may not exist yet; ignore */ }
+
 // Empty response = no auto-reply (Twilio still auto-handles STOP/HELP replies)
 twiml();

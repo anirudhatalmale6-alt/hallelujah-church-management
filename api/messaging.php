@@ -176,10 +176,12 @@ switch ($method) {
                 SELECT c.phone,
                        MAX(c.member_id) AS member_id,
                        MAX(c.created_at) AS last_at,
+                       MAX(s.status) AS state,
                        SUM(CASE WHEN c.direction = 'in' AND c.read_at IS NULL THEN 1 ELSE 0 END) AS unread,
                        SUBSTRING_INDEX(GROUP_CONCAT(c.body ORDER BY c.created_at DESC, c.id DESC SEPARATOR '\\n\\n<<>>\\n\\n'), '\\n\\n<<>>\\n\\n', 1) AS last_body,
                        SUBSTRING_INDEX(GROUP_CONCAT(c.direction ORDER BY c.created_at DESC, c.id DESC), ',', 1) AS last_dir
                 FROM sms_conversations c
+                LEFT JOIN sms_conversation_state s ON s.phone = c.phone
                 GROUP BY c.phone
                 ORDER BY last_at DESC
                 LIMIT 300
@@ -200,6 +202,17 @@ switch ($method) {
                 $m = $r['member_id'] ? ($names[$r['member_id']] ?? null) : null;
                 $r['name'] = $m ? trim($m['first_name'] . ' ' . $m['last_name']) : '';
                 $r['photo_url'] = $m['photo_url'] ?? null;
+                // At-a-glance status for the pastor:
+                //  new      - an unread reply is waiting
+                //  awaiting - they texted last, you have not replied yet
+                //  replied  - you sent the last message
+                //  done     - you marked this thread handled
+                $state = $r['state'] ?? null;
+                if ($r['unread'] > 0)            $r['status'] = 'new';
+                elseif ($state === 'done')       $r['status'] = 'done';
+                elseif ($r['last_dir'] === 'in') $r['status'] = 'awaiting';
+                else                             $r['status'] = 'replied';
+                unset($r['state']);
             }
             unset($r);
             jsonResponse(['conversations' => $rows]);
@@ -238,7 +251,10 @@ switch ($method) {
                 $ms->execute([$memberId]);
                 $member = $ms->fetch();
             }
-            jsonResponse(['phone' => $phone, 'messages' => $msgs, 'member' => $member]);
+            $ss = $db->prepare("SELECT status FROM sms_conversation_state WHERE phone = ?");
+            $ss->execute([$phone]);
+            $state = $ss->fetchColumn() ?: 'open';
+            jsonResponse(['phone' => $phone, 'messages' => $msgs, 'member' => $member, 'state' => $state]);
         }
 
         break;
@@ -291,6 +307,18 @@ switch ($method) {
             $ok = json_decode($res['response'], true);
             logSmsConversation($db, $memberId, formatPhone($phone), 'out', $body, $ok['sid'] ?? null, (int)$currentUser['user_id'], true);
             jsonResponse(['message' => 'Sent']);
+        }
+
+        // Mark a conversation handled ("done") or re-open it
+        if ($action === 'set_status') {
+            $data = getRequestBody();
+            $phone = trim($data['phone'] ?? '');
+            $status = ($data['status'] ?? '') === 'done' ? 'done' : 'open';
+            if ($phone === '') jsonResponse(['error' => 'Phone required'], 400);
+            $db->prepare("INSERT INTO sms_conversation_state (phone, status, updated_by, updated_at) VALUES (?, ?, ?, NOW())
+                          ON DUPLICATE KEY UPDATE status = VALUES(status), updated_by = VALUES(updated_by), updated_at = NOW()")
+               ->execute([$phone, $status, (int)$currentUser['user_id']]);
+            jsonResponse(['message' => 'Status updated', 'status' => $status]);
         }
 
         // Create and send message
