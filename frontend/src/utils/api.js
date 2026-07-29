@@ -175,6 +175,8 @@ export const groups = {
   create: (data) => request('groups.php', { method: 'POST', body: data }),
   update: (id, data) => request('groups.php', { method: 'PUT', body: data, params: { id } }),
   delete: (id) => request('groups.php', { method: 'DELETE', params: { id } }),
+  reorder: (groupIds) => request('groups.php', { method: 'PUT', body: { group_ids: groupIds }, params: { action: 'reorder' } }),
+  reorderMembers: (groupId, memberIds) => request('groups.php', { method: 'PUT', body: { group_id: groupId, member_ids: memberIds }, params: { action: 'reorder_members' } }),
 };
 
 // Households

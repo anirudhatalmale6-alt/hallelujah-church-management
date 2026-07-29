@@ -22,7 +22,7 @@ switch ($method) {
                 JOIN members m ON m.id = mg.member_id
                 WHERE mg.group_id = ?
                 ORDER BY (m.function_title IS NULL OR m.function_title = '') ASC,
-                         m.last_name ASC, m.first_name ASC
+                         mg.position ASC, m.last_name ASC, m.first_name ASC
             ");
             $stmt->execute([$id]);
             jsonResponse(['members' => $stmt->fetchAll()]);
@@ -87,6 +87,31 @@ switch ($method) {
 
     case 'PUT':
         requireRole($currentUser, ['pastor', 'admin', 'leader']);
+
+        // Save the pastor's hand-picked order of GROUPS within a section.
+        if (($_GET['action'] ?? '') === 'reorder') {
+            $data = getRequestBody();
+            $ids = array_values(array_filter(array_map('intval', $data['group_ids'] ?? [])));
+            if ($ids) {
+                $upd = $db->prepare("UPDATE `groups` SET sort_order = ? WHERE id = ?");
+                foreach ($ids as $pos => $gid) $upd->execute([$pos, $gid]);
+            }
+            jsonResponse(['message' => 'Order saved', 'count' => count($ids)]);
+        }
+
+        // Save the pastor's hand-picked order of PEOPLE inside one group.
+        if (($_GET['action'] ?? '') === 'reorder_members') {
+            $data = getRequestBody();
+            $gid = (int)($data['group_id'] ?? 0);
+            $ids = array_values(array_filter(array_map('intval', $data['member_ids'] ?? [])));
+            if (!$gid) jsonResponse(['error' => 'Group ID required'], 400);
+            if ($ids) {
+                $upd = $db->prepare("UPDATE member_groups SET position = ? WHERE group_id = ? AND member_id = ?");
+                foreach ($ids as $pos => $mid) $upd->execute([$pos, $gid, $mid]);
+            }
+            jsonResponse(['message' => 'Order saved', 'count' => count($ids)]);
+        }
+
         if (!$id) jsonResponse(['error' => 'Group ID required'], 400);
         $data = getRequestBody();
 

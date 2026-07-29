@@ -6,6 +6,7 @@ import Modal from '../components/Modal';
 import {
   Users, Plus, Edit2, Trash2, AlertCircle, Check,
   FolderOpen, ChevronDown, ChevronUp, Building2, Shield, Heart,
+  ArrowUp, ArrowDown,
 } from 'lucide-react';
 
 const emptyGroup = { name: '', description: '', category: 'ministry', department_id: '' };
@@ -142,6 +143,31 @@ export default function GroupsPage() {
     setExpandedLoading(false);
   };
 
+  // Move a group up/down within its own section, and remember the new order.
+  const moveGroup = async (sectionKey, idx, dir) => {
+    const list = groups.filter(g => (g.category || 'ministry') === sectionKey);
+    const j = idx + dir;
+    if (j < 0 || j >= list.length) return;
+    const reordered = [...list];
+    [reordered[idx], reordered[j]] = [reordered[j], reordered[idx]];
+    const others = groups.filter(g => (g.category || 'ministry') !== sectionKey);
+    setGroups([...others, ...reordered]);
+    try { await groupsApi.reorder(reordered.map(g => g.id)); } catch { load(); }
+  };
+
+  // Move a person up/down within their block (Leadership or Members) and save it.
+  const moveMember = async (blockList, idx, dir, isLeaderBlock) => {
+    const j = idx + dir;
+    if (j < 0 || j >= blockList.length) return;
+    const reordered = [...blockList];
+    [reordered[idx], reordered[j]] = [reordered[j], reordered[idx]];
+    const leaders = expandedMembers.filter(m => (m.function_title || '').trim() !== '');
+    const rest = expandedMembers.filter(m => (m.function_title || '').trim() === '');
+    const combined = isLeaderBlock ? [...reordered, ...rest] : [...leaders, ...reordered];
+    setExpandedMembers(combined);
+    try { await groupsApi.reorderMembers(expandedId, combined.map(m => m.id)); } catch { /* keep optimistic order */ }
+  };
+
   const updateField = (field, value) => setForm(f => ({ ...f, [field]: value }));
 
   // Choosing a department implies this group is a serving team, and vice versa
@@ -153,7 +179,7 @@ export default function GroupsPage() {
     }));
   };
 
-  const renderCard = (g, accent) => (
+  const renderCard = (g, accent, sectionKey, idx, count) => (
     <div key={g.id} className="card p-0 overflow-hidden">
       <div className="p-5 cursor-pointer hover:bg-gray-50 transition-colors" onClick={() => toggleExpand(g)}>
         <div className="flex items-start justify-between gap-3">
@@ -169,6 +195,18 @@ export default function GroupsPage() {
             )}
           </div>
           <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+            {isLeader && count > 1 && (
+              <div className="flex items-center">
+                <button onClick={() => moveGroup(sectionKey, idx, -1)} disabled={idx === 0}
+                  className="p-2 text-gray-400 hover:text-primary-700 hover:bg-primary-50 rounded-lg disabled:opacity-30 disabled:hover:bg-transparent disabled:cursor-default" title="Move up">
+                  <ArrowUp size={16} />
+                </button>
+                <button onClick={() => moveGroup(sectionKey, idx, 1)} disabled={idx === count - 1}
+                  className="p-2 text-gray-400 hover:text-primary-700 hover:bg-primary-50 rounded-lg disabled:opacity-30 disabled:hover:bg-transparent disabled:cursor-default" title="Move down">
+                  <ArrowDown size={16} />
+                </button>
+              </div>
+            )}
             {isLeader && (
               <button onClick={() => openEdit(g)} className="p-2 text-gray-400 hover:text-primary-700 hover:bg-primary-50 rounded-lg" title="Edit">
                 <Edit2 size={16} />
@@ -208,9 +246,9 @@ export default function GroupsPage() {
             (() => {
               const leaders = expandedMembers.filter(m => (m.function_title || '').trim() !== '');
               const rest = expandedMembers.filter(m => (m.function_title || '').trim() === '');
-              const row = (m, isLeader) => (
-                <li key={m.id}>
-                  <Link to={`/system/public/members/${m.id}`} className="flex items-center gap-3 p-2 rounded-lg hover:bg-white transition-colors">
+              const row = (m, isLeader, i, list) => (
+                <li key={m.id} className="flex items-center gap-1">
+                  <Link to={`/system/public/members/${m.id}`} className="flex-1 min-w-0 flex items-center gap-3 p-2 rounded-lg hover:bg-white transition-colors">
                     <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-medium shrink-0 ${isLeader ? 'bg-amber-600' : 'bg-primary-700'}`}>
                       {m.first_name?.charAt(0)}{m.last_name?.charAt(0)}
                     </div>
@@ -222,6 +260,30 @@ export default function GroupsPage() {
                       {m.email && <div className="text-xs text-gray-500 truncate">{m.email}</div>}
                     </div>
                   </Link>
+                  {isLeader && list.length > 1 && (
+                    <div className="flex items-center shrink-0">
+                      <button onClick={() => moveMember(list, i, -1, isLeader)} disabled={i === 0}
+                        className="p-1.5 text-gray-400 hover:text-amber-700 hover:bg-white rounded-md disabled:opacity-30 disabled:hover:bg-transparent disabled:cursor-default" title="Move up">
+                        <ArrowUp size={15} />
+                      </button>
+                      <button onClick={() => moveMember(list, i, 1, isLeader)} disabled={i === list.length - 1}
+                        className="p-1.5 text-gray-400 hover:text-amber-700 hover:bg-white rounded-md disabled:opacity-30 disabled:hover:bg-transparent disabled:cursor-default" title="Move down">
+                        <ArrowDown size={15} />
+                      </button>
+                    </div>
+                  )}
+                  {!isLeader && list.length > 1 && (
+                    <div className="flex items-center shrink-0">
+                      <button onClick={() => moveMember(list, i, -1, isLeader)} disabled={i === 0}
+                        className="p-1.5 text-gray-400 hover:text-primary-700 hover:bg-white rounded-md disabled:opacity-30 disabled:hover:bg-transparent disabled:cursor-default" title="Move up">
+                        <ArrowUp size={15} />
+                      </button>
+                      <button onClick={() => moveMember(list, i, 1, isLeader)} disabled={i === list.length - 1}
+                        className="p-1.5 text-gray-400 hover:text-primary-700 hover:bg-white rounded-md disabled:opacity-30 disabled:hover:bg-transparent disabled:cursor-default" title="Move down">
+                        <ArrowDown size={15} />
+                      </button>
+                    </div>
+                  )}
                 </li>
               );
               return (
@@ -229,7 +291,7 @@ export default function GroupsPage() {
                   {leaders.length > 0 && (
                     <div>
                       <div className="text-xs font-semibold uppercase tracking-wide text-amber-700 mb-1 px-2">Leadership</div>
-                      <ul className="space-y-2">{leaders.map(m => row(m, true))}</ul>
+                      <ul className="space-y-2">{leaders.map((m, i) => row(m, true, i, leaders))}</ul>
                     </div>
                   )}
                   {rest.length > 0 && (
@@ -237,7 +299,7 @@ export default function GroupsPage() {
                       {leaders.length > 0 && (
                         <div className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-1 px-2 pt-1 border-t border-gray-200">Members</div>
                       )}
-                      <ul className="space-y-2">{rest.map(m => row(m, false))}</ul>
+                      <ul className="space-y-2">{rest.map((m, i) => row(m, false, i, rest))}</ul>
                     </div>
                   )}
                 </div>
@@ -304,7 +366,7 @@ export default function GroupsPage() {
                   </div>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {list.map(g => renderCard(g, section.accent))}
+                  {list.map((g, idx) => renderCard(g, section.accent, section.key, idx, list.length))}
                 </div>
               </div>
             );
