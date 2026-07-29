@@ -392,6 +392,10 @@ export const messaging = {
   consentStats: () => request('messaging.php', { params: { action: 'consent_stats' } }),
   saveConfig: (data) => request('messaging.php', { method: 'POST', body: data, params: { action: 'config' } }),
   testEmail: (email) => request('messaging.php', { method: 'POST', body: { email }, params: { action: 'test_email' } }),
+  inbox: () => request('messaging.php', { params: { action: 'inbox' } }),
+  inboxUnread: () => request('messaging.php', { params: { action: 'inbox_unread' } }),
+  thread: (phone, memberId) => request('messaging.php', { params: { action: 'thread', phone, id: memberId } }),
+  reply: (data) => request('messaging.php', { method: 'POST', body: data, params: { action: 'reply' } }),
 };
 
 // Surveys

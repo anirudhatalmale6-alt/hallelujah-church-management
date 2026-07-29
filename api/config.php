@@ -301,6 +301,30 @@ function memberGroupIds(PDO $db, int $memberId): array {
  * member list / profile keep showing a title; the Groups page uses the real
  * per-group titles. Called whenever a person's group titles change.
  */
+/** Last 10 digits of a phone, for loose matching regardless of formatting. */
+function phoneLast10(?string $phone): string {
+    return substr(preg_replace('/\D/', '', (string)$phone), -10);
+}
+
+/** Find the member whose phone matches (by last 10 digits). Null if none. */
+function findMemberByPhone(PDO $db, ?string $phone): ?int {
+    $d10 = phoneLast10($phone);
+    if (strlen($d10) < 10) return null;
+    foreach ($db->query("SELECT id, phone FROM members WHERE phone IS NOT NULL AND phone <> ''")->fetchAll() as $row) {
+        if (phoneLast10($row['phone']) === $d10) return (int)$row['id'];
+    }
+    return null;
+}
+
+/** Record one SMS (incoming or outgoing) in the conversation log. Never throws. */
+function logSmsConversation(PDO $db, ?int $memberId, string $phone, string $direction, string $body, ?string $sid = null, ?int $createdBy = null, bool $read = false): void {
+    try {
+        $db->prepare("INSERT INTO sms_conversations (member_id, phone, direction, body, twilio_sid, created_by, read_at)
+                      VALUES (?, ?, ?, ?, ?, ?, ?)")
+           ->execute([$memberId, $phone, $direction, $body, $sid, $createdBy, $read ? date('Y-m-d H:i:s') : null]);
+    } catch (Exception $e) { /* a logging failure must never break sending */ }
+}
+
 function refreshMemberPrimaryTitle(PDO $db, int $memberId): void {
     $s = $db->prepare("
         SELECT mg.function_title

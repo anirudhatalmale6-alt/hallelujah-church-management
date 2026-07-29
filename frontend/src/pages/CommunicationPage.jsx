@@ -7,7 +7,7 @@ import Pagination from '../components/Pagination';
 import {
   Send, Mail, MessageSquare, Settings, Plus, Trash2, Eye, Check, X, Edit2,
   AlertCircle, Search, Users, Clock, CheckCircle, XCircle, Filter,
-  QrCode, ClipboardList, BarChart3
+  QrCode, ClipboardList, BarChart3, Inbox, ArrowLeft, RefreshCw
 } from 'lucide-react';
 
 const typeColors = { sent: 'bg-green-100 text-green-700', draft: 'bg-gray-100 text-gray-700', queued: 'bg-blue-100 text-blue-700', sending: 'bg-amber-100 text-amber-700', failed: 'bg-red-100 text-red-700' };
@@ -17,9 +17,21 @@ export default function CommunicationPage() {
   const [tab, setTab] = useState('compose');
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
+  const [unread, setUnread] = useState(0);
+
+  const refreshUnread = useCallback(async () => {
+    try { const r = await msgApi.inboxUnread(); setUnread(r.unread || 0); } catch { /* ignore */ }
+  }, []);
+
+  useEffect(() => {
+    refreshUnread();
+    const t = setInterval(refreshUnread, 60000);
+    return () => clearInterval(t);
+  }, [refreshUnread]);
 
   const tabs = [
     { key: 'compose', label: 'Compose', icon: Send },
+    { key: 'inbox', label: 'Inbox', icon: Inbox, badge: unread },
     { key: 'sent', label: 'Sent Messages', icon: Mail },
     { key: 'surveys', label: 'Surveys', icon: ClipboardList },
     { key: 'qrcode', label: 'QR Codes', icon: QrCode },
@@ -40,6 +52,11 @@ export default function CommunicationPage() {
           <button key={t.key} onClick={() => { setTab(t.key); setError(''); setMessage(''); }}
             className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors ${tab === t.key ? 'bg-primary-700 text-white' : 'bg-white text-gray-600 border border-gray-300 hover:bg-gray-50'}`}>
             <t.icon size={15} className="inline mr-1 -mt-0.5" /> {t.label}
+            {t.badge > 0 && (
+              <span className={`ml-1.5 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[11px] font-semibold ${tab === t.key ? 'bg-white text-primary-700' : 'bg-red-600 text-white'}`}>
+                {t.badge}
+              </span>
+            )}
           </button>
         ))}
       </div>
@@ -58,6 +75,7 @@ export default function CommunicationPage() {
       )}
 
       {tab === 'compose' && <ComposeTab setError={setError} setMessage={setMessage} />}
+      {tab === 'inbox' && <InboxTab setError={setError} onRead={refreshUnread} />}
       {tab === 'sent' && <SentTab setError={setError} />}
       {tab === 'surveys' && <SurveysTab setError={setError} setMessage={setMessage} />}
       {tab === 'qrcode' && <QRCodeTab />}
@@ -598,6 +616,145 @@ function SentTab({ setError }) {
         )}
       </Modal>
     </>
+  );
+}
+
+function fmtSmsTime(ts) {
+  if (!ts) return '';
+  const d = new Date(String(ts).replace(' ', 'T'));
+  if (isNaN(d.getTime())) return ts;
+  const now = new Date();
+  const opts = { hour: 'numeric', minute: '2-digit' };
+  if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString([], opts);
+  return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + d.toLocaleTimeString([], opts);
+}
+
+function InboxTab({ setError, onRead }) {
+  const [convos, setConvos] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState(null); // phone
+  const [thread, setThread] = useState(null);      // { phone, messages, member }
+  const [threadLoading, setThreadLoading] = useState(false);
+  const [reply, setReply] = useState('');
+  const [sending, setSending] = useState(false);
+
+  const loadInbox = useCallback(async () => {
+    setLoading(true);
+    try { const r = await msgApi.inbox(); setConvos(r.conversations || []); }
+    catch (e) { setError(e.message); }
+    setLoading(false);
+  }, [setError]);
+
+  useEffect(() => { loadInbox(); }, [loadInbox]);
+
+  const openThread = async (phone) => {
+    setSelected(phone);
+    setThreadLoading(true);
+    setThread(null);
+    try {
+      const r = await msgApi.thread(phone);
+      setThread(r);
+      setConvos(cs => cs.map(c => c.phone === phone ? { ...c, unread: 0 } : c));
+      onRead && onRead();
+    } catch (e) { setError(e.message); }
+    setThreadLoading(false);
+  };
+
+  const sendReply = async () => {
+    if (!reply.trim() || !thread) return;
+    setSending(true);
+    try {
+      await msgApi.reply({ phone: thread.phone, member_id: thread.member?.id, body: reply.trim() });
+      setReply('');
+      const r = await msgApi.thread(thread.phone);
+      setThread(r);
+      loadInbox();
+    } catch (e) { setError(e.message); }
+    setSending(false);
+  };
+
+  const initials = (name) => name ? name.split(' ').filter(Boolean).map(s => s[0]).slice(0, 2).join('').toUpperCase() : '#';
+
+  return (
+    <div className="card p-0 overflow-hidden">
+      <div className="grid md:grid-cols-3">
+        {/* Conversation list */}
+        <div className={`md:col-span-1 border-r border-gray-100 ${selected ? 'hidden md:block' : ''}`}>
+          <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+            <h3 className="font-semibold text-gray-900">Text messages</h3>
+            <button onClick={loadInbox} className="p-1.5 text-gray-400 hover:text-primary-700 hover:bg-gray-50 rounded-lg" title="Refresh"><RefreshCw size={15} /></button>
+          </div>
+          <div className="max-h-[560px] overflow-y-auto">
+            {loading ? (
+              <div className="p-8 text-center"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-700 mx-auto" /></div>
+            ) : convos.length === 0 ? (
+              <div className="p-8 text-center text-gray-400 text-sm">
+                <MessageSquare size={28} className="mx-auto mb-2 text-gray-300" />
+                No text conversations yet. When someone replies to one of your texts, it shows up here.
+              </div>
+            ) : convos.map(c => (
+              <button key={c.phone} onClick={() => openThread(c.phone)}
+                className={`w-full text-left px-4 py-3 border-b border-gray-50 hover:bg-gray-50 transition-colors flex items-center gap-3 ${selected === c.phone ? 'bg-primary-50' : ''}`}>
+                <div className="w-9 h-9 rounded-full bg-primary-700 text-white flex items-center justify-center text-xs font-medium shrink-0">{initials(c.name)}</div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm font-medium text-gray-900 truncate">{c.name || c.phone}</span>
+                    <span className="text-[11px] text-gray-400 shrink-0">{fmtSmsTime(c.last_at)}</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className={`text-xs truncate ${c.unread > 0 ? 'text-gray-900 font-medium' : 'text-gray-500'}`}>
+                      {c.last_dir === 'out' ? 'You: ' : ''}{c.last_body}
+                    </span>
+                    {c.unread > 0 && <span className="ml-auto shrink-0 w-2 h-2 rounded-full bg-red-600" />}
+                  </div>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Thread + reply */}
+        <div className={`md:col-span-2 flex-col ${!selected ? 'hidden md:flex' : 'flex'}`} style={{ minHeight: 420 }}>
+          {!selected ? (
+            <div className="flex-1 flex items-center justify-center text-gray-400 text-sm p-8">Pick a conversation to read and reply.</div>
+          ) : (
+            <>
+              <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-100">
+                <button onClick={() => { setSelected(null); setThread(null); }} className="md:hidden p-1.5 text-gray-500 hover:bg-gray-50 rounded-lg"><ArrowLeft size={18} /></button>
+                <div className="min-w-0">
+                  <div className="font-semibold text-gray-900 truncate">{thread?.member ? `${thread.member.first_name} ${thread.member.last_name}` : selected}</div>
+                  <div className="text-xs text-gray-400">{selected}{thread?.member && thread.member.sms_opted_out_at ? ' · opted out of texts' : ''}</div>
+                </div>
+              </div>
+              <div className="flex-1 overflow-y-auto px-4 py-4 space-y-2 bg-gray-50" style={{ maxHeight: 460 }}>
+                {threadLoading ? (
+                  <div className="p-8 text-center"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-700 mx-auto" /></div>
+                ) : (thread?.messages || []).length === 0 ? (
+                  <div className="text-center text-gray-400 text-sm py-8">No messages yet.</div>
+                ) : (thread?.messages || []).map(m => (
+                  <div key={m.id} className={`flex ${m.direction === 'out' ? 'justify-end' : 'justify-start'}`}>
+                    <div className={`max-w-[75%] rounded-2xl px-3 py-2 text-sm ${m.direction === 'out' ? 'bg-primary-700 text-white rounded-br-sm' : 'bg-white border border-gray-200 text-gray-800 rounded-bl-sm'}`}>
+                      <div className="whitespace-pre-wrap break-words">{m.body}</div>
+                      <div className={`text-[10px] mt-1 ${m.direction === 'out' ? 'text-primary-200' : 'text-gray-400'}`}>
+                        {fmtSmsTime(m.created_at)}{m.direction === 'out' && m.sent_by_name ? ` · ${m.sent_by_name}` : ''}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="border-t border-gray-100 p-3 flex items-end gap-2">
+                <textarea rows="1" value={reply} onChange={e => setReply(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendReply(); } }}
+                  placeholder="Type a reply..." className="input flex-1 resize-none" />
+                <button onClick={sendReply} disabled={sending || !reply.trim()} className="btn-primary shrink-0">
+                  {sending ? <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" /> : <Send size={16} />}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 

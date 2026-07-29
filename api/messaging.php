@@ -170,6 +170,77 @@ switch ($method) {
             ]);
         }
 
+        // Two-way texting: list of conversations (one row per phone), newest first
+        if ($action === 'inbox') {
+            $rows = $db->query("
+                SELECT c.phone,
+                       MAX(c.member_id) AS member_id,
+                       MAX(c.created_at) AS last_at,
+                       SUM(CASE WHEN c.direction = 'in' AND c.read_at IS NULL THEN 1 ELSE 0 END) AS unread,
+                       SUBSTRING_INDEX(GROUP_CONCAT(c.body ORDER BY c.created_at DESC, c.id DESC SEPARATOR '\\n\\n<<>>\\n\\n'), '\\n\\n<<>>\\n\\n', 1) AS last_body,
+                       SUBSTRING_INDEX(GROUP_CONCAT(c.direction ORDER BY c.created_at DESC, c.id DESC), ',', 1) AS last_dir
+                FROM sms_conversations c
+                GROUP BY c.phone
+                ORDER BY last_at DESC
+                LIMIT 300
+            ")->fetchAll();
+
+            // Attach the person's name/photo where we know them
+            $names = [];
+            $ids = array_values(array_filter(array_map(fn($r) => $r['member_id'] ? (int)$r['member_id'] : null, $rows)));
+            if ($ids) {
+                $in = implode(',', array_fill(0, count($ids), '?'));
+                $ms = $db->prepare("SELECT id, first_name, last_name, photo_url FROM members WHERE id IN ($in)");
+                $ms->execute($ids);
+                foreach ($ms->fetchAll() as $m) $names[(int)$m['id']] = $m;
+            }
+            foreach ($rows as &$r) {
+                $r['unread'] = (int)$r['unread'];
+                $r['member_id'] = $r['member_id'] ? (int)$r['member_id'] : null;
+                $m = $r['member_id'] ? ($names[$r['member_id']] ?? null) : null;
+                $r['name'] = $m ? trim($m['first_name'] . ' ' . $m['last_name']) : '';
+                $r['photo_url'] = $m['photo_url'] ?? null;
+            }
+            unset($r);
+            jsonResponse(['conversations' => $rows]);
+        }
+
+        // Total unread inbound texts, for the tab badge
+        if ($action === 'inbox_unread') {
+            $n = (int)$db->query("SELECT COUNT(*) FROM sms_conversations WHERE direction = 'in' AND read_at IS NULL")->fetchColumn();
+            jsonResponse(['unread' => $n]);
+        }
+
+        // All messages in one conversation (and mark its incoming ones read)
+        if ($action === 'thread') {
+            $phone = $_GET['phone'] ?? '';
+            if ($phone === '' && $id) {
+                $st = $db->prepare("SELECT phone FROM members WHERE id = ?");
+                $st->execute([$id]);
+                $phone = (string)$st->fetchColumn();
+            }
+            if ($phone === '') jsonResponse(['error' => 'Phone required'], 400);
+
+            $st = $db->prepare("SELECT c.*, u.name AS sent_by_name
+                                FROM sms_conversations c
+                                LEFT JOIN users u ON u.id = c.created_by
+                                WHERE c.phone = ?
+                                ORDER BY c.created_at ASC, c.id ASC");
+            $st->execute([$phone]);
+            $msgs = $st->fetchAll();
+
+            $db->prepare("UPDATE sms_conversations SET read_at = NOW() WHERE phone = ? AND direction = 'in' AND read_at IS NULL")->execute([$phone]);
+
+            $memberId = findMemberByPhone($db, $phone);
+            $member = null;
+            if ($memberId) {
+                $ms = $db->prepare("SELECT id, first_name, last_name, photo_url, sms_consent, sms_opted_out_at FROM members WHERE id = ?");
+                $ms->execute([$memberId]);
+                $member = $ms->fetch();
+            }
+            jsonResponse(['phone' => $phone, 'messages' => $msgs, 'member' => $member]);
+        }
+
         break;
 
     case 'POST':
@@ -191,6 +262,35 @@ switch ($method) {
                 }
             }
             jsonResponse(['message' => 'Configuration saved (' . count($saved) . ' settings)', 'saved' => $saved]);
+        }
+
+        // Reply to one person in the Inbox (a direct 1-to-1 text). No consent
+        // gate here: they texted us first, so answering is allowed.
+        if ($action === 'reply') {
+            $data = getRequestBody();
+            $body = trim($data['body'] ?? '');
+            $phone = trim($data['phone'] ?? '');
+            $memberId = !empty($data['member_id']) ? (int)$data['member_id'] : null;
+            if ($body === '') jsonResponse(['error' => 'Message body required'], 400);
+            if ($phone === '' && $memberId) {
+                $st = $db->prepare("SELECT phone FROM members WHERE id = ?");
+                $st->execute([$memberId]);
+                $phone = (string)$st->fetchColumn();
+            }
+            if ($phone === '') jsonResponse(['error' => 'No phone number for this person'], 400);
+
+            $settings = getMessagingSettings($db);
+            if (empty($settings['msg_twilio_sid'])) jsonResponse(['error' => 'SMS is not set up yet (add your Twilio details in Settings).'], 400);
+
+            if (!$memberId) $memberId = findMemberByPhone($db, $phone);
+            $res = sendSMS($phone, $body, $settings['msg_twilio_sid'], $settings['msg_twilio_token'], $settings['msg_twilio_number'], null, true);
+            if (!$res['success']) {
+                $err = json_decode($res['response'], true);
+                jsonResponse(['error' => 'Text failed: ' . ($err['message'] ?? ($res['curl_error'] ?: 'Unknown error'))], 502);
+            }
+            $ok = json_decode($res['response'], true);
+            logSmsConversation($db, $memberId, formatPhone($phone), 'out', $body, $ok['sid'] ?? null, (int)$currentUser['user_id'], true);
+            jsonResponse(['message' => 'Sent']);
         }
 
         // Create and send message
@@ -353,6 +453,10 @@ switch ($method) {
                             $errBody = json_decode($smsResult['response'], true);
                             $errMsg = $errBody['message'] ?? ($smsResult['curl_error'] ?: 'Unknown error');
                             $db->prepare("UPDATE message_recipients SET error_message = ? WHERE id = ?")->execute([$errMsg, $recp['id']]);
+                        } else {
+                            // Log the outgoing text so the Inbox thread has full context
+                            $okBody = json_decode($smsResult['response'], true);
+                            logSmsConversation($db, $recp['member_id'] ? (int)$recp['member_id'] : null, formatPhone($recp['phone']), 'out', $smsBody, $okBody['sid'] ?? null, (int)$currentUser['user_id'], true);
                         }
                     }
 
