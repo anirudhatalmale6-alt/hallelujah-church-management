@@ -13,13 +13,16 @@ switch ($method) {
     case 'GET':
         // Members of one group (used by the expandable card on the Groups page)
         if (($_GET['action'] ?? '') === 'members' && $id) {
+            // People with a function_title (President, Pastor, Assistant...) are
+            // the "committee" running this group, so they list first.
             $stmt = $db->prepare("
                 SELECT m.id, m.first_name, m.last_name, m.email, m.phone,
-                       m.person_type, m.status
+                       m.person_type, m.status, m.function_title
                 FROM member_groups mg
                 JOIN members m ON m.id = mg.member_id
                 WHERE mg.group_id = ?
-                ORDER BY m.last_name ASC, m.first_name ASC
+                ORDER BY (m.function_title IS NULL OR m.function_title = '') ASC,
+                         m.last_name ASC, m.first_name ASC
             ");
             $stmt->execute([$id]);
             jsonResponse(['members' => $stmt->fetchAll()]);

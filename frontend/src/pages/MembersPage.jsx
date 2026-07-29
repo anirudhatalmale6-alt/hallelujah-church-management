@@ -20,7 +20,7 @@ const emptyMember = {
   membership_date: '', status: 'active', person_type: 'church_member', notes: '',
   baptism_date: '', salvation_date: '', first_visit_date: '',
   membership_class_date: '', dedication_date: '', wedding_date: '',
-  card_title: '', card_expiry_date: '',
+  card_title: '', card_expiry_date: '', function_title: '',
 };
 
 const personTypeLabels = {
@@ -160,6 +160,7 @@ export default function MembersPage() {
       wedding_date: member.wedding_date || '',
       card_title: member.card_title || '',
       card_expiry_date: member.card_expiry_date || '',
+      function_title: member.function_title || '',
       photo_url: member.photo_url || '',
     });
     setError('');
@@ -314,15 +315,15 @@ export default function MembersPage() {
 
       {/* Filters */}
       <div className="card mb-6">
-        <div className="flex flex-col sm:flex-row gap-3">
-          <div className="relative flex-1">
-            <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+        <div className="flex flex-col sm:flex-row sm:flex-wrap gap-3">
+          <div className="relative w-full sm:flex-1 sm:min-w-[220px]">
+            <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
             <input
               type="text"
               placeholder="Search people..."
               value={search}
               onChange={(e) => { setSearch(e.target.value); setPage(1); }}
-              className="input pl-10"
+              className="input pl-10 w-full"
             />
           </div>
           <select
@@ -442,7 +443,12 @@ export default function MembersPage() {
                             {m.first_name?.charAt(0)}{m.last_name?.charAt(0)}
                           </div>
                           <div>
-                            <div className="font-medium text-gray-900">{m.first_name} {m.last_name}</div>
+                            <div className="font-medium text-gray-900">
+                              {sortBy === 'last_name'
+                                ? `${(m.last_name || '').trim()}, ${(m.first_name || '').trim()}`
+                                : `${m.first_name} ${m.last_name}`}
+                            </div>
+                            {m.function_title && <div className="text-xs font-medium text-primary-700">{m.function_title}</div>}
                             <div className="text-xs text-gray-500 md:hidden">{m.phone || m.email}</div>
                           </div>
                         </Link>
@@ -668,6 +674,11 @@ export default function MembersPage() {
                   <option key={t.value} value={t.value}>{t.label}</option>
                 ))}
               </select>
+            </div>
+            <div>
+              <label className="label">Function</label>
+              <input className="input" value={form.function_title || ''} onChange={e => updateField('function_title', e.target.value)} placeholder="e.g., President, Senior Pastor, Assistant" />
+              <p className="text-xs text-gray-400 mt-1">Their role in the church. People with a function show at the top of each of their groups. Leave blank if none.</p>
             </div>
             <div>
               <label className="label">Status</label>

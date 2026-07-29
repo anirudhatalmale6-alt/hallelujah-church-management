@@ -205,21 +205,44 @@ export default function GroupsPage() {
           ) : expandedMembers.length === 0 ? (
             <p className="text-sm text-gray-400 text-center py-2">Nobody in this group yet</p>
           ) : (
-            <ul className="space-y-2">
-              {expandedMembers.map(m => (
+            (() => {
+              const leaders = expandedMembers.filter(m => (m.function_title || '').trim() !== '');
+              const rest = expandedMembers.filter(m => (m.function_title || '').trim() === '');
+              const row = (m, isLeader) => (
                 <li key={m.id}>
                   <Link to={`/system/public/members/${m.id}`} className="flex items-center gap-3 p-2 rounded-lg hover:bg-white transition-colors">
-                    <div className="w-8 h-8 bg-primary-700 rounded-full flex items-center justify-center text-white text-xs font-medium shrink-0">
+                    <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-medium shrink-0 ${isLeader ? 'bg-amber-600' : 'bg-primary-700'}`}>
                       {m.first_name?.charAt(0)}{m.last_name?.charAt(0)}
                     </div>
                     <div className="min-w-0">
-                      <div className="text-sm font-medium text-gray-900 truncate">{m.first_name} {m.last_name}</div>
+                      <div className="text-sm font-medium text-gray-900 truncate">
+                        {m.first_name} {m.last_name}
+                        {isLeader && <span className="ml-2 text-xs font-semibold text-amber-700">{m.function_title}</span>}
+                      </div>
                       {m.email && <div className="text-xs text-gray-500 truncate">{m.email}</div>}
                     </div>
                   </Link>
                 </li>
-              ))}
-            </ul>
+              );
+              return (
+                <div className="space-y-3">
+                  {leaders.length > 0 && (
+                    <div>
+                      <div className="text-xs font-semibold uppercase tracking-wide text-amber-700 mb-1 px-2">Leadership</div>
+                      <ul className="space-y-2">{leaders.map(m => row(m, true))}</ul>
+                    </div>
+                  )}
+                  {rest.length > 0 && (
+                    <div>
+                      {leaders.length > 0 && (
+                        <div className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-1 px-2 pt-1 border-t border-gray-200">Members</div>
+                      )}
+                      <ul className="space-y-2">{rest.map(m => row(m, false))}</ul>
+                    </div>
+                  )}
+                </div>
+              );
+            })()
           )}
         </div>
       )}

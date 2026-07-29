@@ -476,8 +476,8 @@ switch ($method) {
         }
 
         $stmt = $db->prepare("
-            INSERT INTO members (first_name, last_name, email, phone, address, city, state, zip, gender, date_of_birth, family_group, household_id, household_role, membership_date, status, notes, photo_url, card_title, card_expiry_date, baptism_date, salvation_date, first_visit_date, membership_class_date, dedication_date, wedding_date, person_type)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO members (first_name, last_name, email, phone, address, city, state, zip, gender, date_of_birth, family_group, household_id, household_role, membership_date, status, notes, photo_url, card_title, function_title, card_expiry_date, baptism_date, salvation_date, first_visit_date, membership_class_date, dedication_date, wedding_date, person_type)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ");
         $stmt->execute([
             trim($data['first_name']),
@@ -498,6 +498,7 @@ switch ($method) {
             $data['notes'] ?? null,
             $data['photo_url'] ?? null,
             $data['card_title'] ?? null,
+            (isset($data['function_title']) && $data['function_title'] !== '') ? $data['function_title'] : null,
             $data['card_expiry_date'] ?? null,
             $data['baptism_date'] ?? null,
             $data['salvation_date'] ?? null,
@@ -597,7 +598,7 @@ switch ($method) {
             'first_name', 'last_name', 'email', 'phone', 'address', 'city',
             'state', 'zip', 'gender', 'date_of_birth', 'family_group',
             'household_id', 'household_role',
-            'membership_date', 'status', 'notes', 'photo_url', 'card_title',
+            'membership_date', 'status', 'notes', 'photo_url', 'card_title', 'function_title',
             'card_expiry_date', 'baptism_date', 'salvation_date', 'first_visit_date',
             'membership_class_date', 'dedication_date', 'wedding_date',
             'person_type'
