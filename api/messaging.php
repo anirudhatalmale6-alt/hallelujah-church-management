@@ -94,6 +94,45 @@ function getMessagingSettings($db) {
     return $settings;
 }
 
+// Send a monitoring copy of an outgoing message to the church / admin, when the
+// pastor has switched it on in Settings. Deliberately ONE summary copy per
+// broadcast or reply (never one per recipient) so the church phone is not flooded.
+// A copy failing must never affect the real send, so errors are swallowed.
+function sendActivityCopy($db, $settings, $summaryText, $emailSubject = null, $emailHtml = null) {
+    if (empty($settings['msg_copy_enabled']) || $settings['msg_copy_enabled'] === '0') return;
+    try {
+        $copyPhone = trim($settings['msg_copy_phone'] ?? '');
+        if ($copyPhone !== '' && !empty($settings['msg_twilio_sid'])) {
+            sendSMS($copyPhone, $summaryText, $settings['msg_twilio_sid'], $settings['msg_twilio_token'], $settings['msg_twilio_number']);
+        }
+        $copyEmail = trim($settings['msg_copy_email'] ?? '');
+        if ($copyEmail !== '' && !empty($settings['msg_sendgrid_key'])) {
+            sendEmail(
+                $copyEmail, 'Church Admin',
+                $settings['msg_from_email'] ?? 'noreply@hallelujahinthecity.org',
+                $settings['msg_from_name'] ?? 'Hallelujah In The City',
+                $emailSubject ?: 'Copy of a church message that was just sent',
+                $emailHtml ?: ('<p>' . nl2br(htmlspecialchars($summaryText)) . '</p>'),
+                $settings['msg_sendgrid_key']
+            );
+        }
+    } catch (Exception $e) { /* monitoring copy is best-effort only */ }
+}
+
+// Record an entry in the shared activity log (the `messages` table) so every
+// message any authorised user sends - broadcast OR one-to-one reply - shows up
+// under Sent Messages with the sender's name.
+function logActivityMessage($db, $userId, $type, $subject, $body, $recipients = 1) {
+    try {
+        $db->prepare("
+            INSERT INTO messages
+                (subject, body, message_type, send_type, status, recipient_type,
+                 total_recipients, sent_count, failed_count, sent_at, created_by)
+            VALUES (?, ?, ?, 'now', 'sent', 'individual', ?, ?, 0, NOW(), ?)
+        ")->execute([$subject, $body, $type, $recipients, $recipients, $userId]);
+    } catch (Exception $e) { /* activity logging must never break sending */ }
+}
+
 switch ($method) {
     case 'GET':
         // List messages/broadcasts
@@ -167,6 +206,10 @@ switch ($method) {
                 'sms_configured' => !empty($settings['msg_twilio_sid']),
                 'from_email' => $settings['msg_from_email'] ?? '',
                 'from_name' => $settings['msg_from_name'] ?? 'Hallelujah In The City',
+                // Monitoring copy: send a copy of every outgoing message to the church/admin.
+                'copy_enabled' => !empty($settings['msg_copy_enabled']) && $settings['msg_copy_enabled'] !== '0',
+                'copy_phone' => $settings['msg_copy_phone'] ?? '',
+                'copy_email' => $settings['msg_copy_email'] ?? '',
             ]);
         }
 
@@ -183,6 +226,7 @@ switch ($method) {
                 FROM sms_conversations c
                 LEFT JOIN sms_conversation_state s ON s.phone = c.phone
                 GROUP BY c.phone
+                HAVING SUM(CASE WHEN c.direction = 'in' THEN 1 ELSE 0 END) > 0
                 ORDER BY last_at DESC
                 LIMIT 300
             ")->fetchAll();
@@ -277,6 +321,20 @@ switch ($method) {
                     }
                 }
             }
+            // Monitoring-copy settings are saved even when blank, so the pastor can
+            // turn the copy off or clear the phone/email. copy_enabled is stored as '1'/'0'.
+            $copyKeys = ['msg_copy_enabled', 'msg_copy_phone', 'msg_copy_email'];
+            foreach ($copyKeys as $key) {
+                if (!array_key_exists($key, $data)) continue;
+                $val = $key === 'msg_copy_enabled' ? (!empty($data[$key]) ? '1' : '0') : trim((string)$data[$key]);
+                try {
+                    $db->prepare("DELETE FROM settings WHERE `key` = ?")->execute([$key]);
+                    if ($val !== '') $db->prepare("INSERT INTO settings (`key`, `value`) VALUES (?, ?)")->execute([$key, $val]);
+                    $saved[] = $key;
+                } catch (Exception $e) {
+                    jsonResponse(['error' => "Failed to save $key: " . $e->getMessage()], 500);
+                }
+            }
             jsonResponse(['message' => 'Configuration saved (' . count($saved) . ' settings)', 'saved' => $saved]);
         }
 
@@ -306,6 +364,25 @@ switch ($method) {
             }
             $ok = json_decode($res['response'], true);
             logSmsConversation($db, $memberId, formatPhone($phone), 'out', $body, $ok['sid'] ?? null, (int)$currentUser['user_id'], true);
+
+            // Who did we text? (for the activity log + monitoring copy)
+            $recipName = '';
+            if ($memberId) {
+                $nq = $db->prepare("SELECT TRIM(CONCAT(first_name, ' ', last_name)) FROM members WHERE id = ?");
+                $nq->execute([$memberId]);
+                $recipName = (string)$nq->fetchColumn();
+            }
+            $who = $recipName !== '' ? $recipName : formatPhone($phone);
+            $sender = $currentUser['name'] ?? 'A church user';
+
+            // Every reply is logged in the shared activity log with the sender's name.
+            logActivityMessage($db, (int)$currentUser['user_id'], 'sms', 'Text reply to ' . $who, $body, 1);
+            // Optional monitoring copy to the church/admin.
+            sendActivityCopy($db, $settings,
+                "[HITC] $sender replied by text to $who: $body",
+                'Copy: text reply to ' . $who,
+                '<p><strong>' . htmlspecialchars($sender) . '</strong> replied by text to <strong>' . htmlspecialchars($who) . '</strong>:</p><blockquote>' . nl2br(htmlspecialchars($body)) . '</blockquote>'
+            );
             jsonResponse(['message' => 'Sent']);
         }
 
@@ -495,6 +572,19 @@ switch ($method) {
 
                 $db->prepare("UPDATE messages SET status = 'sent', sent_count = ?, failed_count = ?, sent_at = NOW() WHERE id = ?")
                     ->execute([$sentCount, $failedCount, $messageId]);
+
+                // Optional monitoring copy to the church/admin - one summary, not one per person.
+                if ($sentCount > 0) {
+                    $sender = $currentUser['name'] ?? 'A church user';
+                    $preview = trim(strip_tags($body));
+                    if (strlen($preview) > 140) $preview = substr($preview, 0, 137) . '...';
+                    $label = $messageType === 'sms' ? 'text' : ($messageType === 'both' ? 'email + text' : 'email');
+                    sendActivityCopy($db, $settings,
+                        "[HITC] $sender sent a $label to $sentCount " . ($sentCount === 1 ? 'person' : 'people') . ": $preview",
+                        'Copy: church ' . $label . ' sent to ' . $sentCount . ' ' . ($sentCount === 1 ? 'person' : 'people'),
+                        '<p><strong>' . htmlspecialchars($sender) . '</strong> sent a ' . $label . ' to <strong>' . $sentCount . '</strong> ' . ($sentCount === 1 ? 'person' : 'people') . ($subject ? ' &mdash; ' . htmlspecialchars($subject) : '') . ':</p><blockquote>' . nl2br(htmlspecialchars($preview)) . '</blockquote>'
+                    );
+                }
 
                 $skippedNote = $smsSkipped
                     ? ' - ' . count($smsSkipped) . ' skipped for SMS (no text consent on file)'

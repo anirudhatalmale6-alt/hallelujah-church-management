@@ -534,6 +534,7 @@ function SentTab({ setError }) {
                   <tr>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Date</th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Subject</th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Sent By</th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Type</th>
                     <th className="text-center px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Recipients</th>
                     <th className="text-center px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Status</th>
@@ -545,6 +546,7 @@ function SentTab({ setError }) {
                     <tr key={m.id} className="hover:bg-gray-50">
                       <td className="px-4 py-3 text-sm text-gray-600">{new Date(m.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })}</td>
                       <td className="px-4 py-3 text-sm font-medium text-gray-900 max-w-[200px] truncate">{m.subject || '(No subject)'}</td>
+                      <td className="px-4 py-3 text-sm text-gray-600">{m.created_by_name || '—'}</td>
                       <td className="px-4 py-3 text-sm text-gray-500 capitalize">{m.message_type}</td>
                       <td className="px-4 py-3 text-center">
                         <span className="text-sm">{m.sent_count || 0}/{m.total_recipients || 0}</span>
@@ -570,7 +572,7 @@ function SentTab({ setError }) {
       </div>
 
       <Modal isOpen={!!viewMsg} onClose={() => { setViewMsg(null); setViewData(null); }} title={viewMsg?.subject || 'Message'} size="lg">
-        {viewData ? (
+        {viewData && viewMsg ? (
           <div className="space-y-4">
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <div className="bg-gray-50 rounded-lg p-3"><div className="text-xs text-gray-500">Type</div><div className="text-sm font-medium capitalize">{viewMsg.message_type}</div></div>
@@ -578,6 +580,9 @@ function SentTab({ setError }) {
               <div className="bg-gray-50 rounded-lg p-3"><div className="text-xs text-gray-500">Failed</div><div className="text-sm font-medium">{viewMsg.failed_count || 0}</div></div>
               <div className="bg-gray-50 rounded-lg p-3"><div className="text-xs text-gray-500">Status</div><div className="text-sm font-medium capitalize">{viewMsg.status}</div></div>
             </div>
+            {viewMsg.created_by_name && (
+              <div className="text-xs text-gray-500">Sent by <span className="font-medium text-gray-700">{viewMsg.created_by_name}</span></div>
+            )}
             <div className="border rounded-lg p-4 bg-white">
               <div className="text-sm text-gray-700" dangerouslySetInnerHTML={{ __html: viewData.message?.body || '' }} />
             </div>
@@ -793,19 +798,24 @@ function SettingsTab({ setError, setMessage }) {
     msg_sendgrid_key: '', msg_from_email: '', msg_from_name: '',
     msg_twilio_sid: '', msg_twilio_token: '', msg_twilio_number: '',
   });
+  const [copy, setCopy] = useState({ enabled: false, phone: '', email: '' });
   const [saving, setSaving] = useState(false);
   const [testEmail, setTestEmail] = useState('');
 
   useEffect(() => {
     msgApi.config().then(d => {
       setConfig(prev => ({ ...prev, msg_from_email: d.from_email || '', msg_from_name: d.from_name || '' }));
+      setCopy({ enabled: !!d.copy_enabled, phone: d.copy_phone || '', email: d.copy_email || '' });
     }).catch(() => {});
   }, []);
 
   const handleSave = async () => {
     const toSave = {};
     Object.entries(config).forEach(([k, v]) => { if (v && v.trim()) toSave[k] = v.trim(); });
-    if (Object.keys(toSave).length === 0) { setError('Please fill in at least one field'); return; }
+    // Monitoring-copy settings always go up (so they can be turned off / cleared).
+    toSave.msg_copy_enabled = copy.enabled ? '1' : '';
+    toSave.msg_copy_phone = (copy.phone || '').trim();
+    toSave.msg_copy_email = (copy.email || '').trim();
     setSaving(true);
     try {
       const result = await msgApi.saveConfig(toSave);
@@ -869,6 +879,27 @@ function SettingsTab({ setError, setMessage }) {
             <input className="input" placeholder="+1234567890" value={config.msg_twilio_number} onChange={e => setConfig(c => ({ ...c, msg_twilio_number: e.target.value }))} />
           </div>
           <p className="text-xs text-gray-400">Get your Twilio credentials at twilio.com/console</p>
+        </div>
+      </div>
+
+      <div className="card mb-6">
+        <h3 className="text-lg font-semibold text-gray-900 mb-1 flex items-center gap-2"><Inbox size={20} /> Message Copies &amp; Monitoring</h3>
+        <p className="text-sm text-gray-500 mb-4">Keep an eye on everything the team sends. When this is on, a copy of every text or email your team sends out is also sent to the church phone and/or an admin email you choose. One short summary per message &mdash; not one per person.</p>
+        <label className="flex items-center gap-2 text-sm cursor-pointer mb-4">
+          <input type="checkbox" checked={copy.enabled} onChange={e => setCopy(c => ({ ...c, enabled: e.target.checked }))} className="rounded" />
+          <span className="font-medium text-gray-800">Send me a copy of every message the team sends</span>
+        </label>
+        <div className={`grid grid-cols-1 sm:grid-cols-2 gap-4 ${copy.enabled ? '' : 'opacity-50 pointer-events-none'}`}>
+          <div>
+            <label className="label">Church / Admin phone (for a text copy)</label>
+            <input className="input" placeholder="+1234567890" value={copy.phone} onChange={e => setCopy(c => ({ ...c, phone: e.target.value }))} />
+            <p className="text-xs text-gray-400 mt-1">A short text summary is sent here.</p>
+          </div>
+          <div>
+            <label className="label">Admin email (for an email copy)</label>
+            <input className="input" placeholder="admin@yourchurch.org" value={copy.email} onChange={e => setCopy(c => ({ ...c, email: e.target.value }))} />
+            <p className="text-xs text-gray-400 mt-1">Leave either field blank to skip that channel.</p>
+          </div>
         </div>
       </div>
 
