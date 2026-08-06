@@ -12,6 +12,19 @@ $method = $_SERVER['REQUEST_METHOD'];
 $id = isset($_GET['id']) ? (int)$_GET['id'] : null;
 $db = getDB();
 
+// Accounts flagged "hide sensitive info" see names only — never the contact/personal
+// details. Enforced here on the server so the data never leaves the API for them.
+$HIDE_SENSITIVE = !empty($currentUser['hide_sensitive']) && !in_array($currentUser['role'] ?? '', ['admin', 'pastor']);
+$SENSITIVE_FIELDS = ['email', 'phone', 'address', 'city', 'state', 'zip',
+    'date_of_birth', 'notes', 'emergency_contact_name', 'emergency_contact_phone',
+    'emergency_contact', 'household_id', 'household_role', 'baptism_date',
+    'salvation_date', 'wedding_date', 'membership_class_date', 'dedication_date'];
+function stripSensitive($row, $fields) {
+    if (!is_array($row)) return $row;
+    foreach ($fields as $f) { if (array_key_exists($f, $row)) $row[$f] = null; }
+    return $row;
+}
+
 switch ($method) {
     case 'GET':
         if ($id) {
@@ -79,6 +92,10 @@ switch ($method) {
             $member['groups'] = $stmt->fetchAll();
             $member['group_ids'] = array_map('intval', array_column($member['groups'], 'id'));
 
+            if ($HIDE_SENSITIVE) {
+                $member = stripSensitive($member, $SENSITIVE_FIELDS);
+                unset($member['household'], $member['household_members'], $member['recent_attendance']);
+            }
             jsonResponse(['member' => $member]);
         } else {
             // List members with search/filter
@@ -198,6 +215,9 @@ switch ($method) {
                 $typeCountMap[$tc['person_type'] ?: 'unknown'] = (int)$tc['count'];
             }
 
+            if ($HIDE_SENSITIVE) {
+                $members = array_map(fn($m) => stripSensitive($m, $SENSITIVE_FIELDS), $members);
+            }
             jsonResponse([
                 'members' => $members,
                 'total' => (int)$total,
@@ -207,6 +227,7 @@ switch ($method) {
                 'family_groups' => $familyGroups,
                 'groups' => $groupRows,
                 'type_counts' => $typeCountMap,
+                'hide_sensitive' => $HIDE_SENSITIVE ? 1 : 0,
             ]);
         }
         break;
@@ -557,6 +578,13 @@ switch ($method) {
         }
 
         $data = getRequestBody();
+
+        // A "hide sensitive info" user can't see personal details, so never let
+        // their save overwrite (blank out) those fields — drop them from the payload.
+        if ($HIDE_SENSITIVE) {
+            foreach ($SENSITIVE_FIELDS as $sf) { unset($data[$sf]); }
+            unset($data['sms_consent'], $data['sms_consent_source'], $data['sms_consent_proof']);
+        }
 
         // SMS consent is not a plain field: turning it ON has to stamp WHEN it
         // was given, HOW, and WHO recorded it, because that record is the proof

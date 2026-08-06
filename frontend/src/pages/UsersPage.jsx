@@ -19,6 +19,7 @@ const roleLabelMap = Object.fromEntries(roles.map(r => [r.value, r.label]));
 
 const emptyUser = {
   email: '', password: '', name: '', phone: '', role: 'volunteer', status: 'active', display_title: '',
+  view_only: 0, hide_sensitive: 0,
 };
 
 export default function UsersPage() {
@@ -142,6 +143,8 @@ export default function UsersPage() {
       role: user.role || 'volunteer',
       status: user.status || 'active',
       display_title: user.display_title || '',
+      view_only: Number(user.view_only) ? 1 : 0,
+      hide_sensitive: Number(user.hide_sensitive) ? 1 : 0,
     });
     setShowPassword(false);
     setError('');
@@ -477,6 +480,26 @@ export default function UsersPage() {
               />
               <p className="text-xs text-gray-400 mt-1">Custom title shown instead of the system role</p>
             </div>
+
+            {(form.role === 'leader' || form.role === 'volunteer') && (
+              <div className="border border-gray-200 rounded-lg p-3 bg-gray-50 space-y-2.5">
+                <p className="text-xs font-semibold text-gray-500 uppercase">Access level</p>
+                <label className="flex items-start gap-2 text-sm cursor-pointer">
+                  <input type="checkbox" className="rounded mt-0.5" checked={!!Number(form.view_only)} onChange={e => updateField('view_only', e.target.checked ? 1 : 0)} />
+                  <span>
+                    <span className="font-medium text-gray-800">View only</span>
+                    <span className="block text-xs text-gray-500">This person can look at everything they have access to, but cannot add, edit, or delete anything.</span>
+                  </span>
+                </label>
+                <label className="flex items-start gap-2 text-sm cursor-pointer">
+                  <input type="checkbox" className="rounded mt-0.5" checked={!!Number(form.hide_sensitive)} onChange={e => updateField('hide_sensitive', e.target.checked ? 1 : 0)} />
+                  <span>
+                    <span className="font-medium text-gray-800">Hide personal details</span>
+                    <span className="block text-xs text-gray-500">Show people's names only — hide phone, email, address, birthday and other personal info from this person.</span>
+                  </span>
+                </label>
+              </div>
+            )}
           </div>
 
           <div className="flex items-center justify-end gap-3 mt-6 pt-4 border-t border-gray-100">

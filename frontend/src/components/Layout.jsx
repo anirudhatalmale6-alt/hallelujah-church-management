@@ -5,7 +5,7 @@ import {
   LayoutDashboard, Users, UserCheck, Calendar, Church, Home,
   Settings, LogOut, Menu, X, ChevronDown, FileText, FolderOpen,
   Lock, ClipboardCheck, ClipboardList, DollarSign, MessageSquare,
-  QrCode, PhoneCall, FileArchive, Scissors
+  QrCode, PhoneCall, FileArchive, Scissors, Eye, EyeOff
 } from 'lucide-react';
 
 const navItems = [
@@ -34,7 +34,7 @@ const adminItems = [
 ];
 
 export default function Layout({ children }) {
-  const { user, logout, isAdmin, hasPermission } = useAuth();
+  const { user, logout, isAdmin, hasPermission, viewOnly, hideSensitive } = useAuth();
   const location = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
@@ -132,7 +132,18 @@ export default function Layout({ children }) {
             <Menu size={24} />
           </button>
 
-          <div className="flex-1" />
+          <div className="flex-1 flex items-center gap-2 px-2">
+            {viewOnly && (
+              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-amber-100 text-amber-800 text-xs font-medium" title="Your account can view but not make changes.">
+                <Eye size={13} /> View only
+              </span>
+            )}
+            {hideSensitive && (
+              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-gray-100 text-gray-600 text-xs font-medium" title="Personal details (phone, address, etc.) are hidden for your account.">
+                <EyeOff size={13} /> Limited info
+              </span>
+            )}
+          </div>
 
           {/* Profile dropdown */}
           <div className="relative">

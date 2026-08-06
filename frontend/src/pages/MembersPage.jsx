@@ -40,7 +40,7 @@ const personTypeColors = {
 };
 
 export default function MembersPage() {
-  const { isAdmin } = useAuth();
+  const { isAdmin, canEdit, hideSensitive } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const [personTypes, setPersonTypes] = useState(DEFAULT_PERSON_TYPES);
   const [members, setMembers] = useState([]);
@@ -293,15 +293,19 @@ export default function MembersPage() {
               <RefreshCw size={18} className={autoStatusRunning ? 'animate-spin' : ''} /> Auto-Status
             </button>
           )}
-          <button onClick={() => setShowImport(true)} className="btn-secondary">
-            <Upload size={18} /> Import
-          </button>
+          {canEdit && (
+            <button onClick={() => setShowImport(true)} className="btn-secondary">
+              <Upload size={18} /> Import
+            </button>
+          )}
           <button onClick={exportCSV} className="btn-secondary">
             <Download size={18} /> Export
           </button>
-          <button onClick={openNew} className="btn-primary">
-            <UserPlus size={18} /> Add Person
-          </button>
+          {canEdit && (
+            <button onClick={openNew} className="btn-primary">
+              <UserPlus size={18} /> Add Person
+            </button>
+          )}
         </div>
       </div>
 
@@ -432,7 +436,7 @@ export default function MembersPage() {
                       </th>
                     )}
                     <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Name</th>
-                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider hidden md:table-cell">Contact</th>
+                    {!hideSensitive && <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider hidden md:table-cell">Contact</th>}
                     <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider hidden lg:table-cell">Group</th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Type</th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Status</th>
@@ -464,14 +468,16 @@ export default function MembersPage() {
                                 : `${m.first_name} ${m.last_name}`}
                             </div>
                             {m.function_title && <div className="text-xs font-medium text-primary-700">{m.function_title}</div>}
-                            <div className="text-xs text-gray-500 md:hidden">{m.phone || m.email}</div>
+                            {!hideSensitive && <div className="text-xs text-gray-500 md:hidden">{m.phone || m.email}</div>}
                           </div>
                         </Link>
                       </td>
-                      <td className="px-4 py-3 hidden md:table-cell">
-                        <div className="text-sm text-gray-700">{m.email || '-'}</div>
-                        <div className="text-xs text-gray-500">{m.phone || ''}</div>
-                      </td>
+                      {!hideSensitive && (
+                        <td className="px-4 py-3 hidden md:table-cell">
+                          <div className="text-sm text-gray-700">{m.email || '-'}</div>
+                          <div className="text-xs text-gray-500">{m.phone || ''}</div>
+                        </td>
+                      )}
                       <td className="px-4 py-3 hidden lg:table-cell text-sm text-gray-600">
                         {m.family_group || '-'}
                       </td>
@@ -486,13 +492,15 @@ export default function MembersPage() {
                           >
                             <Eye size={16} />
                           </Link>
-                          <button
-                            onClick={() => openEdit(m)}
-                            className="p-2 text-gray-400 hover:text-primary-700 hover:bg-primary-50 rounded-lg"
-                            title="Edit"
-                          >
-                            <Edit2 size={16} />
-                          </button>
+                          {canEdit && (
+                            <button
+                              onClick={() => openEdit(m)}
+                              className="p-2 text-gray-400 hover:text-primary-700 hover:bg-primary-50 rounded-lg"
+                              title="Edit"
+                            >
+                              <Edit2 size={16} />
+                            </button>
+                          )}
                           {isAdmin && (
                             <button
                               onClick={() => setDeleteId(m.id)}

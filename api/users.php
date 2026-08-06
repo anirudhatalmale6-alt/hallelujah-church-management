@@ -127,7 +127,7 @@ switch ($method) {
     case 'GET':
         if ($id) {
             // Get single user
-            $stmt = $db->prepare("SELECT id, email, name, phone, role, display_title, status, created_at, updated_at FROM users WHERE id = ?");
+            $stmt = $db->prepare("SELECT id, email, name, phone, role, view_only, hide_sensitive, display_title, status, created_at, updated_at FROM users WHERE id = ?");
             $stmt->execute([$id]);
             $user = $stmt->fetch();
             if (!$user) {
@@ -137,7 +137,7 @@ switch ($method) {
         } else {
             // List all users
             requireRole($currentUser, ['pastor', 'admin']);
-            $stmt = $db->query("SELECT id, email, name, phone, role, display_title, status, created_at, updated_at FROM users ORDER BY name ASC");
+            $stmt = $db->query("SELECT id, email, name, phone, role, view_only, hide_sensitive, display_title, status, created_at, updated_at FROM users ORDER BY name ASC");
             $users = $stmt->fetchAll();
             jsonResponse(['users' => $users]);
         }
@@ -165,13 +165,15 @@ switch ($method) {
         }
 
         $passwordHash = password_hash($data['password'], PASSWORD_BCRYPT);
-        $stmt = $db->prepare("INSERT INTO users (email, password_hash, name, phone, role, status) VALUES (?, ?, ?, ?, ?, ?)");
+        $stmt = $db->prepare("INSERT INTO users (email, password_hash, name, phone, role, view_only, hide_sensitive, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
         $stmt->execute([
             $data['email'],
             $passwordHash,
             $data['name'],
             !empty($data['phone']) ? trim($data['phone']) : null,
             $data['role'],
+            !empty($data['view_only']) ? 1 : 0,
+            !empty($data['hide_sensitive']) ? 1 : 0,
             $data['status'] ?? 'active'
         ]);
 
@@ -236,6 +238,14 @@ switch ($method) {
             $fields[] = "display_title = ?";
             $params[] = $data['display_title'] ?: null;
         }
+        if (array_key_exists('view_only', $data) && in_array($currentUser['role'], ['pastor', 'admin'])) {
+            $fields[] = "view_only = ?";
+            $params[] = !empty($data['view_only']) ? 1 : 0;
+        }
+        if (array_key_exists('hide_sensitive', $data) && in_array($currentUser['role'], ['pastor', 'admin'])) {
+            $fields[] = "hide_sensitive = ?";
+            $params[] = !empty($data['hide_sensitive']) ? 1 : 0;
+        }
 
         if (empty($fields)) {
             jsonResponse(['error' => 'No fields to update'], 400);
@@ -246,7 +256,7 @@ switch ($method) {
         $stmt = $db->prepare($sql);
         $stmt->execute($params);
 
-        $stmt = $db->prepare("SELECT id, email, name, phone, role, display_title, status, created_at, updated_at FROM users WHERE id = ?");
+        $stmt = $db->prepare("SELECT id, email, name, phone, role, view_only, hide_sensitive, display_title, status, created_at, updated_at FROM users WHERE id = ?");
         $stmt->execute([$id]);
         $user = $stmt->fetch();
 

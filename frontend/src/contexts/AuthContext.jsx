@@ -69,6 +69,10 @@ export function AuthProvider({ children }) {
 
   const isAdmin = user && (user.role === 'admin' || user.role === 'pastor');
   const isLeader = user && (user.role === 'admin' || user.role === 'pastor' || user.role === 'leader');
+  // Per-user access flags. Admin/pastor are never restricted.
+  const viewOnly = !!user && !isAdmin && !!Number(user.view_only);
+  const hideSensitive = !!user && !isAdmin && !!Number(user.hide_sensitive);
+  const canEdit = !viewOnly;
 
   const hasPermission = (section) => {
     if (!user) return false;
@@ -96,7 +100,7 @@ export function AuthProvider({ children }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout, isAdmin, isLeader, checkAuth, hasPermission, hasFinanceSection, hasSectionAccess }}>
+    <AuthContext.Provider value={{ user, loading, login, logout, isAdmin, isLeader, viewOnly, hideSensitive, canEdit, checkAuth, hasPermission, hasFinanceSection, hasSectionAccess }}>
       {children}
     </AuthContext.Provider>
   );
