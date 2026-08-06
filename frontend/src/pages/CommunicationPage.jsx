@@ -88,10 +88,11 @@ function ComposeTab({ setError, setMessage }) {
   const [membersList, setMembersList] = useState([]);
   const [groupsList, setGroupsList] = useState([]);
   const [messageType, setMessageType] = useState('email');
-  const [recipientType, setRecipientType] = useState('individual');
+  // Gloo-style: build ONE recipient list from groups + individuals (mode 'people'),
+  // or send to ad-hoc emails/phones (mode 'direct'). Each person always gets their
+  // own private message — no one sees who else is in the group.
+  const [mode, setMode] = useState('people');
   const [recipientIds, setRecipientIds] = useState([]);
-  const [groupName, setGroupName] = useState('');
-  const [personType, setPersonType] = useState('');
   const [subject, setSubject] = useState('');
   const [body, setBody] = useState('');
   const [sendType, setSendType] = useState('now');
@@ -124,31 +125,52 @@ function ComposeTab({ setError, setMessage }) {
     return (m.first_name + ' ' + m.last_name + ' ' + (m.email || '')).toLowerCase().includes(s);
   });
 
+  // Can this person actually be reached on the chosen channel?
+  const reachable = (m) => {
+    if (messageType === 'sms') return !!(m.phone && m.sms_consent);
+    if (messageType === 'both') return !!(m.email || (m.phone && m.sms_consent));
+    return !!m.email;
+  };
+  // Members of a group (by real group_ids), only those we can reach.
+  const groupMembers = (gid) => membersList.filter(m => Array.isArray(m.group_ids) && m.group_ids.includes(gid) && m.status === 'active' && reachable(m));
+  const groupState = (gid) => {
+    const ids = groupMembers(gid).map(m => m.id);
+    if (ids.length === 0) return 'empty';
+    const inSel = ids.filter(id => recipientIds.includes(id)).length;
+    if (inSel === 0) return 'none';
+    if (inSel === ids.length) return 'all';
+    return 'some';
+  };
+  const toggleGroup = (gid) => {
+    const ids = groupMembers(gid).map(m => m.id);
+    if (ids.length === 0) return;
+    const st = groupState(gid);
+    setRecipientIds(prev => st === 'all' ? prev.filter(id => !ids.includes(id)) : [...new Set([...prev, ...ids])]);
+  };
+  const addEveryone = () => setRecipientIds([...new Set(membersList.filter(m => m.status === 'active' && reachable(m)).map(m => m.id))]);
+  const addByType = (t) => setRecipientIds(prev => [...new Set([...prev, ...membersList.filter(m => m.person_type === t && m.status === 'active' && reachable(m)).map(m => m.id)])]);
+
   const toggleRecipient = (id) => {
     setRecipientIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
   };
 
   const getRecipientCount = () => {
-    if (recipientType === 'individual') return recipientIds.length;
-    if (recipientType === 'group') return membersList.filter(m => m.family_group && m.family_group.includes(groupName) && m.status === 'active').length;
-    if (recipientType === 'person_type') return membersList.filter(m => m.person_type === personType && m.status === 'active').length;
-    if (recipientType === 'direct') return directContacts.length;
-    if (recipientType === 'all') return membersList.filter(m => m.status === 'active').length;
-    return 0;
+    if (mode === 'direct') return directContacts.length;
+    return recipientIds.length;
   };
 
   const handleSend = async () => {
     if (!body.trim()) { setError('Message body is required'); return; }
     if (messageType === 'email' && !subject.trim()) { setError('Subject is required for email'); return; }
-    if (recipientType === 'individual' && recipientIds.length === 0) { setError('Select at least one recipient'); return; }
+    if (mode === 'people' && recipientIds.length === 0) { setError('Select at least one recipient'); return; }
     // Auto-add direct input if user typed something but didn't click Add
     let finalDirectContacts = [...directContacts];
-    if (recipientType === 'direct' && directInput.trim()) {
+    if (mode === 'direct' && directInput.trim()) {
       finalDirectContacts.push(directInput.trim());
       setDirectContacts(finalDirectContacts);
       setDirectInput('');
     }
-    if (recipientType === 'direct' && finalDirectContacts.length === 0) { setError('Add at least one email or phone number'); return; }
+    if (mode === 'direct' && finalDirectContacts.length === 0) { setError('Add at least one email or phone number'); return; }
     if (sendType === 'recurring' && !recurringPattern) { setError('Select a recurring pattern'); return; }
 
     setSending(true);
@@ -159,16 +181,14 @@ function ComposeTab({ setError, setMessage }) {
         send_type: sendType,
         subject: subject || '',
         body: messageType === 'email' ? (body || '').replace(/\n/g, '<br>') : (body || ''),
-        recipient_type: recipientType,
-        recipient_ids: recipientType === 'individual' ? recipientIds : [],
-        group_name: groupName || '',
-        person_type: personType || '',
+        recipient_type: mode === 'direct' ? 'direct' : 'individual',
+        recipient_ids: mode === 'people' ? recipientIds : [],
         scheduled_at: sendType === 'scheduled' ? scheduledAt : null,
         recurring_pattern: sendType === 'recurring' ? recurringPattern : null,
         attachment_name: attachmentNames.length > 0 ? attachmentNames[0] : null,
         attachment_names: attachmentNames.length > 0 ? attachmentNames : null,
       };
-      if (recipientType === 'direct') {
+      if (mode === 'direct') {
         sendData.direct_contacts = (finalDirectContacts || []).map(c => {
           if (typeof c === 'string') {
             return c.includes('@') ? { email: c, phone: null, name: c } : { email: null, phone: c, name: c };
@@ -247,13 +267,10 @@ function ComposeTab({ setError, setMessage }) {
               </div>
               <div>
                 <label className="label">Send To</label>
-                <select className="input" value={recipientType} onChange={e => setRecipientType(e.target.value)}>
-                  <option value="individual">Select People</option>
-                  <option value="group">Group</option>
-                  <option value="person_type">By Type</option>
-                  <option value="direct">Direct (email/phone)</option>
-                  <option value="all">Everyone (Active)</option>
-                </select>
+                <div className="flex rounded-lg border border-gray-300 overflow-hidden">
+                  <button type="button" onClick={() => setMode('people')} className={`flex-1 px-3 py-2 text-sm font-medium ${mode === 'people' ? 'bg-primary-700 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>People &amp; Groups</button>
+                  <button type="button" onClick={() => setMode('direct')} className={`flex-1 px-3 py-2 text-sm font-medium border-l border-gray-300 ${mode === 'direct' ? 'bg-primary-700 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>Direct email/phone</button>
+                </div>
               </div>
               <div>
                 <label className="label">When</label>
@@ -265,29 +282,7 @@ function ComposeTab({ setError, setMessage }) {
               </div>
             </div>
 
-            {recipientType === 'group' && (
-              <div className="mb-4">
-                <label className="label">Select Group</label>
-                <select className="input" value={groupName} onChange={e => setGroupName(e.target.value)}>
-                  <option value="">-- Choose group --</option>
-                  {groupsList.map(g => <option key={g.id} value={g.name}>{g.name}</option>)}
-                </select>
-              </div>
-            )}
-
-            {recipientType === 'person_type' && (
-              <div className="mb-4">
-                <label className="label">Select Type</label>
-                <select className="input" value={personType} onChange={e => setPersonType(e.target.value)}>
-                  <option value="">-- Choose --</option>
-                  {personTypes.map(t => (
-                    <option key={t.value} value={t.value}>{t.label}</option>
-                  ))}
-                </select>
-              </div>
-            )}
-
-            {recipientType === 'direct' && (
+            {mode === 'direct' && (
               <div className="mb-4 space-y-3">
                 <div>
                   <label className="label">Enter Email or Phone</label>
@@ -442,23 +437,53 @@ function ComposeTab({ setError, setMessage }) {
           </div>
         </div>
 
-        {/* Recipient selector */}
-        {recipientType === 'individual' && (
+        {/* Gloo-style recipient selector: groups + individuals in one place */}
+        {mode === 'people' && (
           <div className="card">
             <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-semibold text-gray-700">Select Recipients</h3>
+              <h3 className="text-sm font-semibold text-gray-700">Recipients</h3>
               <span className="text-xs text-gray-500">{recipientIds.length} selected</span>
             </div>
-            <div className="relative mb-3">
-              <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-              <input className="input pl-9 py-1.5 text-sm" placeholder="Search..." value={memberSearch} onChange={e => setMemberSearch(e.target.value)} />
+
+            {/* Quick add */}
+            <div className="flex flex-wrap gap-1.5 mb-3">
+              <button type="button" onClick={addEveryone} className="px-2 py-1 text-xs rounded-full bg-primary-50 text-primary-700 hover:bg-primary-100 font-medium">+ Everyone (active)</button>
+              {personTypes.map(t => (
+                <button key={t.value} type="button" onClick={() => addByType(t.value)} className="px-2 py-1 text-xs rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200 font-medium" title={`Add all ${t.label}`}>+ {t.label}</button>
+              ))}
+              {recipientIds.length > 0 && <button type="button" onClick={() => setRecipientIds([])} className="px-2 py-1 text-xs rounded-full bg-red-50 text-red-600 hover:bg-red-100 font-medium">Clear all</button>}
             </div>
-            <div className="max-h-96 overflow-y-auto space-y-1">
-              {filteredMembers.slice(0, 100).map(m => {
+
+            {/* Groups — one click selects the whole group */}
+            {groupsList.length > 0 && (
+              <div className="mb-3">
+                <div className="text-xs font-semibold text-gray-500 uppercase mb-1.5">Groups (tap to add everyone in it)</div>
+                <div className="flex flex-wrap gap-1.5 max-h-40 overflow-y-auto">
+                  {groupsList.map(g => {
+                    const st = groupState(g.id);
+                    const count = groupMembers(g.id).length;
+                    return (
+                      <button key={g.id} type="button" onClick={() => toggleGroup(g.id)} disabled={count === 0}
+                        title={count === 0 ? 'No reachable members on this channel' : `${count} reachable`}
+                        className={`px-2.5 py-1 text-xs rounded-full font-medium border transition-colors ${st === 'all' ? 'bg-primary-700 text-white border-primary-700' : st === 'some' ? 'bg-primary-50 text-primary-700 border-primary-300' : count === 0 ? 'bg-gray-50 text-gray-300 border-gray-200 cursor-not-allowed' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`}>
+                        {st === 'all' ? <Check size={11} className="inline mr-0.5 -mt-0.5" /> : null}{g.name} <span className="opacity-60">({count})</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Individuals */}
+            <div className="text-xs font-semibold text-gray-500 uppercase mb-1.5">Individuals</div>
+            <div className="relative mb-2">
+              <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input className="input pl-9 py-1.5 text-sm" placeholder="Search people..." value={memberSearch} onChange={e => setMemberSearch(e.target.value)} />
+            </div>
+            <div className="max-h-80 overflow-y-auto space-y-1">
+              {filteredMembers.slice(0, 200).map(m => {
                 const selected = recipientIds.includes(m.id);
-                // For SMS a phone number alone isn't enough - they must have consented.
-                const smsReady = m.phone && m.sms_consent;
-                const hasContact = messageType === 'sms' ? smsReady : m.email;
+                const hasContact = reachable(m);
                 return (
                   <label key={m.id} className={`flex items-center gap-2 p-2 rounded cursor-pointer text-sm ${selected ? 'bg-primary-50' : 'hover:bg-gray-50'} ${!hasContact ? 'opacity-40' : ''}`}>
                     <input type="checkbox" checked={selected} onChange={() => toggleRecipient(m.id)} disabled={!hasContact} className="rounded" />
@@ -473,7 +498,9 @@ function ComposeTab({ setError, setMessage }) {
                   </label>
                 );
               })}
+              {filteredMembers.length > 200 && <div className="text-xs text-gray-400 text-center py-2">Showing first 200 — use search to narrow.</div>}
             </div>
+            <p className="text-[11px] text-gray-400 mt-2">Each person gets their own private message — no one sees who else received it.</p>
           </div>
         )}
       </div>
