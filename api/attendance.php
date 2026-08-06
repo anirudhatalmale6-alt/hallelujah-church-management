@@ -9,6 +9,11 @@ require_once __DIR__ . '/auth.php';
 
 $currentUser = authenticate();
 $method = $_SERVER['REQUEST_METHOD'];
+
+// Per-section access: "View" only can't mark/edit attendance.
+if (in_array($method, ['POST', 'PUT', 'DELETE'])) {
+    requireSectionEdit($currentUser, 'attendance', 'mark_edit');
+}
 $db = getDB();
 
 $action = $_GET['action'] ?? '';

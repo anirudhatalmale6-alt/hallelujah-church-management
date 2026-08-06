@@ -96,6 +96,7 @@ function authenticate(): array {
     // old tokens still honour them. Wrapped in try/catch for pre-migration safety.
     $payload['view_only'] = 0;
     $payload['hide_sensitive'] = 0;
+    $payload['section_access'] = [];
     try {
         $db = getDB();
         $u = $db->prepare("SELECT status, view_only, hide_sensitive FROM users WHERE id = ?");
@@ -107,6 +108,12 @@ function authenticate(): array {
             }
             $payload['view_only'] = (int)($row['view_only'] ?? 0);
             $payload['hide_sensitive'] = (int)($row['hide_sensitive'] ?? 0);
+        }
+        // Per-section sub-permissions (e.g. members => ['view'] means view-only).
+        $saStmt = $db->prepare("SELECT section, sub_permission FROM user_section_access WHERE user_id = ?");
+        $saStmt->execute([$payload['user_id']]);
+        foreach ($saStmt->fetchAll() as $sa) {
+            $payload['section_access'][$sa['section']][] = $sa['sub_permission'];
         }
     } catch (Exception $e) { /* columns may not exist yet */ }
 
@@ -130,6 +137,30 @@ function requireRole(array $user, array $allowedRoles): void {
     if (!in_array($user['role'], $allowedRoles)) {
         jsonResponse(['error' => 'Insufficient permissions'], 403);
     }
+}
+
+/**
+ * Does this user have a given sub-permission on a section?
+ * Admin/pastor always yes. If the user has NO sub-permissions saved for the
+ * section, they have full access (matches the frontend hasSectionAccess). If
+ * they DO have some, they only have the ones listed.
+ */
+function sectionAllows(array $user, string $section, string $subPerm): bool {
+    if (in_array($user['role'] ?? '', ['admin', 'pastor'])) return true;
+    $sa = $user['section_access'][$section] ?? null;
+    if (empty($sa)) return true;
+    return in_array($subPerm, $sa);
+}
+
+/**
+ * Guard a write action: 403 unless the user has the sub-permission on the section.
+ * $subPerms can be one key or several (any match passes, e.g. add_edit OR manage).
+ */
+function requireSectionEdit(array $user, string $section, $subPerms): void {
+    foreach ((array)$subPerms as $sp) {
+        if (sectionAllows($user, $section, $sp)) return;
+    }
+    jsonResponse(['error' => 'You have view-only access to this section. Ask an administrator if you need to make changes here.'], 403);
 }
 
 /**

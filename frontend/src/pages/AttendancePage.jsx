@@ -34,7 +34,8 @@ const formatStamp = (ts) => {
 };
 
 export default function AttendancePage() {
-  const { user } = useAuth();
+  const { user, canEdit, hasSectionAccess } = useAuth();
+  const canMark = canEdit && hasSectionAccess('attendance', 'mark_edit');
   const [searchParams, setSearchParams] = useSearchParams();
   const [tab, setTab] = useState('mark');
   const [services, setServices] = useState([]);
@@ -623,13 +624,17 @@ export default function AttendancePage() {
                   >
                     {sortAZ ? <ArrowDownAZ size={16} /> : <ArrowDownZA size={16} />}
                   </button>
-                  <button onClick={markAllPresent} className="btn-secondary btn-sm">
-                    <Check size={16} /> Mark All Present
-                  </button>
-                  <button onClick={saveAttendance} disabled={saving} className="btn-primary">
-                    {saving ? <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" /> : <Save size={16} />}
-                    Save Attendance
-                  </button>
+                  {canMark && (
+                    <button onClick={markAllPresent} className="btn-secondary btn-sm">
+                      <Check size={16} /> Mark All Present
+                    </button>
+                  )}
+                  {canMark && (
+                    <button onClick={saveAttendance} disabled={saving} className="btn-primary">
+                      {saving ? <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" /> : <Save size={16} />}
+                      Save Attendance
+                    </button>
+                  )}
                 </div>
               </div>
 

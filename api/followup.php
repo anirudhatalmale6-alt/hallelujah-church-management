@@ -4,6 +4,11 @@ require_once __DIR__ . '/auth.php';
 
 $currentUser = authenticate();
 $method = $_SERVER['REQUEST_METHOD'];
+
+// Per-section access: "View" only can't create/edit/delete follow-ups.
+if (in_array($method, ['POST', 'PUT', 'DELETE'])) {
+    requireSectionEdit($currentUser, 'followup', 'manage');
+}
 $action = $_GET['action'] ?? '';
 $db = getDB();
 

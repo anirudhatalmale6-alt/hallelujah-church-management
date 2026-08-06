@@ -85,6 +85,8 @@ export default function CommunicationPage() {
 }
 
 function ComposeTab({ setError, setMessage }) {
+  const { canEdit, hasSectionAccess } = useAuth();
+  const canSend = canEdit && hasSectionAccess('communication', 'send');
   const [membersList, setMembersList] = useState([]);
   const [groupsList, setGroupsList] = useState([]);
   const [messageType, setMessageType] = useState('email');
@@ -429,10 +431,14 @@ function ComposeTab({ setError, setMessage }) {
               <div className="text-sm text-gray-500">
                 {getRecipientCount()} recipient{getRecipientCount() !== 1 ? 's' : ''}
               </div>
-              <button onClick={handleSend} disabled={sending || notConfigured} className="btn-primary">
-                {sending ? <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" /> : <Send size={16} />}
-                {sendType === 'now' ? 'Send Now' : 'Schedule'}
-              </button>
+              {canSend ? (
+                <button onClick={handleSend} disabled={sending || notConfigured} className="btn-primary">
+                  {sending ? <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" /> : <Send size={16} />}
+                  {sendType === 'now' ? 'Send Now' : 'Schedule'}
+                </button>
+              ) : (
+                <span className="text-sm text-gray-400 italic">View only — you don't have permission to send messages.</span>
+              )}
             </div>
           </div>
         </div>

@@ -25,6 +25,13 @@ function stripSensitive($row, $fields) {
     return $row;
 }
 
+// Per-section access: a user given only "View" on People can't add/edit/delete.
+if ($method === 'DELETE') {
+    requireSectionEdit($currentUser, 'members', 'delete');
+} elseif (in_array($method, ['POST', 'PUT'])) {
+    requireSectionEdit($currentUser, 'members', 'add_edit');
+}
+
 switch ($method) {
     case 'GET':
         if ($id) {

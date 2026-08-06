@@ -4,6 +4,13 @@ require_once __DIR__ . '/auth.php';
 
 $currentUser = authenticate();
 $method = $_SERVER['REQUEST_METHOD'];
+
+// Per-section access: "View" only can't add/edit/delete households.
+if ($method === 'DELETE') {
+    requireSectionEdit($currentUser, 'households', 'delete');
+} elseif (in_array($method, ['POST', 'PUT'])) {
+    requireSectionEdit($currentUser, 'households', 'add_edit');
+}
 $id = isset($_GET['id']) ? (int)$_GET['id'] : null;
 $db = getDB();
 

@@ -37,8 +37,8 @@ const SECTIONS = [
 ];
 
 export default function GroupsPage() {
-  const { isAdmin, isLeader } = useAuth();
-  const canManage = isLeader || isAdmin;
+  const { isAdmin, isLeader, hasSectionAccess } = useAuth();
+  const canManage = (isLeader || isAdmin) && hasSectionAccess('groups', 'manage');
   const [groups, setGroups] = useState([]);
   const [depts, setDepts] = useState([]);
   const [loading, setLoading] = useState(true);

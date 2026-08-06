@@ -40,7 +40,10 @@ const personTypeColors = {
 };
 
 export default function MembersPage() {
-  const { isAdmin, canEdit, hideSensitive } = useAuth();
+  const { isAdmin, canEdit: globalCanEdit, hideSensitive, hasSectionAccess } = useAuth();
+  // Can add/edit People = not globally view-only AND allowed to edit this section.
+  const canEdit = globalCanEdit && hasSectionAccess('members', 'add_edit');
+  const canDelete = globalCanEdit && hasSectionAccess('members', 'delete');
   const [searchParams, setSearchParams] = useSearchParams();
   const [personTypes, setPersonTypes] = useState(DEFAULT_PERSON_TYPES);
   const [members, setMembers] = useState([]);
@@ -501,7 +504,7 @@ export default function MembersPage() {
                               <Edit2 size={16} />
                             </button>
                           )}
-                          {isAdmin && (
+                          {(isAdmin || canDelete) && (
                             <button
                               onClick={() => setDeleteId(m.id)}
                               className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg"

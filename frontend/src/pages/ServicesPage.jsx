@@ -53,7 +53,8 @@ const emptySchedule = {
 };
 
 export default function ServicesPage() {
-  const { isAdmin, isLeader } = useAuth();
+  const { isAdmin, isLeader, hasSectionAccess } = useAuth();
+  const canManageServices = isLeader && hasSectionAccess('services', 'manage');
   const [searchParams, setSearchParams] = useSearchParams();
   const [services, setServices] = useState([]);
   const [total, setTotal] = useState(0);
@@ -340,7 +341,7 @@ export default function ServicesPage() {
               <h1 className="text-2xl font-bold text-gray-900">Services</h1>
               <p className="text-gray-500 mt-1">{total} services</p>
             </div>
-            {isLeader && (
+            {canManageServices && (
               <button onClick={openNew} className="btn-primary">
                 <Plus size={18} /> Create Service
               </button>
@@ -385,7 +386,7 @@ export default function ServicesPage() {
               <div className="card text-center py-16">
                 <Calendar size={48} className="text-gray-300 mx-auto mb-3" />
                 <p className="text-gray-500">No services found</p>
-                {isLeader && (
+                {canManageServices && (
                   <button onClick={openNew} className="btn-primary mt-4">
                     <Plus size={16} /> Create First Service
                   </button>
@@ -438,7 +439,7 @@ export default function ServicesPage() {
                         <div className="text-xs text-gray-400">attended</div>
                       </div>
 
-                      {isLeader && (
+                      {canManageServices && (
                         <div className="flex gap-1">
                           <button
                             onClick={() => openEdit(s)}

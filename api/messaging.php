@@ -341,6 +341,7 @@ switch ($method) {
         // Reply to one person in the Inbox (a direct 1-to-1 text). No consent
         // gate here: they texted us first, so answering is allowed.
         if ($action === 'reply') {
+            requireSectionEdit($currentUser, 'communication', 'send');
             $data = getRequestBody();
             $body = trim($data['body'] ?? '');
             $phone = trim($data['phone'] ?? '');
@@ -400,6 +401,7 @@ switch ($method) {
 
         // Create and send message
         if ($action === 'send') {
+            requireSectionEdit($currentUser, 'communication', 'send');
             $data = getRequestBody();
             if (empty($data['body'])) jsonResponse(['error' => 'Message body required'], 400);
 

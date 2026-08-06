@@ -37,7 +37,8 @@ const emptyForm = {
 };
 
 export default function HouseholdsPage() {
-  const { isAdmin } = useAuth();
+  const { isAdmin, canEdit, hasSectionAccess } = useAuth();
+  const canManageHouseholds = canEdit && hasSectionAccess('households', 'add_edit');
 
   const [households, setHouseholds] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -252,9 +253,9 @@ export default function HouseholdsPage() {
           <h1 className="text-2xl font-bold text-gray-900">Households</h1>
           <p className="text-gray-500 mt-1">{households.length} family households</p>
         </div>
-        <button onClick={openNew} className="btn-primary">
+        {canManageHouseholds && <button onClick={openNew} className="btn-primary">
           <Plus size={18} /> Add Household
-        </button>
+        </button>}
       </div>
 
       {/* Search */}
