@@ -157,6 +157,11 @@ switch ($action) {
         $period = $_GET['period'] ?? '3';
         $months = max(1, min(12, (int)$period));
         $svcTypes = array_values(array_filter(array_map('trim', explode(',', $_GET['service_type'] ?? '')), fn($v) => $v !== ''));
+        // Optional explicit date range (used by the giving statement so the attendance
+        // section covers the exact same period). Falls back to the last N months.
+        $dateFrom = $_GET['date_from'] ?? '';
+        $dateTo = $_GET['date_to'] ?? '';
+        $useRange = ($dateFrom !== '' && $dateTo !== '');
 
         $mStmt = $db->prepare("SELECT id, first_name, last_name, status as member_status, family_group, email, phone FROM members WHERE id = ?");
         $mStmt->execute([$memberId]);
@@ -165,14 +170,23 @@ switch ($action) {
 
         // Every service that has already occurred in the period (optionally of one or more types)
         $svcTypeWhere = $svcTypes ? " AND type IN (" . implode(',', array_fill(0, count($svcTypes), '?')) . ")" : "";
-        $svcParams = array_merge([$months], $svcTypes);
-        $sStmt = $db->prepare("
-            SELECT id, name, date, time, type
-            FROM services
-            WHERE date >= DATE_SUB(CURDATE(), INTERVAL ? MONTH) AND date <= CURDATE()$svcTypeWhere
-            ORDER BY date DESC, time DESC
-        ");
-        $sStmt->execute($svcParams);
+        if ($useRange) {
+            $sStmt = $db->prepare("
+                SELECT id, name, date, time, type
+                FROM services
+                WHERE date >= ? AND date <= ? AND date <= CURDATE()$svcTypeWhere
+                ORDER BY date DESC, time DESC
+            ");
+            $sStmt->execute(array_merge([$dateFrom, $dateTo], $svcTypes));
+        } else {
+            $sStmt = $db->prepare("
+                SELECT id, name, date, time, type
+                FROM services
+                WHERE date >= DATE_SUB(CURDATE(), INTERVAL ? MONTH) AND date <= CURDATE()$svcTypeWhere
+                ORDER BY date DESC, time DESC
+            ");
+            $sStmt->execute(array_merge([$months], $svcTypes));
+        }
         $services = $sStmt->fetchAll();
 
         // This member's recorded attendance, keyed by service id

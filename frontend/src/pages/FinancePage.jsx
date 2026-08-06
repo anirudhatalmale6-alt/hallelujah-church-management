@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import ReactDOM from 'react-dom';
-import { finance as financeApi, members as membersApi, services as servicesApi, auditLog as auditLogApi } from '../utils/api';
+import { finance as financeApi, members as membersApi, services as servicesApi, auditLog as auditLogApi, reports as reportsApi } from '../utils/api';
 import { useAuth } from '../contexts/AuthContext';
 import { formatTime12h, downloadCSV, fmtServiceDate } from '../utils/format';
 import Modal from '../components/Modal';
@@ -2186,7 +2186,11 @@ function StatementsTab({ setError }) {
   const [loading, setLoading] = useState(false);
   const [sortBy, setSortBy] = useState('name');
   const [includePledges, setIncludePledges] = useState(false);
+  const [includeEngagement, setIncludeEngagement] = useState(false);
+  const [engagement, setEngagement] = useState(null);
   const stFreqLabel = { weekly: 'Weekly', monthly: 'Monthly', quarterly: 'Quarterly', annually: 'Annually' };
+  const stSvcLabel = { sunday_1st: '1st Sunday Service', sunday_2nd: '2nd Sunday Service', bible_study: 'Bible Study', fasting: 'Fasting & Prayer', special: 'Special Event' };
+  const stStatusLabel = { present: 'Present', late: 'Late', absent: 'Absent', not_recorded: 'Not recorded' };
 
   const catParam = catIds.join(',');
   const catLabel = catIds.length === 0
@@ -2213,6 +2217,15 @@ function StatementsTab({ setError }) {
       try {
         const data = await financeApi.memberStatement(selectedMemberId, dateFrom, dateTo, catParam, selectedDonorName);
         setStatement(data);
+        // Optionally pull this person's attendance/engagement for the SAME period.
+        if (includeEngagement && selectedMemberId) {
+          try {
+            const eng = await reportsApi.engagementMember(selectedMemberId, '12', '', dateFrom, dateTo);
+            setEngagement(eng);
+          } catch { setEngagement(null); }
+        } else {
+          setEngagement(null);
+        }
       } catch (err) {
         setError(err.message);
       }
@@ -2354,6 +2367,23 @@ function StatementsTab({ setError }) {
       }
     }
 
+    let engagementSection = '';
+    if (includeEngagement && engagement) {
+      const engRows = (engagement.services || []).map(s => {
+        const date = new Date(s.date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+        const label = stStatusLabel[s.status] || s.status;
+        const color = (s.status === 'present' || s.status === 'late') ? '#15803d' : s.status === 'absent' ? '#b91c1c' : '#9ca3af';
+        return `<tr>
+          <td style="padding:6px 10px;border-bottom:1px solid #f3f4f6;">${date}</td>
+          <td style="padding:6px 10px;border-bottom:1px solid #f3f4f6;">${s.service_name || stSvcLabel[s.type] || s.type}</td>
+          <td style="padding:6px 10px;border-bottom:1px solid #f3f4f6;color:${color};font-weight:600;">${label}</td>
+        </tr>`;
+      }).join('');
+      engagementSection = `<h3 style="margin-top:24px;font-size:16px;color:#4338ca;">Attendance &amp; Engagement</h3>
+        <div style="font-size:14px;margin-bottom:8px;">Attended ${engagement.attended} of ${engagement.total_services} services &nbsp;·&nbsp; Missed ${engagement.absent} &nbsp;·&nbsp; Rate ${engagement.attendance_rate}%</div>
+        ${engRows ? `<table><thead><tr><th>Date</th><th>Service</th><th>Status</th></tr></thead><tbody>${engRows}</tbody></table>` : '<p style="font-size:13px;color:#6b7280;">No services in this period.</p>'}`;
+    }
+
     const html = `<!DOCTYPE html><html><head><title>Giving Statement - ${fullName}</title>
     <style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;padding:40px;color:#1f2937;max-width:800px;margin:0 auto;}
     h1{font-size:22px;margin-bottom:4px;} .meta{color:#6b7280;font-size:14px;margin-bottom:20px;}
@@ -2376,6 +2406,7 @@ function StatementsTab({ setError }) {
     <tr style="border-top:2px solid #1f2937;"><td style="padding:8px 10px;" class="total-row">Grand Total</td><td style="padding:8px 10px;text-align:right;" class="total-row">${formatCurrency(statement.grand_total)}</td></tr>
     </tbody></table>
     ${pledgeSection}
+    ${engagementSection}
     <p style="margin-top:30px;font-size:12px;color:#9ca3af;">This statement is provided for your records. Thank you for your generous giving!</p>
     </body></html>`;
 
@@ -2402,6 +2433,11 @@ function StatementsTab({ setError }) {
       } else {
         extraLines.push('Pledges: on track - nothing behind schedule.');
       }
+    }
+    if (includeEngagement && engagement) {
+      extraLines.push('--- Attendance & Engagement ---');
+      extraLines.push(`Attended ${engagement.attended} of ${engagement.total_services} services | Missed ${engagement.absent} | Rate ${engagement.attendance_rate}%`);
+      (engagement.services || []).forEach(s => extraLines.push(`${s.date} - ${s.service_name || stSvcLabel[s.type] || s.type}: ${stStatusLabel[s.status] || s.status}`));
     }
     generatePDF(
       `Giving Statement - ${fullName}`,
@@ -2586,6 +2622,13 @@ function StatementsTab({ setError }) {
             <input type="checkbox" className="rounded border-gray-300 text-primary-700 focus:ring-primary-500"
               checked={includePledges} onChange={e => setIncludePledges(e.target.checked)} />
             Include this member's pledge balance behind schedule on the statement
+          </label>
+        )}
+        {mode === 'individual' && selectedMemberId && !selectedDonorName && (
+          <label className="mt-2 flex items-center gap-2 text-sm text-gray-700 cursor-pointer select-none">
+            <input type="checkbox" className="rounded border-gray-300 text-primary-700 focus:ring-primary-500"
+              checked={includeEngagement} onChange={e => setIncludeEngagement(e.target.checked)} />
+            Include this person's attendance &amp; engagement for the same period
           </label>
         )}
         <div className="mt-4">
@@ -2828,6 +2871,46 @@ function StatementsTab({ setError }) {
                 This member is on track with all pledges - nothing behind schedule.
               </div>
             )
+          )}
+
+          {includeEngagement && engagement && (
+            <div className="mt-6 border border-indigo-200 rounded-lg overflow-hidden">
+              <div className="bg-indigo-50 px-4 py-2">
+                <h3 className="text-sm font-semibold text-indigo-800">Attendance &amp; Engagement</h3>
+              </div>
+              <div className="p-4">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4 text-center">
+                  <div className="bg-gray-50 rounded-lg py-2"><div className="text-[11px] text-gray-500">Attended</div><div className="font-bold text-green-700">{engagement.attended}</div></div>
+                  <div className="bg-gray-50 rounded-lg py-2"><div className="text-[11px] text-gray-500">Missed</div><div className="font-bold text-red-700">{engagement.absent}</div></div>
+                  <div className="bg-gray-50 rounded-lg py-2"><div className="text-[11px] text-gray-500">Services</div><div className="font-bold text-gray-800">{engagement.total_services}</div></div>
+                  <div className="bg-gray-50 rounded-lg py-2"><div className="text-[11px] text-gray-500">Rate</div><div className="font-bold text-indigo-700">{engagement.attendance_rate}%</div></div>
+                </div>
+                {engagement.services && engagement.services.length > 0 ? (
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-50 border-b border-gray-200">
+                      <tr>
+                        <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Date</th>
+                        <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Service</th>
+                        <th className="text-center px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {engagement.services.map((s, i) => (
+                        <tr key={i}>
+                          <td className="px-3 py-2 text-gray-600">{formatDate(s.date)}</td>
+                          <td className="px-3 py-2 text-gray-700">{s.service_name || stSvcLabel[s.type] || s.type}</td>
+                          <td className="px-3 py-2 text-center">
+                            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${s.status === 'present' || s.status === 'late' ? 'bg-green-100 text-green-700' : s.status === 'absent' ? 'bg-red-100 text-red-700' : 'bg-gray-100 text-gray-500'}`}>{stStatusLabel[s.status] || s.status}</span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : (
+                  <p className="text-sm text-gray-500 text-center py-2">No services in this period.</p>
+                )}
+              </div>
+            </div>
           )}
         </div>
       )}
