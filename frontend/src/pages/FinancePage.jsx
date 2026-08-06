@@ -1474,11 +1474,14 @@ function HistoryTab({ setError, setMessage, isAdmin }) {
   const toggleCol = (col) => setShowCols(prev => ({ ...prev, [col]: !prev[col] }));
 
   const [bankAccounts, setBankAccounts] = useState([]);
+  const [transferAccounts, setTransferAccounts] = useState([]);
 
   useEffect(() => {
     financeApi.categories().then(d => setCategories(d.categories || []));
     financeApi.expenseCategories().then(d => setExpCategories(d.categories || []));
     financeApi.accounts('asset').then(d => setBankAccounts((d.accounts || []).filter(a => a.parent_id && parseInt(a.child_count) === 0))).catch(() => {});
+    // Accounts a transfer can move money between (leaf asset/liability/equity accounts).
+    financeApi.accounts().then(d => setTransferAccounts((d.accounts || []).filter(a => a.parent_id && parseInt(a.child_count) === 0 && ['asset', 'liability', 'equity'].includes(a.account_type)))).catch(() => {});
   }, []);
 
   const loadEntries = useCallback(async () => {
@@ -1506,6 +1509,15 @@ function HistoryTab({ setError, setMessage, isAdmin }) {
       setEditForm({ amount: e.amount, payment_method: e.method, notes: e.notes || '', deposit_to: e.routed_account_id || '' });
     } else if (e.source === 'expense') {
       setEditForm({ amount: e.amount, payment_method: e.method, description: e.notes || '' });
+    } else if (e.source === 'transfer') {
+      setEditForm({
+        amount: e.amount,
+        transfer_date: e.date,
+        from_account_id: e.from_account_id || '',
+        to_account_id: e.to_account_id || '',
+        notes: e.notes || '',
+        reference_number: e.reference_number || '',
+      });
     } else if (e.source === 'loan') {
       // A loan lives on two accounts at once, so pull both sides before editing.
       setEditForm({ amount: e.amount, transaction_date: e.date, description: e.description || '', loading: true });
@@ -1533,6 +1545,17 @@ function HistoryTab({ setError, setMessage, isAdmin }) {
         await financeApi.update(editItem.id, editForm);
       } else if (editItem.source === 'expense') {
         await financeApi.updateExpense(editItem.id, editForm);
+      } else if (editItem.source === 'transfer') {
+        if (!editForm.from_account_id || !editForm.to_account_id) { setError('Please choose both accounts'); setEditSaving(false); return; }
+        if (editForm.from_account_id === editForm.to_account_id) { setError('Cannot transfer to the same account'); setEditSaving(false); return; }
+        await financeApi.updateTransfer(editItem.id, {
+          from_account_id: editForm.from_account_id,
+          to_account_id: editForm.to_account_id,
+          amount: editForm.amount,
+          transfer_date: editForm.transfer_date,
+          notes: editForm.notes,
+          reference_number: editForm.reference_number,
+        });
       } else if (editItem.source === 'loan') {
         await financeApi.updateLoanTransaction(editItem.id, {
           amount: editForm.amount,
@@ -1695,7 +1718,10 @@ function HistoryTab({ setError, setMessage, isAdmin }) {
                     <tr key={`${e.source}-${e.id}`} className="hover:bg-gray-50">
                       <td className="px-4 py-2 text-sm text-gray-600">{formatDate(e.date)}</td>
                       {showCols.type && <td className="px-4 py-2"><span className={`px-2 py-0.5 rounded-full text-xs font-medium ${typeColors[e.type]}`}>{e.type}</span></td>}
-                      {showCols.description && <td className="px-4 py-2 text-sm text-gray-700 max-w-[250px] truncate">{e.description}</td>}
+                      {showCols.description && <td className="px-4 py-2 text-sm text-gray-700 max-w-[250px]">
+                        <div className="truncate">{e.description}</div>
+                        {e.notes && e.notes !== e.description && <div className="truncate text-xs text-gray-400 italic" title={e.notes}>{e.notes}</div>}
+                      </td>}
                       <td className={`px-4 py-2 text-sm text-right font-semibold ${e.type === 'Income' ? 'text-green-700' : e.type === 'Expense' ? 'text-red-700' : 'text-blue-700'}`}>{formatCurrency(e.amount)}</td>
                       {showCols.method && <td className="px-4 py-2 text-sm text-gray-500 hidden md:table-cell capitalize">{paymentMethodLabel[e.method] || e.method || '-'}</td>}
                       {showCols.account && <td className="px-4 py-2 text-sm text-gray-500 hidden lg:table-cell">{e.account || '-'}</td>}
@@ -1712,9 +1738,7 @@ function HistoryTab({ setError, setMessage, isAdmin }) {
                           {isAdmin && e.source === 'expense' && e.status !== 'approved' && (
                             <button onClick={() => handleApprove(e)} className="p-1.5 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded" title="Approve"><ShieldCheck size={14} /></button>
                           )}
-                          {e.source !== 'transfer' && (
-                            <button onClick={() => openEdit(e)} className="p-1.5 text-gray-400 hover:text-primary-700 hover:bg-primary-50 rounded" title="Edit"><Edit2 size={14} /></button>
-                          )}
+                          <button onClick={() => openEdit(e)} className="p-1.5 text-gray-400 hover:text-primary-700 hover:bg-primary-50 rounded" title="Edit"><Edit2 size={14} /></button>
                           {isAdmin && (
                             <button onClick={() => setDeleteItem(e)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded" title="Delete"><Trash2 size={14} /></button>
                           )}
@@ -1762,6 +1786,43 @@ function HistoryTab({ setError, setMessage, isAdmin }) {
                 and the balances are corrected automatically.
               </p>
             </>
+          ) : editItem?.source === 'transfer' ? (
+            <>
+              <div>
+                <label className="label">From Account</label>
+                <select className="input" value={editForm.from_account_id || ''}
+                  onChange={e => setEditForm(f => ({ ...f, from_account_id: e.target.value }))}>
+                  <option value="">Select account...</option>
+                  {transferAccounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="label">To Account</label>
+                <select className="input" value={editForm.to_account_id || ''}
+                  onChange={e => setEditForm(f => ({ ...f, to_account_id: e.target.value }))}>
+                  <option value="">Select account...</option>
+                  {transferAccounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="label">Amount ($)</label>
+                <input type="number" step="0.01" className="input" value={editForm.amount || ''}
+                  onChange={e => setEditForm(f => ({ ...f, amount: e.target.value }))} />
+              </div>
+              <div>
+                <label className="label">Date</label>
+                <input type="date" className="input" value={editForm.transfer_date || ''}
+                  onChange={e => setEditForm(f => ({ ...f, transfer_date: e.target.value }))} />
+              </div>
+              <div>
+                <label className="label">Notes</label>
+                <input className="input" placeholder="Transfer notes" value={editForm.notes || ''}
+                  onChange={e => setEditForm(f => ({ ...f, notes: e.target.value }))} />
+              </div>
+              <p className="text-xs text-gray-500">
+                Both account balances are corrected automatically when you save.
+              </p>
+            </>
           ) : (
             <>
               <div><label className="label">Amount ($)</label><input type="number" step="0.01" className="input" value={editForm.amount || ''} onChange={e => setEditForm(f => ({ ...f, amount: e.target.value }))} /></div>
@@ -1774,6 +1835,18 @@ function HistoryTab({ setError, setMessage, isAdmin }) {
                     {bankAccounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
                   </select>
                   <p className="text-xs text-gray-400 mt-1">Which bank account this money lands in. Changing it moves the amount to the new account.</p>
+                </div>
+              )}
+              {editItem?.source === 'donation' && (
+                <div>
+                  <label className="label">Notes</label>
+                  <input className="input" placeholder="Notes" value={editForm.notes || ''} onChange={e => setEditForm(f => ({ ...f, notes: e.target.value }))} />
+                </div>
+              )}
+              {editItem?.source === 'expense' && (
+                <div>
+                  <label className="label">Description / Notes</label>
+                  <input className="input" placeholder="Description or notes" value={editForm.description || ''} onChange={e => setEditForm(f => ({ ...f, description: e.target.value }))} />
                 </div>
               )}
             </>

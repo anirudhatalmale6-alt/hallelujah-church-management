@@ -107,7 +107,7 @@ switch ($action) {
         $memberParams = array_merge([$months], $svcTypes);
         $stmt = $db->prepare("
             SELECT
-                m.id, m.first_name, m.last_name, m.status as member_status, m.family_group,
+                m.id, m.first_name, m.last_name, m.status as member_status, m.person_type, m.family_group,
                 COUNT(DISTINCT s.id) as total_services,
                 COUNT(CASE WHEN (a.status = 'present' OR a.status = 'late') AND s.id IS NOT NULL THEN 1 END) as attended,
                 COUNT(CASE WHEN a.status = 'absent' AND s.id IS NOT NULL THEN 1 END) as absent,

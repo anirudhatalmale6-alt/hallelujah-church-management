@@ -711,7 +711,8 @@ switch ($method) {
             if (!$typeFilter || $typeFilter === 'transfer') {
                 try {
                     $stmt = $db->prepare("
-                        SELECT t.id, t.transfer_date as date, t.amount, t.notes, t.created_at,
+                        SELECT t.id, t.transfer_date as date, t.amount, t.notes, t.reference_number, t.created_at,
+                            t.from_account_id, t.to_account_id,
                             fa.name as from_name, ta.name as to_name, u.name as recorded_by_name
                         FROM account_transfers t
                         LEFT JOIN accounts fa ON fa.id = t.from_account_id
@@ -727,6 +728,8 @@ switch ($method) {
                             'date' => $r['date'], 'amount' => (float)$r['amount'],
                             'description' => $r['from_name'] . ' -> ' . $r['to_name'],
                             'method' => '', 'account' => '',
+                            'from_account_id' => (int)$r['from_account_id'], 'to_account_id' => (int)$r['to_account_id'],
+                            'reference_number' => $r['reference_number'],
                             'recorded_by' => $r['recorded_by_name'], 'created_at' => $r['created_at'],
                             'status' => 'recorded', 'notes' => $r['notes'],
                         ];
@@ -2859,7 +2862,38 @@ switch ($method) {
             }
             if (empty($fields)) jsonResponse(['error' => 'Nothing to update'], 400);
             $params[] = $id;
-            $db->prepare("UPDATE expenses SET " . implode(', ', $fields) . " WHERE id = ?")->execute($params);
+
+            $db->beginTransaction();
+            try {
+                $db->prepare("UPDATE expenses SET " . implode(', ', $fields) . " WHERE id = ?")->execute($params);
+
+                // Re-sync the bank ledger so balances follow any change to the amount or
+                // source account. Reverse every existing ledger row for this expense
+                // (an expense is a withdrawal = negative), then re-create one for its
+                // current amount + source account. Idempotent when nothing money-related changed.
+                $existing = $db->prepare("SELECT id, account_id, amount FROM account_ledger WHERE reference_type = 'expense' AND reference_id = ?");
+                $existing->execute([$id]);
+                $revert = $db->prepare("UPDATE accounts SET current_balance = current_balance - ? WHERE id = ?");
+                $delLedger = $db->prepare("DELETE FROM account_ledger WHERE id = ?");
+                foreach ($existing->fetchAll() as $er) {
+                    // Row amount is negative for a withdrawal; subtracting it adds the money back.
+                    $revert->execute([(float)$er['amount'], $er['account_id']]);
+                    $delLedger->execute([$er['id']]);
+                }
+                $newExp = $db->prepare("SELECT amount, source_account_id, expense_date, vendor, description FROM expenses WHERE id = ?");
+                $newExp->execute([$id]);
+                $ex = $newExp->fetch();
+                if ($ex && $ex['source_account_id']) {
+                    $amt = (float)$ex['amount'];
+                    $db->prepare("UPDATE accounts SET current_balance = current_balance - ? WHERE id = ?")->execute([$amt, (int)$ex['source_account_id']]);
+                    $db->prepare("INSERT INTO account_ledger (account_id, entry_date, entry_type, amount, description, reference_type, reference_id, created_by) VALUES (?, ?, 'withdrawal', ?, ?, 'expense', ?, ?)")
+                        ->execute([(int)$ex['source_account_id'], $ex['expense_date'], -$amt, (($ex['vendor'] ?? '') . ' - ' . ($ex['description'] ?? 'Expense')), $id, $currentUser['user_id']]);
+                }
+                $db->commit();
+            } catch (Exception $e) {
+                $db->rollBack();
+                jsonResponse(['error' => 'Expense update failed: ' . $e->getMessage()], 500);
+            }
 
             // Audit log
             try {
@@ -2900,6 +2934,59 @@ switch ($method) {
             $params[] = $id;
             $db->prepare("UPDATE budgets SET " . implode(', ', $fields) . " WHERE id = ?")->execute($params);
             jsonResponse(['message' => 'Budget updated']);
+        }
+
+        // --- EDIT TRANSFER (re-route / change amount / date / notes) ---
+        if ($action === 'transfer') {
+            requireRole($currentUser, ['pastor', 'admin']);
+            if (!$id) jsonResponse(['error' => 'Transfer ID required'], 400);
+            $data = getRequestBody();
+
+            $cur = $db->prepare("SELECT * FROM account_transfers WHERE id = ?");
+            $cur->execute([$id]);
+            $t = $cur->fetch();
+            if (!$t) jsonResponse(['error' => 'Transfer not found'], 404);
+
+            // New values fall back to the existing ones when not supplied.
+            $fromId = (isset($data['from_account_id']) && $data['from_account_id'] !== '') ? (int)$data['from_account_id'] : (int)$t['from_account_id'];
+            $toId   = (isset($data['to_account_id'])   && $data['to_account_id']   !== '') ? (int)$data['to_account_id']   : (int)$t['to_account_id'];
+            $newAmount = (isset($data['amount']) && $data['amount'] !== '') ? (float)$data['amount'] : (float)$t['amount'];
+            $tdate  = !empty($data['transfer_date']) ? $data['transfer_date'] : $t['transfer_date'];
+            $notes  = array_key_exists('notes', $data) ? $data['notes'] : $t['notes'];
+            $ref    = array_key_exists('reference_number', $data) ? $data['reference_number'] : $t['reference_number'];
+
+            if ($newAmount <= 0) jsonResponse(['error' => 'Amount must be positive'], 400);
+            if ($fromId == $toId) jsonResponse(['error' => 'Cannot transfer to the same account'], 400);
+
+            $db->beginTransaction();
+            try {
+                // 1. Reverse the OLD balance movement.
+                $db->prepare("UPDATE accounts SET current_balance = current_balance + ? WHERE id = ?")->execute([(float)$t['amount'], $t['from_account_id']]);
+                $db->prepare("UPDATE accounts SET current_balance = current_balance - ? WHERE id = ?")->execute([(float)$t['amount'], $t['to_account_id']]);
+
+                // 2. Save the edited transfer.
+                $db->prepare("UPDATE account_transfers SET from_account_id = ?, to_account_id = ?, amount = ?, transfer_date = ?, reference_number = ?, notes = ? WHERE id = ?")
+                    ->execute([$fromId, $toId, $newAmount, $tdate, $ref, $notes, $id]);
+
+                // 3. Apply the NEW balance movement.
+                $db->prepare("UPDATE accounts SET current_balance = current_balance - ? WHERE id = ?")->execute([$newAmount, $fromId]);
+                $db->prepare("UPDATE accounts SET current_balance = current_balance + ? WHERE id = ?")->execute([$newAmount, $toId]);
+
+                // 4. Rebuild the two ledger rows so account reports stay correct.
+                $db->prepare("DELETE FROM account_ledger WHERE reference_type = 'transfer' AND reference_id = ?")->execute([$id]);
+                $nameStmt = $db->prepare("SELECT name FROM accounts WHERE id = ?");
+                $nameStmt->execute([$fromId]); $fromName = $nameStmt->fetchColumn() ?: '';
+                $nameStmt->execute([$toId]);   $toName   = $nameStmt->fetchColumn() ?: '';
+                $ledgerStmt = $db->prepare("INSERT INTO account_ledger (account_id, entry_date, entry_type, amount, description, reference_type, reference_id, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+                $ledgerStmt->execute([$fromId, $tdate, 'withdrawal', -$newAmount, 'Transfer to ' . $toName, 'transfer', $id, $currentUser['user_id']]);
+                $ledgerStmt->execute([$toId, $tdate, 'deposit', $newAmount, 'Transfer from ' . $fromName, 'transfer', $id, $currentUser['user_id']]);
+
+                $db->commit();
+                jsonResponse(['message' => 'Transfer updated']);
+            } catch (Exception $e) {
+                $db->rollBack();
+                jsonResponse(['error' => 'Transfer update failed: ' . $e->getMessage()], 500);
+            }
         }
 
         // --- DONATION UPDATE ---

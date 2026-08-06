@@ -173,16 +173,14 @@ export default function ReportsPage() {
     doc.text(`Period: Last ${growthPeriod} months`, 14, 34);
     doc.text(`Total People: ${growthData.total_members}  |  Active: ${growthData.active_members}`, 14, 40);
 
+    const typeCols = growthTypeCols();
     autoTable(doc, {
       startY: 48,
-      head: [['Month', 'New People', 'Church Members', 'Non-Member', 'Companions', 'Community', 'Active']],
+      head: [['Month', 'New People', ...typeCols.map(v => labelFor(personTypes, v)), 'Active']],
       body: growthData.growth.map(g => [
         formatMonth(g.month),
         g.new_members,
-        g.type_church_member || 0,
-        g.type_non_member || 0,
-        g.type_companion || 0,
-        g.type_community || 0,
+        ...typeCols.map(v => Number((g.types || {})[v]) || 0),
         g.active_new,
       ]),
       styles: { fontSize: 10 },
@@ -190,6 +188,20 @@ export default function ReportsPage() {
     });
 
     doc.save('people-growth-report.pdf');
+  };
+
+  // The set of person-type columns actually present in the growth data,
+  // ordered by the configured person-type list (so exports match the on-screen
+  // chart and use the pastor's own labels, e.g. "Congregant").
+  const growthTypeCols = () => {
+    if (!growthData) return [];
+    const present = [];
+    (growthData.growth || []).forEach(g => Object.keys(g.types || {}).forEach(k => {
+      if (Number(g.types[k]) > 0 && !present.includes(k)) present.push(k);
+    }));
+    const ordered = personTypes.map(pt => pt.value).filter(v => present.includes(v));
+    present.forEach(v => { if (!ordered.includes(v)) ordered.push(v); });
+    return ordered;
   };
 
   const downloadEngagementPDF = () => {
@@ -338,9 +350,10 @@ export default function ReportsPage() {
 
   const downloadGrowthCSV = () => {
     if (!growthData) return;
+    const typeCols = growthTypeCols();
     downloadCSV(
-      ['Month', 'New People', 'Church Members', 'Non-Member Attendees', 'Companions', 'Community', 'Active'],
-      growthData.growth.map(g => [formatMonth(g.month), g.new_members, g.type_church_member || 0, g.type_non_member || 0, g.type_companion || 0, g.type_community || 0, g.active_new]),
+      ['Month', 'New People', ...typeCols.map(v => labelFor(personTypes, v)), 'Active'],
+      growthData.growth.map(g => [formatMonth(g.month), g.new_members, ...typeCols.map(v => Number((g.types || {})[v]) || 0), g.active_new]),
       'people-growth.csv'
     );
   };
@@ -773,8 +786,8 @@ export default function ReportsPage() {
                             <td className="px-4 py-3 text-sm text-gray-400">{idx + 1}</td>
                             <td className="px-4 py-3 text-sm font-medium text-gray-900">
                               {m.first_name} {m.last_name}
-                              {m.member_status === 'non_member_attendee' && (
-                                <span className="ml-2 inline-block px-1.5 py-0.5 text-[10px] font-medium bg-yellow-100 text-yellow-700 rounded-full">Non-Member</span>
+                              {(m.person_type && m.person_type !== 'church_member') && (
+                                <span className="ml-2 inline-block px-1.5 py-0.5 text-[10px] font-medium bg-yellow-100 text-yellow-700 rounded-full">{labelFor(personTypes, m.person_type)}</span>
                               )}
                             </td>
                             <td className="px-4 py-3 text-sm text-center text-gray-700">{m.attended}</td>
