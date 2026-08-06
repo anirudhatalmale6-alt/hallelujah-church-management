@@ -355,7 +355,14 @@ export const finance = {
   routingRules: () => request('finance.php', { params: { action: 'routing_rules' } }),
   saveRoutingRule: (data) => request('finance.php', { method: 'POST', body: data, params: { action: 'routing_rule' } }),
   deleteRoutingRule: (id) => request('finance.php', { method: 'DELETE', params: { action: 'routing_rule', id } }),
-  // Loans
+  // Loans & Receivables register
+  loans: () => request('finance.php', { params: { action: 'loans' } }),
+  loanDetail: (id) => request('finance.php', { params: { action: 'loan_detail', id } }),
+  saveLoan: (data) => request('finance.php', { method: 'POST', body: data, params: { action: 'loan_save' } }),
+  repayLoan: (data) => request('finance.php', { method: 'POST', body: data, params: { action: 'loan_repay' } }),
+  deleteLoanRecord: (id) => request('finance.php', { method: 'DELETE', params: { action: 'loan_record', id } }),
+  deleteLoanRepayment: (id) => request('finance.php', { method: 'DELETE', params: { action: 'loan_repayment', id } }),
+  // Loans (church as borrower — legacy two-sided ledger loans)
   loanTransaction: (data) => request('finance.php', { method: 'POST', body: data, params: { action: 'loan_transaction' } }),
   loanEntry: (id) => request('finance.php', { params: { action: 'loan_entry', id } }),
   updateLoanTransaction: (id, data) => request('finance.php', { method: 'PUT', body: data, params: { action: 'loan_transaction', id } }),

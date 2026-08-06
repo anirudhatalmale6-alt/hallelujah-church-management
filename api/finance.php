@@ -161,6 +161,80 @@ function loanRowAccountType($db, $accountId) {
     return $s->fetchColumn() ?: '';
 }
 
+/* ─── Loans & Receivables register helpers ───
+ * A "lent" loan moves cash OUT of a bank account and INTO a receivable account;
+ * repayments move cash back. A "borrowed" loan is the mirror (cash in, liability up).
+ * We only touch the ledger when BOTH a bank account and a ledger (receivable/liability)
+ * account are chosen — otherwise the loan is tracking-only. Every ledger row stores its
+ * balance delta as a signed amount, so reversing = subtract that stored amount. */
+function loanPartyName($db, $loan) {
+    if (!empty($loan['member_id'])) {
+        $s = $db->prepare("SELECT TRIM(CONCAT(COALESCE(first_name,''),' ',COALESCE(last_name,''))) FROM members WHERE id = ?");
+        $s->execute([$loan['member_id']]);
+        $n = $s->fetchColumn();
+        if ($n) return trim($n);
+    }
+    return !empty($loan['borrower_name']) ? $loan['borrower_name'] : 'someone';
+}
+function loanReverseLedger($db, $refType, $refId) {
+    $rows = $db->prepare("SELECT id, account_id, amount FROM account_ledger WHERE reference_type = ? AND reference_id = ?");
+    $rows->execute([$refType, $refId]);
+    $sub = $db->prepare("UPDATE accounts SET current_balance = current_balance - ? WHERE id = ?");
+    $del = $db->prepare("DELETE FROM account_ledger WHERE id = ?");
+    foreach ($rows->fetchAll() as $r) {
+        $sub->execute([(float)$r['amount'], $r['account_id']]);
+        $del->execute([$r['id']]);
+    }
+}
+function loanBookIssue($db, $loan) {
+    if (empty($loan['bank_account_id']) || empty($loan['ledger_account_id'])) return;
+    $amt = (float)$loan['amount'];
+    if ($amt <= 0) return;
+    $bank = (int)$loan['bank_account_id'];
+    $led = (int)$loan['ledger_account_id'];
+    $date = $loan['loan_date'];
+    $by = $loan['created_by'] ?? null;
+    $party = loanPartyName($db, $loan);
+    $ins = $db->prepare("INSERT INTO account_ledger (account_id, entry_date, entry_type, amount, description, reference_type, reference_id, created_by) VALUES (?, ?, ?, ?, ?, 'loan_issue', ?, ?)");
+    if (($loan['direction'] ?? 'lent') === 'borrowed') {
+        $desc = 'Loan borrowed from ' . $party;
+        $db->prepare("UPDATE accounts SET current_balance = current_balance + ? WHERE id = ?")->execute([$amt, $bank]);
+        $ins->execute([$bank, $date, 'deposit', $amt, $desc, $loan['id'], $by]);
+        $db->prepare("UPDATE accounts SET current_balance = current_balance + ? WHERE id = ?")->execute([$amt, $led]);
+        $ins->execute([$led, $date, 'deposit', $amt, $desc, $loan['id'], $by]);
+    } else {
+        $desc = 'Loan to ' . $party;
+        $db->prepare("UPDATE accounts SET current_balance = current_balance - ? WHERE id = ?")->execute([$amt, $bank]);
+        $ins->execute([$bank, $date, 'withdrawal', -$amt, $desc, $loan['id'], $by]);
+        $db->prepare("UPDATE accounts SET current_balance = current_balance + ? WHERE id = ?")->execute([$amt, $led]);
+        $ins->execute([$led, $date, 'deposit', $amt, $desc, $loan['id'], $by]);
+    }
+}
+function loanBookRepay($db, $loan, $rep) {
+    if (empty($rep['bank_account_id']) || empty($loan['ledger_account_id'])) return;
+    $amt = (float)$rep['amount'];
+    if ($amt <= 0) return;
+    $bank = (int)$rep['bank_account_id'];
+    $led = (int)$loan['ledger_account_id'];
+    $date = $rep['repay_date'];
+    $by = $rep['created_by'] ?? null;
+    $party = loanPartyName($db, $loan);
+    $ins = $db->prepare("INSERT INTO account_ledger (account_id, entry_date, entry_type, amount, description, reference_type, reference_id, created_by) VALUES (?, ?, ?, ?, ?, 'loan_repay', ?, ?)");
+    if (($loan['direction'] ?? 'lent') === 'borrowed') {
+        $desc = 'Loan repayment to ' . $party;
+        $db->prepare("UPDATE accounts SET current_balance = current_balance - ? WHERE id = ?")->execute([$amt, $bank]);
+        $ins->execute([$bank, $date, 'withdrawal', -$amt, $desc, $rep['id'], $by]);
+        $db->prepare("UPDATE accounts SET current_balance = current_balance - ? WHERE id = ?")->execute([$amt, $led]);
+        $ins->execute([$led, $date, 'withdrawal', -$amt, $desc, $rep['id'], $by]);
+    } else {
+        $desc = 'Loan repayment from ' . $party;
+        $db->prepare("UPDATE accounts SET current_balance = current_balance + ? WHERE id = ?")->execute([$amt, $bank]);
+        $ins->execute([$bank, $date, 'deposit', $amt, $desc, $rep['id'], $by]);
+        $db->prepare("UPDATE accounts SET current_balance = current_balance - ? WHERE id = ?")->execute([$amt, $led]);
+        $ins->execute([$led, $date, 'withdrawal', -$amt, $desc, $rep['id'], $by]);
+    }
+}
+
 switch ($method) {
     case 'GET':
         // --- CHART OF ACCOUNTS ---
@@ -1240,11 +1314,11 @@ switch ($method) {
             $incomeRows = $income->fetchAll();
 
             $expenses = $db->prepare("
-                SELECT ec.id, ec.name, ec.fund_type, COALESCE(SUM(e.amount), 0) as total
+                SELECT ec.id, ec.name, ec.fund_type, ec.category_group, COALESCE(SUM(e.amount), 0) as total
                 FROM expense_categories ec
                 LEFT JOIN expenses e ON e.category_id = ec.id AND e.expense_date BETWEEN ? AND ?
                 WHERE ec.is_active = 1
-                GROUP BY ec.id, ec.name, ec.fund_type
+                GROUP BY ec.id, ec.name, ec.fund_type, ec.category_group
                 ORDER BY ec.sort_order ASC
             ");
             $expenses->execute([$dateFrom, $dateTo]);
@@ -1373,13 +1447,13 @@ switch ($method) {
             $dateTo = $_GET['date_to'] ?? date('Y-m-t');
 
             $byCategory = $db->prepare("
-                SELECT ec.name as category_name, ec.id as category_id, ec.fund_type,
+                SELECT ec.name as category_name, ec.id as category_id, ec.fund_type, ec.category_group,
                        COALESCE(SUM(e.amount), 0) as total,
                        COUNT(e.id) as count
                 FROM expense_categories ec
                 LEFT JOIN expenses e ON e.category_id = ec.id AND e.expense_date BETWEEN ? AND ?
                 WHERE ec.is_active = 1
-                GROUP BY ec.id, ec.name, ec.fund_type
+                GROUP BY ec.id, ec.name, ec.fund_type, ec.category_group
                 ORDER BY ec.sort_order ASC
             ");
             $byCategory->execute([$dateFrom, $dateTo]);
@@ -1773,6 +1847,81 @@ switch ($method) {
                 'asset_account_id' => $assetId,
                 'complete' => count($group) >= 2 && $liabilityId && $assetId,
             ]]);
+        }
+
+        // --- LOANS & RECEIVABLES: list ---
+        if ($action === 'loans') {
+            try {
+                $rows = $db->query("
+                    SELECT l.*,
+                        TRIM(CONCAT(COALESCE(m.first_name,''),' ',COALESCE(m.last_name,''))) as member_name,
+                        ba.name as bank_account_name, la.name as ledger_account_name,
+                        u.name as created_by_name,
+                        (SELECT COALESCE(SUM(amount),0) FROM loan_repayments r WHERE r.loan_id = l.id) as total_repaid
+                    FROM loans l
+                    LEFT JOIN members m ON m.id = l.member_id
+                    LEFT JOIN accounts ba ON ba.id = l.bank_account_id
+                    LEFT JOIN accounts la ON la.id = l.ledger_account_id
+                    LEFT JOIN users u ON u.id = l.created_by
+                    ORDER BY (l.status = 'paid') ASC, l.loan_date DESC, l.id DESC
+                ")->fetchAll();
+                foreach ($rows as &$r) {
+                    $r['borrower'] = $r['member_name'] ?: ($r['borrower_name'] ?: '');
+                    $r['total_repaid'] = round((float)$r['total_repaid'], 2);
+                    $r['balance'] = round((float)$r['amount'] - (float)$r['total_repaid'], 2);
+                }
+                unset($r);
+                $outstanding = 0; $lentTotal = 0; $borrowedTotal = 0;
+                foreach ($rows as $r) {
+                    if ($r['direction'] === 'borrowed') $borrowedTotal += (float)$r['balance'];
+                    else $lentTotal += (float)$r['balance'];
+                    $outstanding += (float)$r['balance'];
+                }
+                jsonResponse([
+                    'loans' => $rows,
+                    'outstanding_total' => round($outstanding, 2),
+                    'lent_outstanding' => round($lentTotal, 2),
+                    'borrowed_outstanding' => round($borrowedTotal, 2),
+                ]);
+            } catch (Exception $e) {
+                jsonResponse(['loans' => [], 'note' => 'loans table may not exist yet']);
+            }
+        }
+
+        // --- LOANS & RECEIVABLES: one loan + its repayment history ---
+        if ($action === 'loan_detail') {
+            $id = (int)($_GET['id'] ?? 0);
+            if (!$id) jsonResponse(['error' => 'Loan ID required'], 400);
+            $l = $db->prepare("
+                SELECT l.*,
+                    TRIM(CONCAT(COALESCE(m.first_name,''),' ',COALESCE(m.last_name,''))) as member_name,
+                    m.phone as member_phone,
+                    ba.name as bank_account_name, la.name as ledger_account_name,
+                    u.name as created_by_name
+                FROM loans l
+                LEFT JOIN members m ON m.id = l.member_id
+                LEFT JOIN accounts ba ON ba.id = l.bank_account_id
+                LEFT JOIN accounts la ON la.id = l.ledger_account_id
+                LEFT JOIN users u ON u.id = l.created_by
+                WHERE l.id = ?
+            ");
+            $l->execute([$id]);
+            $loan = $l->fetch();
+            if (!$loan) jsonResponse(['error' => 'Loan not found'], 404);
+            $reps = $db->prepare("
+                SELECT r.*, ba.name as bank_account_name, u.name as created_by_name
+                FROM loan_repayments r
+                LEFT JOIN accounts ba ON ba.id = r.bank_account_id
+                LEFT JOIN users u ON u.id = r.created_by
+                WHERE r.loan_id = ? ORDER BY r.repay_date ASC, r.id ASC
+            ");
+            $reps->execute([$id]);
+            $repayments = $reps->fetchAll();
+            $totalRepaid = 0; foreach ($repayments as $rp) $totalRepaid += (float)$rp['amount'];
+            $loan['borrower'] = $loan['member_name'] ?: ($loan['borrower_name'] ?: '');
+            $loan['total_repaid'] = round($totalRepaid, 2);
+            $loan['balance'] = round((float)$loan['amount'] - $totalRepaid, 2);
+            jsonResponse(['loan' => $loan, 'repayments' => $repayments]);
         }
 
         // Financial summary/reports (donations)
@@ -2318,9 +2467,10 @@ switch ($method) {
             if (!$name) jsonResponse(['error' => 'Category name required'], 400);
 
             $maxOrder = (int)$db->query("SELECT COALESCE(MAX(sort_order), 0) FROM expense_categories")->fetchColumn() + 1;
+            $catGroup = trim($data['category_group'] ?? '');
             try {
-                $stmt = $db->prepare("INSERT INTO expense_categories (name, description, fund_type, sort_order) VALUES (?, ?, ?, ?)");
-                $stmt->execute([$name, $data['description'] ?? null, $data['fund_type'] ?? 'general', $maxOrder]);
+                $stmt = $db->prepare("INSERT INTO expense_categories (name, description, category_group, fund_type, sort_order) VALUES (?, ?, ?, ?, ?)");
+                $stmt->execute([$name, $data['description'] ?? null, ($catGroup !== '' ? $catGroup : null), $data['fund_type'] ?? 'general', $maxOrder]);
                 $catId = (int)$db->lastInsertId();
 
                 // Auto-create matching account in Chart of Accounts
@@ -2523,6 +2673,82 @@ switch ($method) {
             } catch (Exception $e) {
                 $db->rollBack();
                 jsonResponse(['error' => 'Loan transaction failed: ' . $e->getMessage()], 500);
+            }
+        }
+
+        // --- LOANS & RECEIVABLES: create / update a loan record ---
+        if ($action === 'loan_save') {
+            requireRole($currentUser, ['pastor', 'admin']);
+            $data = getRequestBody();
+            $amount = (float)($data['amount'] ?? 0);
+            if ($amount <= 0) jsonResponse(['error' => 'Amount must be positive'], 400);
+            if (empty($data['loan_date'])) jsonResponse(['error' => 'Loan date is required'], 400);
+            $direction = (($data['direction'] ?? 'lent') === 'borrowed') ? 'borrowed' : 'lent';
+            $memberId = !empty($data['member_id']) ? (int)$data['member_id'] : null;
+            $borrowerName = trim($data['borrower_name'] ?? '');
+            if (!$memberId && $borrowerName === '') jsonResponse(['error' => 'Please choose a person or type a name'], 400);
+            $bankId = !empty($data['bank_account_id']) ? (int)$data['bank_account_id'] : null;
+            $ledgerId = !empty($data['ledger_account_id']) ? (int)$data['ledger_account_id'] : null;
+            $editId = !empty($data['id']) ? (int)$data['id'] : 0;
+            $dueDate = !empty($data['due_date']) ? $data['due_date'] : null;
+            $purpose = isset($data['purpose']) ? trim($data['purpose']) : null;
+            $notes = isset($data['notes']) ? $data['notes'] : null;
+
+            $db->beginTransaction();
+            try {
+                if ($editId) {
+                    $old = $db->prepare("SELECT * FROM loans WHERE id = ?"); $old->execute([$editId]);
+                    if (!$old->fetch()) { $db->rollBack(); jsonResponse(['error' => 'Loan not found'], 404); }
+                    $db->prepare("UPDATE loans SET direction=?, member_id=?, borrower_name=?, amount=?, loan_date=?, due_date=?, purpose=?, notes=?, bank_account_id=?, ledger_account_id=? WHERE id=?")
+                        ->execute([$direction, $memberId, ($borrowerName !== '' ? $borrowerName : null), $amount, $data['loan_date'], $dueDate, $purpose, $notes, $bankId, $ledgerId, $editId]);
+                    // Re-book the issue so balances follow any change to amount/accounts.
+                    loanReverseLedger($db, 'loan_issue', $editId);
+                    $fresh = $db->prepare("SELECT * FROM loans WHERE id = ?"); $fresh->execute([$editId]);
+                    loanBookIssue($db, $fresh->fetch());
+                    $db->commit();
+                    jsonResponse(['message' => 'Loan updated', 'id' => $editId]);
+                } else {
+                    $db->prepare("INSERT INTO loans (direction, member_id, borrower_name, amount, loan_date, due_date, purpose, notes, bank_account_id, ledger_account_id, booked, status, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'open', ?, NOW())")
+                        ->execute([$direction, $memberId, ($borrowerName !== '' ? $borrowerName : null), $amount, $data['loan_date'], $dueDate, $purpose, $notes, $bankId, $ledgerId, $currentUser['user_id']]);
+                    $loanId = (int)$db->lastInsertId();
+                    $fresh = $db->prepare("SELECT * FROM loans WHERE id = ?"); $fresh->execute([$loanId]);
+                    loanBookIssue($db, $fresh->fetch());
+                    $db->commit();
+                    jsonResponse(['message' => 'Loan recorded', 'id' => $loanId], 201);
+                }
+            } catch (Exception $e) {
+                $db->rollBack();
+                jsonResponse(['error' => 'Loan save failed: ' . $e->getMessage()], 500);
+            }
+        }
+
+        // --- LOANS & RECEIVABLES: record a repayment ---
+        if ($action === 'loan_repay') {
+            requireRole($currentUser, ['pastor', 'admin']);
+            $data = getRequestBody();
+            $loanId = !empty($data['loan_id']) ? (int)$data['loan_id'] : 0;
+            $amount = (float)($data['amount'] ?? 0);
+            if (!$loanId) jsonResponse(['error' => 'loan_id is required'], 400);
+            if ($amount <= 0) jsonResponse(['error' => 'Amount must be positive'], 400);
+            if (empty($data['repay_date'])) jsonResponse(['error' => 'Repayment date is required'], 400);
+            $l = $db->prepare("SELECT * FROM loans WHERE id = ?"); $l->execute([$loanId]); $loan = $l->fetch();
+            if (!$loan) jsonResponse(['error' => 'Loan not found'], 404);
+            $bankId = !empty($data['bank_account_id']) ? (int)$data['bank_account_id'] : ($loan['bank_account_id'] ? (int)$loan['bank_account_id'] : null);
+
+            $db->beginTransaction();
+            try {
+                $db->prepare("INSERT INTO loan_repayments (loan_id, amount, repay_date, notes, bank_account_id, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, NOW())")
+                    ->execute([$loanId, $amount, $data['repay_date'], ($data['notes'] ?? null), $bankId, $currentUser['user_id']]);
+                $repId = (int)$db->lastInsertId();
+                loanBookRepay($db, $loan, ['id' => $repId, 'amount' => $amount, 'repay_date' => $data['repay_date'], 'bank_account_id' => $bankId, 'created_by' => $currentUser['user_id']]);
+                $paid = (float)$db->query("SELECT COALESCE(SUM(amount),0) FROM loan_repayments WHERE loan_id = " . $loanId)->fetchColumn();
+                $status = ($paid + 0.005 >= (float)$loan['amount']) ? 'paid' : 'open';
+                $db->prepare("UPDATE loans SET status = ? WHERE id = ?")->execute([$status, $loanId]);
+                $db->commit();
+                jsonResponse(['message' => 'Repayment recorded', 'id' => $repId, 'status' => $status], 201);
+            } catch (Exception $e) {
+                $db->rollBack();
+                jsonResponse(['error' => 'Repayment failed: ' . $e->getMessage()], 500);
             }
         }
 
@@ -2818,6 +3044,7 @@ switch ($method) {
             $params = [];
             if (isset($data['name'])) { $fields[] = 'name = ?'; $params[] = $data['name']; }
             if (isset($data['description'])) { $fields[] = 'description = ?'; $params[] = $data['description']; }
+            if (array_key_exists('category_group', $data)) { $fields[] = 'category_group = ?'; $params[] = (trim($data['category_group']) !== '' ? trim($data['category_group']) : null); }
             if (isset($data['fund_type'])) { $fields[] = 'fund_type = ?'; $params[] = $data['fund_type']; }
             if (isset($data['sort_order'])) { $fields[] = 'sort_order = ?'; $params[] = (int)$data['sort_order']; }
             if (isset($data['is_active'])) { $fields[] = 'is_active = ?'; $params[] = (int)$data['is_active']; }
@@ -3123,6 +3350,47 @@ switch ($method) {
             } catch (Exception $e) {
                 $db->rollBack();
                 jsonResponse(['error' => 'Failed to delete loan: ' . $e->getMessage()], 500);
+            }
+        }
+
+        // --- LOANS & RECEIVABLES: delete a whole loan (+ its repayments) ---
+        if ($action === 'loan_record') {
+            requireRole($currentUser, ['pastor', 'admin']);
+            if (!$id) jsonResponse(['error' => 'Loan ID required'], 400);
+            $db->beginTransaction();
+            try {
+                $reps = $db->prepare("SELECT id FROM loan_repayments WHERE loan_id = ?"); $reps->execute([$id]);
+                foreach ($reps->fetchAll() as $rp) loanReverseLedger($db, 'loan_repay', $rp['id']);
+                $db->prepare("DELETE FROM loan_repayments WHERE loan_id = ?")->execute([$id]);
+                loanReverseLedger($db, 'loan_issue', $id);
+                $db->prepare("DELETE FROM loans WHERE id = ?")->execute([$id]);
+                $db->commit();
+                jsonResponse(['message' => 'Loan deleted and balances reversed']);
+            } catch (Exception $e) {
+                $db->rollBack();
+                jsonResponse(['error' => 'Failed to delete loan: ' . $e->getMessage()], 500);
+            }
+        }
+
+        // --- LOANS & RECEIVABLES: delete one repayment ---
+        if ($action === 'loan_repayment') {
+            requireRole($currentUser, ['pastor', 'admin']);
+            if (!$id) jsonResponse(['error' => 'Repayment ID required'], 400);
+            $r = $db->prepare("SELECT * FROM loan_repayments WHERE id = ?"); $r->execute([$id]); $rep = $r->fetch();
+            if (!$rep) jsonResponse(['error' => 'Repayment not found'], 404);
+            $db->beginTransaction();
+            try {
+                loanReverseLedger($db, 'loan_repay', $id);
+                $db->prepare("DELETE FROM loan_repayments WHERE id = ?")->execute([$id]);
+                $loanId = (int)$rep['loan_id'];
+                $amt = (float)$db->query("SELECT amount FROM loans WHERE id = " . $loanId)->fetchColumn();
+                $paid = (float)$db->query("SELECT COALESCE(SUM(amount),0) FROM loan_repayments WHERE loan_id = " . $loanId)->fetchColumn();
+                $db->prepare("UPDATE loans SET status = ? WHERE id = ?")->execute([($paid + 0.005 >= $amt ? 'paid' : 'open'), $loanId]);
+                $db->commit();
+                jsonResponse(['message' => 'Repayment removed and balances reversed']);
+            } catch (Exception $e) {
+                $db->rollBack();
+                jsonResponse(['error' => 'Failed to delete repayment: ' . $e->getMessage()], 500);
             }
         }
 
