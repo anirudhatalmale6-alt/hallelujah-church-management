@@ -1193,6 +1193,23 @@ switch ($method) {
             }
         }
 
+        // --- ONE TRANSFER (for the edit form) ---
+        if ($action === 'transfer_entry') {
+            $tid = (int)($_GET['id'] ?? 0);
+            if (!$tid) jsonResponse(['error' => 'Transfer ID required'], 400);
+            $stmt = $db->prepare("
+                SELECT t.*, fa.name as from_account_name, ta.name as to_account_name
+                FROM account_transfers t
+                LEFT JOIN accounts fa ON fa.id = t.from_account_id
+                LEFT JOIN accounts ta ON ta.id = t.to_account_id
+                WHERE t.id = ?
+            ");
+            $stmt->execute([$tid]);
+            $t = $stmt->fetch();
+            if (!$t) jsonResponse(['error' => 'Transfer not found'], 404);
+            jsonResponse(['transfer' => $t]);
+        }
+
         // --- DONATION CATEGORIES ---
         if ($action === 'categories') {
             $stmt = $db->query("SELECT * FROM donation_categories ORDER BY sort_order ASC");

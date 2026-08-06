@@ -5567,6 +5567,25 @@ function ChartOfAccountsTab({ setError, setMessage, isAdmin }) {
     } catch (err) { setError(err.message); }
   };
 
+  // Open the transfer editor for a ledger row (fetches the transfer's real
+  // from/to/amount/notes so both sides can be corrected).
+  const openTransferEdit = async (e) => {
+    setReportEdit({ record_id: e.reference_id, source: 'transfer', amount: Math.abs(parseFloat(e.amount)), date: e.entry_date, description: '', loading: true });
+    try {
+      const res = await financeApi.transferEntry(e.reference_id);
+      const t = res.transfer || {};
+      setReportEdit({
+        record_id: e.reference_id,
+        source: 'transfer',
+        from_account_id: t.from_account_id || '',
+        to_account_id: t.to_account_id || '',
+        amount: Math.abs(parseFloat(t.amount ?? e.amount)),
+        date: t.transfer_date || e.entry_date,
+        description: t.notes || '',
+      });
+    } catch (err) { setError(err.message); }
+  };
+
   const handleReportEditSave = async () => {
     if (!reportEdit) return;
     setReportEditSaving(true);
@@ -5576,6 +5595,16 @@ function ChartOfAccountsTab({ setError, setMessage, isAdmin }) {
         await financeApi.update(record_id, { amount: parseFloat(amount), notes: description, donation_date: date, payment_method: method });
       } else if (source === 'expense') {
         await financeApi.updateExpense(record_id, { amount: parseFloat(amount), description, expense_date: date, payment_method: method });
+      } else if (source === 'transfer') {
+        if (!reportEdit.from_account_id || !reportEdit.to_account_id) { setError('Please choose both accounts'); setReportEditSaving(false); return; }
+        if (reportEdit.from_account_id === reportEdit.to_account_id) { setError('Cannot transfer to the same account'); setReportEditSaving(false); return; }
+        await financeApi.updateTransfer(record_id, {
+          from_account_id: reportEdit.from_account_id,
+          to_account_id: reportEdit.to_account_id,
+          amount: parseFloat(amount),
+          transfer_date: date,
+          notes: description,
+        });
       } else if (source === 'loan') {
         await financeApi.updateLoanTransaction(record_id, {
           amount: parseFloat(amount), description, transaction_date: date,
@@ -6134,6 +6163,11 @@ function ChartOfAccountsTab({ setError, setMessage, isAdmin }) {
                                   <Edit2 size={14} />
                                 </button>
                               )}
+                              {e.reference_type === 'transfer' && e.reference_id && (
+                                <button onClick={() => openTransferEdit(e)} className="p-1 text-gray-300 hover:text-blue-600" title="Edit transfer">
+                                  <Edit2 size={14} />
+                                </button>
+                              )}
                               <button onClick={() => handleDeleteEntry(e)} className="p-1 text-gray-300 hover:text-red-500" title="Delete entry">
                                 <Trash2 size={14} />
                               </button>
@@ -6154,9 +6188,27 @@ function ChartOfAccountsTab({ setError, setMessage, isAdmin }) {
       </Modal>
 
       {/* Inline Edit Modal for Account Report */}
-      <Modal isOpen={!!reportEdit} onClose={() => setReportEdit(null)} title="Edit Entry" size="sm">
+      <Modal isOpen={!!reportEdit} onClose={() => setReportEdit(null)} title={reportEdit?.source === 'transfer' ? 'Edit Transfer' : 'Edit Entry'} size="sm">
         {reportEdit && (
           <div className="space-y-3">
+            {reportEdit.source === 'transfer' && (
+              <>
+                <div>
+                  <label className="label">From Account</label>
+                  <select className="input" value={reportEdit.from_account_id || ''} onChange={e => setReportEdit(r => ({ ...r, from_account_id: e.target.value }))}>
+                    <option value="">Select account...</option>
+                    {transferableAccounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="label">To Account</label>
+                  <select className="input" value={reportEdit.to_account_id || ''} onChange={e => setReportEdit(r => ({ ...r, to_account_id: e.target.value }))}>
+                    <option value="">Select account...</option>
+                    {transferableAccounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                  </select>
+                </div>
+              </>
+            )}
             <div>
               <label className="label">Date</label>
               <input type="date" className="input" value={reportEdit.date} onChange={e => setReportEdit(r => ({ ...r, date: e.target.value }))} />
@@ -6166,7 +6218,7 @@ function ChartOfAccountsTab({ setError, setMessage, isAdmin }) {
               <input type="number" step="0.01" className="input" value={reportEdit.amount} onChange={e => setReportEdit(r => ({ ...r, amount: e.target.value }))} />
             </div>
             <div>
-              <label className="label">Description / Notes</label>
+              <label className="label">{reportEdit.source === 'transfer' ? 'Notes' : 'Description / Notes'}</label>
               <input className="input" value={reportEdit.description} onChange={e => setReportEdit(r => ({ ...r, description: e.target.value }))} />
             </div>
             <div className="flex justify-end gap-2 pt-2">

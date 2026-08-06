@@ -345,6 +345,7 @@ export const finance = {
   // Transfers
   transfer: (data) => request('finance.php', { method: 'POST', body: data, params: { action: 'transfer' } }),
   updateTransfer: (id, data) => request('finance.php', { method: 'PUT', body: data, params: { action: 'transfer', id } }),
+  transferEntry: (id) => request('finance.php', { params: { action: 'transfer_entry', id } }),
   transfers: (params) => request('finance.php', { params: { action: 'transfers', ...params } }),
   // Balance Sheet & Journal
   balanceSheet: (dateFrom, dateTo) => request('finance.php', { params: { action: 'balance_sheet', date_from: dateFrom, date_to: dateTo } }),
