@@ -674,7 +674,7 @@ switch ($method) {
             try {
                 $behindPledges = $db->query("
                     SELECT p.id, p.member_id, p.amount, p.frequency, p.start_date,
-                        m.first_name, m.last_name, dc.name as category_name,
+                        m.first_name, m.last_name, m.phone, m.email, dc.name as category_name,
                         COALESCE((SELECT SUM(d.amount) FROM donations d WHERE d.member_id = p.member_id AND d.category_id = p.category_id AND d.donation_date >= p.start_date), 0) as total_paid
                     FROM pledges p
                     JOIN members m ON m.id = p.member_id
@@ -693,12 +693,15 @@ switch ($method) {
                     if ($behindBy > 0.005) {
                         $alerts[] = [
                             'member_name' => $p['first_name'] . ' ' . $p['last_name'],
+                            'phone' => $p['phone'] ?? '',
+                            'email' => $p['email'] ?? '',
                             'category' => $p['category_name'],
                             'expected' => $expectedTotal,
                             'paid' => $totalPaid,
                             'behind_by' => $behindBy,
                             'frequency' => $p['frequency'],
                             'pledge_amount' => (float)$p['amount'],
+                            'start_date' => $p['start_date'],
                         ];
                     }
                 }

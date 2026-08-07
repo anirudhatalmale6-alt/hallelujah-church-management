@@ -812,7 +812,7 @@ function RecordGivingTab({ setError, setMessage }) {
 
       <Modal isOpen={!!editDonation} onClose={() => setEditDonation(null)} title="Edit Donation" size="sm">
         <div className="space-y-4">
-          <div><label className="label">Name</label><MemberTypeahead membersList={membersList} vendorList={vendorList} value={editForm.member_id || ''} donorName={editForm.donor_name || ''} onChange={val => setEditForm(f => ({ ...f, member_id: val, donor_name: val ? '' : f.donor_name }))} onDonorNameChange={val => setEditForm(f => ({ ...f, donor_name: val, member_id: '' }))} onAddNew={() => { membersApi.list({ limit: 9999, sort: 'last_name' }).then(d => setMembersList(d.members || [])); financeApi.vendors().then(d => setVendorList(d.vendors || [])).catch(() => {}); }} /></div>
+          <div><label className="label">Name</label><MemberTypeahead membersList={membersList} vendorList={vendorList} value={editForm.member_id || ''} donorName={editForm.donor_name || ''} onChange={val => setEditForm(f => ({ ...f, member_id: val, donor_name: val ? '' : f.donor_name }))} onDonorNameChange={val => setEditForm(f => ({ ...f, donor_name: val, member_id: val ? '' : f.member_id }))} onAddNew={() => { membersApi.list({ limit: 9999, sort: 'last_name' }).then(d => setMembersList(d.members || [])); financeApi.vendors().then(d => setVendorList(d.vendors || [])).catch(() => {}); }} /></div>
           <div><label className="label">Amount ($)</label><input type="number" step="0.01" className="input" value={editForm.amount || ''} onChange={e => setEditForm(f => ({ ...f, amount: e.target.value }))} /></div>
           <div><label className="label">Category</label><select className="input" value={editForm.category_id || ''} onChange={e => setEditForm(f => ({ ...f, category_id: e.target.value }))}>{categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
           <div><label className="label">Method</label><select className="input" value={editForm.payment_method || 'cash'} onChange={e => setEditForm(f => ({ ...f, payment_method: e.target.value }))}>{paymentMethods.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}</select></div>
@@ -4892,6 +4892,55 @@ function PledgesTab({ setError, setMessage, isAdmin }) {
 
   const freqLabel = { weekly: 'Weekly', monthly: 'Monthly', quarterly: 'Quarterly', annually: 'Annually' };
   const behindAlerts = alerts.filter(a => a.behind_by > 0);
+  const behindTotal = () => behindAlerts.reduce((s, a) => s + (a.behind_by || 0), 0);
+
+  // A printable / PDF "call sheet" so someone can be assigned each month to phone
+  // the members who are behind on their pledge, and tick them off as they go.
+  const downloadCallSheetPDF = () => {
+    const doc = new jsPDF();
+    doc.setFontSize(16);
+    doc.text('Hallelujah In The City', 14, 15);
+    doc.setFontSize(13);
+    doc.text('Pledge Follow-Up Call Sheet', 14, 23);
+    doc.setFontSize(9);
+    doc.setTextColor(100);
+    doc.text(`Generated ${new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}   -   ${behindAlerts.length} behind schedule   -   Total balance to date ${formatCurrency(behindTotal())}`, 14, 29);
+    doc.setTextColor(0);
+    autoTable(doc, {
+      head: [['#', 'Name', 'Phone', 'Pledge', 'Balance', 'Called', 'Notes']],
+      body: behindAlerts.map((a, i) => ([
+        String(i + 1), a.member_name, a.phone || '-',
+        `${freqLabel[a.frequency] || a.frequency} ${formatCurrency(a.pledge_amount)}`,
+        formatCurrency(a.behind_by), '', '',
+      ])),
+      startY: 36,
+      styles: { fontSize: 9, cellPadding: 3, minCellHeight: 9 },
+      headStyles: { fillColor: [153, 27, 27], textColor: 255 },
+      alternateRowStyles: { fillColor: [249, 250, 251] },
+      columnStyles: { 0: { cellWidth: 12, halign: 'center' }, 4: { halign: 'right' }, 5: { cellWidth: 18, halign: 'center' }, 6: { cellWidth: 42 } },
+    });
+    doc.save(`pledge-call-sheet-${new Date().toISOString().split('T')[0]}.pdf`);
+  };
+
+  const printCallSheet = () => {
+    const rows = behindAlerts.map((a, i) => `
+      <tr><td>${i + 1}</td><td>${a.member_name}</td><td>${a.phone || '-'}</td>
+      <td>${freqLabel[a.frequency] || a.frequency} ${formatCurrency(a.pledge_amount)}</td>
+      <td class="r">${formatCurrency(a.behind_by)}</td><td class="chk"></td><td class="notes"></td></tr>`).join('');
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Pledge Follow-Up Call Sheet</title>
+      <style>body{font-family:Arial,Helvetica,sans-serif;color:#111;margin:24px;}h1{font-size:18px;margin:0;}
+      h2{font-size:14px;margin:2px 0 4px;color:#991b1b;}.meta{font-size:12px;color:#555;margin-bottom:14px;}
+      table{width:100%;border-collapse:collapse;font-size:12px;}th,td{border:1px solid #ccc;padding:7px 8px;text-align:left;vertical-align:top;}
+      th{background:#991b1b;color:#fff;}tr:nth-child(even) td{background:#f9fafb;}.r{text-align:right;}
+      .chk{width:44px;text-align:center;}.notes{width:170px;}</style></head><body>
+      <h1>Hallelujah In The City</h1><h2>Pledge Follow-Up Call Sheet</h2>
+      <div class="meta">Generated ${new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })} &nbsp;&bull;&nbsp; ${behindAlerts.length} behind schedule &nbsp;&bull;&nbsp; Total balance to date ${formatCurrency(behindTotal())}</div>
+      <table><thead><tr><th>#</th><th>Name</th><th>Phone</th><th>Pledge</th><th>Balance</th><th>Called</th><th>Notes</th></tr></thead>
+      <tbody>${rows}</tbody></table>
+      <script>window.onload=function(){setTimeout(function(){window.print();},250);};<\/script></body></html>`;
+    const win = window.open('', '_blank');
+    if (win) { win.document.write(html); win.document.close(); win.focus(); }
+  };
 
   if (loading) {
     return <div className="flex items-center justify-center py-16"><div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary-700"></div></div>;
@@ -4902,21 +4951,32 @@ function PledgesTab({ setError, setMessage, isAdmin }) {
       {/* Alerts */}
       {behindAlerts.length > 0 && (
         <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-xl">
-          <div className="flex items-center gap-2 mb-2">
-            <AlertCircle size={20} className="text-red-600" />
-            <p className="font-medium text-red-800">
-              {behindAlerts.length} pledge{behindAlerts.length !== 1 ? 's' : ''} behind schedule
-              {' — '}total balance to date {formatCurrency(behindAlerts.reduce((s, a) => s + (a.behind_by || 0), 0))}
-            </p>
+          <div className="flex items-start justify-between gap-3 mb-2 flex-wrap">
+            <div className="flex items-center gap-2">
+              <AlertCircle size={20} className="text-red-600" />
+              <p className="font-medium text-red-800">
+                {behindAlerts.length} pledge{behindAlerts.length !== 1 ? 's' : ''} behind schedule
+                {' — '}total balance to date {formatCurrency(behindTotal())}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button onClick={printCallSheet} className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-lg border border-red-300 text-red-700 bg-white hover:bg-red-100" title="Print a call sheet to phone these members">
+                <Printer size={14} /> Print call sheet
+              </button>
+              <button onClick={downloadCallSheetPDF} className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-lg border border-red-300 text-red-700 bg-white hover:bg-red-100" title="Download the call sheet as a PDF">
+                <Download size={14} /> PDF
+              </button>
+            </div>
           </div>
           <div className="space-y-1">
             {behindAlerts.map((a, i) => (
               <div key={i} className="flex items-center justify-between text-sm px-2 py-1 rounded hover:bg-red-100">
-                <span className="text-red-700">{a.member_name} - {a.category} ({freqLabel[a.frequency]} {formatCurrency(a.pledge_amount)})</span>
+                <span className="text-red-700">{a.member_name}{a.phone ? ` (${a.phone})` : ''} - {a.category} ({freqLabel[a.frequency]} {formatCurrency(a.pledge_amount)})</span>
                 <span className="text-red-800 font-medium">Balance {formatCurrency(a.behind_by)}</span>
               </div>
             ))}
           </div>
+          <p className="text-xs text-red-500 mt-2">The call sheet lists each person with their phone number and a blank "Called / Notes" column so you can assign someone to follow up each month.</p>
         </div>
       )}
 
@@ -6804,7 +6864,7 @@ function LoansTab({ setError, setMessage, isAdmin }) {
             <label className="label">{form.direction === 'borrowed' ? 'Lender (who we owe)' : 'Borrower (who owes us)'}</label>
             <MemberTypeahead membersList={membersList} value={form.member_id || ''} donorName={form.borrower_name || ''}
               onChange={val => setForm(f => ({ ...f, member_id: val, borrower_name: val ? '' : f.borrower_name }))}
-              onDonorNameChange={val => setForm(f => ({ ...f, borrower_name: val, member_id: '' }))}
+              onDonorNameChange={val => setForm(f => ({ ...f, borrower_name: val, member_id: val ? '' : f.member_id }))}
               onAddNew={() => {}} />
             <p className="text-xs text-gray-400 mt-1">Pick a person from your list, or just type any name.</p>
           </div>
