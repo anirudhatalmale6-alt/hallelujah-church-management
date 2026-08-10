@@ -108,7 +108,9 @@ export default function DashboardPage() {
             icon={UserPlus}
             label="New This Month"
             value={data.members.new_this_month}
-            sub={`${data.members.visitors} visitors`}
+            // Was `${data.members.visitors} visitors` - the API never returned that
+            // field, so the card read "undefined visitors".
+            sub="people added"
             color="bg-green-100 text-green-600"
             to="/system/public/members"
           />
