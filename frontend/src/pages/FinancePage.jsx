@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import ReactDOM from 'react-dom';
-import { finance as financeApi, members as membersApi, services as servicesApi, auditLog as auditLogApi, reports as reportsApi } from '../utils/api';
+import { finance as financeApi, members as membersApi, services as servicesApi, auditLog as auditLogApi, reports as reportsApi, settings as settingsApi } from '../utils/api';
 import { useAuth } from '../contexts/AuthContext';
 import { formatTime12h, downloadCSV, fmtServiceDate } from '../utils/format';
 import Modal from '../components/Modal';
 import Pagination from '../components/Pagination';
 import jsPDF from 'jspdf';
+import { loadPersonTypes, DEFAULT_PERSON_TYPES, labelFor } from '../utils/personTypes';
 import autoTable from 'jspdf-autotable';
 import {
   DollarSign, Plus, Edit2, Trash2, Check, X, AlertCircle,
@@ -46,6 +47,125 @@ function formatDate(dateStr) {
 
 function getServiceLabel(s) {
   return `${s.name} - ${fmtServiceDate(s.date)} ${formatTime12h(s.time)}`;
+}
+
+/* ─── Report Card document ───
+ * One shared HTML document drives BOTH the print view and the PDF, so the file the
+ * pastor saves is the same thing he sees on paper. The PDF is produced by rendering
+ * this markup (jsPDF + html2canvas) rather than re-drawing it with table code.
+ */
+const RC_STATUS_LABEL = { present: 'Present', late: 'Late', absent: 'Absent', not_recorded: 'Not recorded' };
+
+const rcEscape = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+const rcLongDate = (d) => {
+  if (!d) return '';
+  const dt = new Date(String(d).length <= 10 ? d + 'T00:00:00' : d);
+  return isNaN(dt.getTime()) ? String(d)
+    : dt.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+};
+
+function reportCardStyles() {
+  return `
+  *{box-sizing:border-box;}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;color:#1f2937;margin:0;padding:0;}
+  .card{width:720px;margin:0 auto;padding:34px 38px 40px;}
+  .card + .card{page-break-before:always;}
+  .letterhead{text-align:center;border-bottom:3px solid #4a2c17;padding-bottom:12px;margin-bottom:6px;}
+  .letterhead .church{font-size:22px;font-weight:800;letter-spacing:.3px;color:#4a2c17;}
+  .letterhead .addr{font-size:12.5px;color:#6b7280;margin-top:3px;}
+  .doctitle{text-align:center;font-size:17px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:#4a2c17;margin:14px 0 4px;}
+  .period{text-align:center;font-size:12.5px;color:#6b7280;margin-bottom:18px;}
+  .who{background:#faf7f4;border:1px solid #e7ded6;border-radius:8px;padding:12px 14px;margin-bottom:16px;}
+  .who .nm{font-size:17px;font-weight:700;color:#1f2937;}
+  .who .sub{font-size:12.5px;color:#6b7280;margin-top:2px;}
+  h3{font-size:13px;text-transform:uppercase;letter-spacing:.6px;color:#4a2c17;margin:20px 0 7px;padding-bottom:4px;border-bottom:1px solid #e5e7eb;}
+  table{width:100%;border-collapse:collapse;font-size:12.5px;}
+  th{text-align:left;padding:6px 8px;background:#f6f3f0;border-bottom:1px solid #e5e7eb;font-size:10.5px;text-transform:uppercase;letter-spacing:.4px;color:#6b7280;font-weight:700;}
+  td{padding:5px 8px;border-bottom:1px solid #f3f4f6;}
+  .r{text-align:right;}
+  .tot td{border-top:2px solid #4a2c17;border-bottom:none;font-weight:800;font-size:13.5px;padding-top:7px;}
+  .tiles{display:flex;gap:10px;margin-bottom:4px;}
+  .tile{flex:1;border:1px solid #e7ded6;border-radius:8px;padding:9px 11px;background:#faf7f4;}
+  .tile .lab{font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:#6b7280;}
+  .tile .val{font-size:17px;font-weight:800;color:#4a2c17;margin-top:1px;}
+  .present{color:#15803d;font-weight:700;} .absent{color:#b91c1c;font-weight:700;} .muted{color:#9ca3af;}
+  .note{border:1px solid #e7ded6;border-radius:8px;padding:11px 13px;background:#fffdf9;font-size:12.5px;white-space:pre-wrap;line-height:1.5;}
+  .foot{margin-top:26px;padding-top:9px;border-top:1px solid #e5e7eb;font-size:10.5px;color:#9ca3af;display:flex;justify-content:space-between;}
+  @media print{.card{width:auto;padding:16px 8px;} @page{margin:14mm;}}
+  `;
+}
+
+/** One person's card. `card` comes from buildReportCard(). */
+function reportCardBody(card, church, opts) {
+  const { showDetails } = opts;
+  const addr = [church.church_address, church.church_phone].filter(Boolean).join(' &nbsp;•&nbsp; ');
+
+  let giving = '';
+  if (card.includeGiving) {
+    const catRows = Object.entries(card.byCategory || {}).map(([cat, amt]) =>
+      `<tr><td>${rcEscape(cat)}</td><td class="r">${formatCurrency(amt)}</td></tr>`).join('');
+    const detailRows = (card.donations || []).map(d =>
+      `<tr><td>${rcLongDate(d.donation_date)}</td><td>${rcEscape(d.category_name)}</td>
+        <td>${rcEscape(d.payment_method)}</td><td class="r">${formatCurrency(d.amount)}</td></tr>`).join('');
+    giving = `<h3>Giving</h3>
+      ${showDetails && detailRows ? `<table><thead><tr><th>Date</th><th>Category</th><th>Method</th><th class="r">Amount</th></tr></thead><tbody>${detailRows}</tbody></table><div style="height:10px"></div>` : ''}
+      <table><tbody>${catRows || '<tr><td class="muted">No giving recorded in this period.</td><td class="r">—</td></tr>'}
+        <tr class="tot"><td>Total Giving</td><td class="r">${formatCurrency(card.givingTotal)}</td></tr></tbody></table>`;
+  }
+
+  let attendance = '';
+  if (card.includeAttendance) {
+    const rows = (card.services || []).map(s =>
+      `<tr><td>${rcLongDate(s.date)}</td><td>${rcEscape(s.service_name || s.type)}</td>
+        <td class="${s.status === 'present' || s.status === 'late' ? 'present' : s.status === 'absent' ? 'absent' : 'muted'}">${RC_STATUS_LABEL[s.status] || s.status}</td></tr>`).join('');
+    attendance = `<h3>Attendance &amp; Engagement</h3>
+      <div class="tiles">
+        <div class="tile"><div class="lab">Attended</div><div class="val">${card.attended}</div></div>
+        <div class="tile"><div class="lab">Missed</div><div class="val">${card.absent}</div></div>
+        <div class="tile"><div class="lab">Services</div><div class="val">${card.totalServices}</div></div>
+        <div class="tile"><div class="lab">Rate</div><div class="val">${card.rate === null ? '&mdash;' : card.rate + '%'}</div></div>
+      </div>
+      ${card.serviceFilterLabel ? `<div style="font-size:11.5px;color:#6b7280;margin:7px 0 3px;">Services included: ${rcEscape(card.serviceFilterLabel)}</div>` : ''}
+      ${showDetails ? (rows
+        ? `<table><thead><tr><th>Date</th><th>Service</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table>`
+        : '<p style="font-size:12.5px;color:#6b7280;">No services in this period.</p>') : ''}`;
+  }
+
+  let pledges = '';
+  if (card.includePledges && (card.pledgesBehind || []).length > 0) {
+    const rows = card.pledgesBehind.map(p =>
+      `<tr><td>${rcEscape(p.category_name)}</td><td class="r">${formatCurrency(p.expected_total)}</td>
+        <td class="r">${formatCurrency(p.total_paid)}</td><td class="r absent">${formatCurrency(p.behind_by)}</td></tr>`).join('');
+    pledges = `<h3>Pledge Balance</h3>
+      <table><thead><tr><th>Pledge</th><th class="r">Expected</th><th class="r">Paid</th><th class="r">Balance</th></tr></thead>
+      <tbody>${rows}</tbody></table>`;
+  } else if (card.includePledges) {
+    pledges = `<h3>Pledge Balance</h3><p style="font-size:12.5px;color:#15803d;">On track — nothing behind schedule.</p>`;
+  }
+
+  const note = card.note && card.note.trim()
+    ? `<h3>Notes &amp; Comments</h3><div class="note">${rcEscape(card.note.trim())}</div>` : '';
+
+  return `<div class="card">
+    <div class="letterhead">
+      <div class="church">${rcEscape(church.church_name || 'Hallelujah In The City')}</div>
+      ${addr ? `<div class="addr">${addr}</div>` : ''}
+    </div>
+    <div class="doctitle">Report Card</div>
+    <div class="period">${rcLongDate(card.dateFrom)} &nbsp;—&nbsp; ${rcLongDate(card.dateTo)}</div>
+    <div class="who">
+      <div class="nm">${rcEscape(card.name)}</div>
+      ${card.personType ? `<div class="sub">${rcEscape(card.personType)}</div>` : ''}
+    </div>
+    ${giving}${attendance}${pledges}${note}
+    <div class="foot"><span>${rcEscape(church.church_name || '')}</span><span>Generated ${rcLongDate(new Date().toISOString().slice(0, 10))}</span></div>
+  </div>`;
+}
+
+function reportCardDocument(cards, church, opts) {
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Report Card${cards.length === 1 ? ' - ' + rcEscape(cards[0].name) : 's'}</title>
+    <style>${reportCardStyles()}</style></head><body>${cards.map(c => reportCardBody(c, church, opts)).join('')}</body></html>`;
 }
 
 function generatePDF(title, headers, rows, filename, summaryLines) {
@@ -2188,6 +2308,21 @@ function StatementsTab({ setError }) {
   const [includePledges, setIncludePledges] = useState(false);
   const [includeEngagement, setIncludeEngagement] = useState(false);
   const [engagement, setEngagement] = useState(null);
+
+  // --- Report Cards (several people at once) ---
+  const [rcIds, setRcIds] = useState([]);
+  const [rcSearch, setRcSearch] = useState('');
+  const [rcShowDetails, setRcShowDetails] = useState(true);
+  const [rcGiving, setRcGiving] = useState(true);
+  const [rcAttendance, setRcAttendance] = useState(true);
+  const [rcPledges, setRcPledges] = useState(false);
+  const [rcServiceTypes, setRcServiceTypes] = useState([]); // empty = every service
+  const [rcNotes, setRcNotes] = useState({});
+  const [rcCards, setRcCards] = useState(null);
+  const [rcBusy, setRcBusy] = useState(false);
+  const [church, setChurch] = useState({ church_name: 'Hallelujah In The City' });
+  const [personTypes, setPersonTypes] = useState(DEFAULT_PERSON_TYPES);
+
   const stFreqLabel = { weekly: 'Weekly', monthly: 'Monthly', quarterly: 'Quarterly', annually: 'Annually' };
   const stSvcLabel = { sunday_1st: '1st Sunday Service', sunday_2nd: '2nd Sunday Service', bible_study: 'Bible Study', fasting: 'Fasting & Prayer', special: 'Special Event' };
   const stStatusLabel = { present: 'Present', late: 'Late', absent: 'Absent', not_recorded: 'Not recorded' };
@@ -2202,7 +2337,141 @@ function StatementsTab({ setError }) {
     financeApi.statementDonors().then(d => setDonorsList(d.donors || [])).catch(() => {});
     financeApi.vendors().then(d => setVendorsList(d.vendors || [])).catch(() => {});
     financeApi.categories().then(d => setCategories((d.categories || []).filter(c => c.is_active == null || Number(c.is_active) === 1))).catch(() => {});
+    settingsApi.get().then(d => setChurch(d.settings || d || {})).catch(() => {});
+    loadPersonTypes().then(setPersonTypes).catch(() => {});
   }, []);
+
+  const RC_SERVICE_TYPES = [
+    { key: 'sunday_1st', label: '1st Sunday Service' },
+    { key: 'sunday_2nd', label: '2nd Sunday Service' },
+    { key: 'bible_study', label: 'Bible Study' },
+    { key: 'fasting', label: 'Fasting & Prayer' },
+    { key: 'special', label: 'Special Event' },
+  ];
+  const rcServiceLabel = rcServiceTypes.length === 0
+    ? 'All services'
+    : RC_SERVICE_TYPES.filter(t => rcServiceTypes.includes(t.key)).map(t => t.label).join(', ');
+
+  const toggleRcId = (id) => setRcIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  const toggleRcServiceType = (k) => setRcServiceTypes(prev => prev.includes(k) ? prev.filter(x => x !== k) : [...prev, k]);
+
+  const rcFilteredPeople = membersList.filter(m => {
+    if (!rcSearch.trim()) return true;
+    return `${m.first_name} ${m.last_name}`.toLowerCase().includes(rcSearch.trim().toLowerCase());
+  });
+
+  // Pull each selected person's giving + attendance for the period and fold it into
+  // one card. Attendance totals are recomputed from the services actually shown, so
+  // the numbers always agree with the rows underneath them.
+  const buildReportCards = async () => {
+    if (rcIds.length === 0) { setError('Pick at least one person'); return; }
+    setRcBusy(true); setError('');
+    try {
+      const cards = [];
+      for (const id of rcIds) {
+        const person = membersList.find(m => String(m.id) === String(id));
+        const name = person ? `${person.first_name} ${person.last_name}`.trim() : `#${id}`;
+        let stmt = null, eng = null;
+        if (rcGiving || rcPledges) {
+          try { stmt = await financeApi.memberStatement(id, dateFrom, dateTo, catParam, ''); } catch { stmt = null; }
+        }
+        if (rcAttendance) {
+          try { eng = await reportsApi.engagementMember(id, '12', '', dateFrom, dateTo); } catch { eng = null; }
+        }
+        const services = ((eng && eng.services) || [])
+          .filter(s => rcServiceTypes.length === 0 || rcServiceTypes.includes(s.type));
+        const attended = services.filter(s => s.status === 'present' || s.status === 'late').length;
+        const absent = services.filter(s => s.status === 'absent').length;
+        const counted = attended + absent;
+        cards.push({
+          id, name,
+          personType: person ? labelFor(personTypes, person.person_type) : '',
+          dateFrom, dateTo,
+          includeGiving: rcGiving, includeAttendance: rcAttendance, includePledges: rcPledges,
+          donations: (stmt && stmt.donations) || [],
+          byCategory: (stmt && stmt.total_by_category) || {},
+          givingTotal: (stmt && stmt.grand_total) || 0,
+          pledgesBehind: (stmt && stmt.pledges_behind) || [],
+          services, attended, absent,
+          totalServices: services.length,
+          // With nothing recorded, a "0%" would read as though they never came.
+          rate: counted > 0 ? Math.round((attended / counted) * 1000) / 10 : null,
+          counted,
+          serviceFilterLabel: rcServiceTypes.length === 0 ? '' : rcServiceLabel,
+          note: rcNotes[id] || '',
+        });
+      }
+      setRcCards(cards);
+    } catch (err) { setError(err.message); }
+    setRcBusy(false);
+  };
+
+  // Print and PDF share one document, so what he saves matches what he prints.
+  const rcCurrentCards = () => (rcCards || []).map(c => ({ ...c, note: rcNotes[c.id] || c.note }));
+
+  const printReportCards = () => {
+    const cards = rcCurrentCards();
+    if (!cards.length) return;
+    const html = reportCardDocument(cards, church, { showDetails: rcShowDetails });
+    const win = window.open('', '_blank');
+    if (win) { win.document.write(html); win.document.close(); win.focus(); setTimeout(() => win.print(), 350); }
+  };
+
+  const downloadReportCardsPDF = async () => {
+    const cards = rcCurrentCards();
+    if (!cards.length) return;
+    setRcBusy(true);
+    try {
+      // Pulled in on demand so the heavy renderer never weighs down page load.
+      const { default: html2canvas } = await import('html2canvas');
+      const holder = document.createElement('div');
+      holder.style.cssText = 'position:fixed;left:-10000px;top:0;width:720px;background:#fff;';
+      holder.innerHTML = `<style>${reportCardStyles()}</style>` +
+        cards.map(c => reportCardBody(c, church, { showDetails: rcShowDetails })).join('');
+      document.body.appendChild(holder);
+      const doc = new jsPDF({ unit: 'pt', format: 'letter' });
+      const PAGE_W = doc.internal.pageSize.getWidth();
+      const PAGE_H = doc.internal.pageSize.getHeight();
+      const MARGIN = 24;
+      const usableW = PAGE_W - MARGIN * 2;
+      const cardEls = Array.from(holder.querySelectorAll('.card'));
+      for (let i = 0; i < cardEls.length; i++) {
+        // eslint-disable-next-line no-await-in-loop
+        const canvas = await html2canvas(cardEls[i], { scale: 2, backgroundColor: '#ffffff', logging: false });
+        const scale = usableW / canvas.width;          // px -> pt
+        const fullH = canvas.height * scale;
+        const maxH = PAGE_H - MARGIN * 2;
+        if (i > 0) doc.addPage();
+        if (fullH <= maxH) {
+          doc.addImage(canvas.toDataURL('image/jpeg', 0.92), 'JPEG', MARGIN, MARGIN, usableW, fullH);
+        } else if (fullH <= maxH * 1.4) {
+          // Only a little over: shrink it so the person still gets a single sheet,
+          // which is the whole point of a report card.
+          const s2 = maxH / canvas.height;
+          const w = canvas.width * s2;
+          doc.addImage(canvas.toDataURL('image/jpeg', 0.92), 'JPEG', MARGIN + (usableW - w) / 2, MARGIN, w, maxH);
+        } else {
+          // Genuinely long (a big period with every detail): slice across pages.
+          const sliceH = Math.floor(maxH / scale); // in canvas px
+          for (let y = 0, first = true; y < canvas.height; y += sliceH, first = false) {
+            const h = Math.min(sliceH, canvas.height - y);
+            const part = document.createElement('canvas');
+            part.width = canvas.width; part.height = h;
+            part.getContext('2d').drawImage(canvas, 0, y, canvas.width, h, 0, 0, canvas.width, h);
+            if (!first) doc.addPage();
+            doc.addImage(part.toDataURL('image/jpeg', 0.92), 'JPEG', MARGIN, MARGIN, usableW, h * scale);
+          }
+        }
+      }
+      document.body.removeChild(holder);
+      doc.save(cards.length === 1
+        ? `report-card-${cards[0].name.replace(/\s+/g, '-')}.pdf`
+        : `report-cards-${cards.length}-people.pdf`);
+    } catch (err) {
+      setError('Could not build the PDF: ' + (err.message || err));
+    }
+    setRcBusy(false);
+  };
 
   const toggleCat = (id) => {
     const n = Number(id);
@@ -2543,6 +2812,12 @@ function StatementsTab({ setError }) {
           >
             Vendor
           </button>
+          <button
+            onClick={() => { setMode('report_card'); setStatement(null); setAllStatement(null); setNonGivers(null); setVendorStatement(null); }}
+            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${mode === 'report_card' ? 'bg-primary-700 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+          >
+            Report Cards
+          </button>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
           {mode === 'individual' && (
@@ -2585,6 +2860,7 @@ function StatementsTab({ setError }) {
             </div>
           )}
           {mode === 'non_givers' && <div className="sm:col-span-2" />}
+          {mode === 'report_card' && <div className="sm:col-span-2" />}
           <div>
             <label className="label">From</label>
             <input type="date" className="input" value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
@@ -2595,7 +2871,79 @@ function StatementsTab({ setError }) {
           </div>
         </div>
 
-        {mode !== 'vendor' && (
+        {mode === 'report_card' && (
+          <div className="mt-4 space-y-4">
+            {/* Who the cards are for - tick as many people as you like */}
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="label mb-0">People ({rcIds.length} selected)</label>
+                <div className="flex gap-2">
+                  <button type="button" onClick={() => setRcIds(rcFilteredPeople.map(m => m.id))} className="text-xs font-medium text-primary-700 hover:underline">Select all shown</button>
+                  <button type="button" onClick={() => setRcIds([])} className="text-xs font-medium text-gray-500 hover:underline">Clear</button>
+                </div>
+              </div>
+              <input className="input mb-2" placeholder="Search a name..." value={rcSearch} onChange={e => setRcSearch(e.target.value)} />
+              <div className="border border-gray-200 rounded-lg max-h-52 overflow-y-auto divide-y divide-gray-100">
+                {rcFilteredPeople.length === 0 && <div className="px-3 py-4 text-sm text-gray-400">No one matches that search.</div>}
+                {rcFilteredPeople.map(m => (
+                  <label key={m.id} className={`flex items-center gap-2 px-3 py-1.5 text-sm cursor-pointer ${rcIds.includes(m.id) ? 'bg-primary-50' : 'hover:bg-gray-50'}`}>
+                    <input type="checkbox" className="rounded border-gray-300 text-primary-700 focus:ring-primary-500"
+                      checked={rcIds.includes(m.id)} onChange={() => toggleRcId(m.id)} />
+                    <span className="text-gray-800">{m.last_name}, {m.first_name}</span>
+                    <span className="text-xs text-gray-400 ml-auto">{labelFor(personTypes, m.person_type)}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            {/* Which services count - 1st Sunday and 2nd Sunday crowds differ */}
+            <div>
+              <label className="label">Services to include</label>
+              <div className="flex flex-wrap gap-2">
+                <button type="button" onClick={() => setRcServiceTypes([])}
+                  className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors ${rcServiceTypes.length === 0 ? 'bg-primary-700 text-white border-primary-700' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`}>
+                  All services
+                </button>
+                {RC_SERVICE_TYPES.map(t => (
+                  <button key={t.key} type="button" onClick={() => toggleRcServiceType(t.key)}
+                    className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors ${rcServiceTypes.includes(t.key) ? 'bg-primary-700 text-white border-primary-700' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`}>
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs text-gray-400 mt-1">Pick one or more if you only want certain services counted — the attended / missed / rate figures are worked out from just those.</p>
+            </div>
+
+            {/* What goes on the card */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2">
+              <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer select-none">
+                <input type="checkbox" className="rounded border-gray-300 text-primary-700 focus:ring-primary-500" checked={rcGiving} onChange={e => setRcGiving(e.target.checked)} />
+                Include giving
+              </label>
+              <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer select-none">
+                <input type="checkbox" className="rounded border-gray-300 text-primary-700 focus:ring-primary-500" checked={rcAttendance} onChange={e => setRcAttendance(e.target.checked)} />
+                Include attendance &amp; engagement
+              </label>
+              <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer select-none">
+                <input type="checkbox" className="rounded border-gray-300 text-primary-700 focus:ring-primary-500" checked={rcPledges} onChange={e => setRcPledges(e.target.checked)} />
+                Include pledge balance
+              </label>
+              <label className="flex items-center gap-2 text-sm font-medium text-gray-800 cursor-pointer select-none">
+                <input type="checkbox" className="rounded border-gray-300 text-primary-700 focus:ring-primary-500" checked={rcShowDetails} onChange={e => setRcShowDetails(e.target.checked)} />
+                Show the details (untick for totals only)
+              </label>
+            </div>
+
+            <div>
+              <button onClick={buildReportCards} disabled={rcBusy || rcIds.length === 0} className="btn-primary">
+                {rcBusy ? <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" /> : <FileText size={16} />}
+                Generate {rcIds.length > 1 ? `${rcIds.length} Report Cards` : 'Report Card'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {mode !== 'vendor' && mode !== 'report_card' && (
         <div className="mt-4">
           <label className="label">Filter by Account / Category</label>
           <div className="flex flex-wrap gap-2">
@@ -2631,13 +2979,61 @@ function StatementsTab({ setError }) {
             Include this person's attendance &amp; engagement for the same period
           </label>
         )}
+        {mode !== 'report_card' && (
         <div className="mt-4">
           <button onClick={loadStatement} disabled={loading} className="btn-primary">
             {loading ? <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" /> : <FileText size={16} />}
             Generate Statement
           </button>
         </div>
+        )}
       </div>
+
+      {/* Report Cards result */}
+      {mode === 'report_card' && rcCards && rcCards.length > 0 && (
+        <div className="card">
+          <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+            <div>
+              <h2 className="text-lg font-bold text-gray-900">{rcCards.length} Report Card{rcCards.length !== 1 ? 's' : ''}</h2>
+              <p className="text-sm text-gray-500">
+                {rcLongDate(dateFrom)} - {rcLongDate(dateTo)} | {rcServiceLabel} | {rcShowDetails ? 'with details' : 'totals only'}
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={downloadReportCardsPDF} disabled={rcBusy} className="btn-secondary">
+                {rcBusy ? <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600" /> : <Download size={16} />} PDF
+              </button>
+              <button onClick={printReportCards} className="btn-secondary"><Printer size={16} /> Print</button>
+            </div>
+          </div>
+
+          <p className="text-xs text-gray-500 mb-3">
+            Add a note for anyone below and it appears on their card. The PDF is built from the same page as the print-out, so they look identical.
+          </p>
+
+          <div className="space-y-3">
+            {rcCards.map(c => (
+              <div key={c.id} className="border border-gray-200 rounded-lg p-3">
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                  <div className="font-medium text-gray-900">{c.name}
+                    {c.personType && <span className="ml-2 text-xs text-gray-400">{c.personType}</span>}
+                  </div>
+                  <div className="text-sm text-gray-600 flex gap-4">
+                    {c.includeGiving && <span>Giving <strong className="text-gray-800">{formatCurrency(c.givingTotal)}</strong></span>}
+                    {c.includeAttendance && <span>Attended <strong className="text-gray-800">{c.attended}/{c.totalServices}</strong> ({c.rate === null ? 'not recorded' : c.rate + '%'})</span>}
+                  </div>
+                </div>
+                <textarea
+                  className="input mt-2 text-sm" rows={2}
+                  placeholder={`Note or comment for ${c.name} (optional) - appears on the card`}
+                  value={rcNotes[c.id] ?? c.note ?? ''}
+                  onChange={e => setRcNotes(prev => ({ ...prev, [c.id]: e.target.value }))}
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* All Members Statement */}
       {mode === 'all' && allStatement && (
