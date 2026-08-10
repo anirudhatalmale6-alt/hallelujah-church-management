@@ -25,7 +25,7 @@ switch ($method) {
         if ($action === 'by_service' && $serviceId) {
             // Auto-sync: mark absent for ended services (uses per-service duration)
             try {
-                $now = date('Y-m-d H:i:s');
+                $now = utcNow();
                 $svcCheck = $db->prepare("SELECT id, date, time, COALESCE(duration_hours, 2.0) as duration_hours FROM services WHERE id = ? AND time IS NOT NULL");
                 $svcCheck->execute([$serviceId]);
                 $svcInfo = $svcCheck->fetch();
@@ -360,7 +360,7 @@ switch ($method) {
                         continue;
                     }
                     $checkInTime = ($record['status'] === 'present' || $record['status'] === 'late')
-                        ? ($record['check_in_time'] ?? date('Y-m-d H:i:s'))
+                        ? (isset($record['check_in_time']) ? churchToUtc($record['check_in_time']) : utcNow())
                         : null;
                     $upsertStmt->execute([
                         $svcId,
@@ -407,7 +407,7 @@ switch ($method) {
             }
 
             $checkInTime = ($data['status'] === 'present' || $data['status'] === 'late')
-                ? ($data['check_in_time'] ?? date('Y-m-d H:i:s'))
+                ? (isset($data['check_in_time']) ? churchToUtc($data['check_in_time']) : utcNow())
                 : null;
 
             $stmt = $db->prepare("

@@ -425,7 +425,7 @@ switch ($method) {
             $memberId = (int)$data['member_id'];
             $serviceId = $data['service_id'] ?? null;
             $method = in_array($data['method'] ?? '', ['manual', 'offline']) ? $data['method'] : 'manual';
-            $checkinTime = !empty($data['check_in_time']) ? $data['check_in_time'] : date('Y-m-d H:i:s');
+            $checkinTime = !empty($data['check_in_time']) ? churchToUtc($data['check_in_time']) : utcNow();
 
             $stmt = $db->prepare("
                 INSERT INTO checkin_logs (member_id, service_id, check_in_time, checkin_method, checked_in_by, notes)
@@ -465,7 +465,7 @@ switch ($method) {
 
         } elseif ($action === 'mark_absent') {
             try {
-                $now = date('Y-m-d H:i:s');
+                $now = utcNow();
                 $endedServices = $db->prepare("
                     SELECT id, name, date, time, COALESCE(duration_hours, 2.0) as duration_hours
                     FROM services

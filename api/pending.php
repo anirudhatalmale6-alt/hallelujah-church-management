@@ -116,7 +116,7 @@ switch ($method) {
                             ");
                             foreach ($changeData['records'] as $record) {
                                 $checkInTime = ($record['status'] === 'present' || $record['status'] === 'late')
-                                    ? ($record['check_in_time'] ?? date('Y-m-d H:i:s'))
+                                    ? (isset($record['check_in_time']) ? churchToUtc($record['check_in_time']) : utcNow())
                                     : null;
                                 $upsertStmt->execute([
                                     (int)$changeData['service_id'],
@@ -129,7 +129,7 @@ switch ($method) {
                             }
                         } elseif (isset($changeData['service_id'])) {
                             $checkInTime = ($changeData['status'] === 'present' || $changeData['status'] === 'late')
-                                ? ($changeData['check_in_time'] ?? date('Y-m-d H:i:s'))
+                                ? (isset($changeData['check_in_time']) ? churchToUtc($changeData['check_in_time']) : utcNow())
                                 : null;
                             $db->prepare("
                                 INSERT INTO attendance (service_id, member_id, status, check_in_time, notes, marked_by)

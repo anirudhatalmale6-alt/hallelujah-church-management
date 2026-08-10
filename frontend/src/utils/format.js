@@ -1,3 +1,56 @@
+// The church runs on Philadelphia time. The API sends every timestamp as ISO-8601
+// already carrying the correct offset for that instant (e.g. "...T19:10:52-04:00"),
+// so these helpers only have to render it - and they render in Philadelphia time
+// explicitly, so the clock is the same whichever computer or phone it is opened on.
+// Daylight saving is handled for us: the offset comes from the server, and the zone
+// below is a real named zone, not a fixed number of hours.
+export const CHURCH_TZ = 'America/New_York';
+
+export function parseStamp(ts) {
+  if (!ts) return null;
+  // Tolerates the older bare-SQL form ("2026-08-09 19:10:52") as well as ISO.
+  const d = new Date(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(String(ts))
+    ? String(ts).replace(' ', 'T') + 'Z'
+    : ts);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+// 'Aug 9, 7:10 PM' in Philadelphia time.
+export function formatStampChurch(ts, opts = {}) {
+  const d = parseStamp(ts);
+  if (!d) return '';
+  return d.toLocaleString('en-US', {
+    month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+    timeZone: CHURCH_TZ, ...opts,
+  });
+}
+
+// '7:10 PM' in Philadelphia time.
+export function formatClockChurch(ts) {
+  const d = parseStamp(ts);
+  if (!d) return '';
+  return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: CHURCH_TZ });
+}
+
+// 'YYYY-MM-DDTHH:MM' in Philadelphia time, for a datetime-local input.
+export function toChurchInputValue(ts) {
+  const d = parseStamp(ts);
+  if (!d) return '';
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: false, timeZone: CHURCH_TZ,
+  }).formatToParts(d).reduce((acc, p) => { acc[p.type] = p.value; return acc; }, {});
+  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour === '24' ? '00' : parts.hour}:${parts.minute}`;
+}
+
+// True when the instant falls on today's date in Philadelphia.
+export function isChurchToday(ts) {
+  const d = parseStamp(ts);
+  if (!d) return false;
+  const fmt = (x) => x.toLocaleDateString('en-CA', { timeZone: CHURCH_TZ });
+  return fmt(d) === fmt(new Date());
+}
+
 export function formatTime12h(timeStr) {
   if (!timeStr) return '';
   const parts = timeStr.substring(0, 5).split(':');

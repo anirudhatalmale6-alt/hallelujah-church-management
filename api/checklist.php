@@ -150,7 +150,7 @@ switch ($method) {
             $stmt->execute([
                 $isChecked,
                 $isChecked ? $currentUser['user_id'] : null,
-                $isChecked ? date('Y-m-d H:i:s') : null,
+                $isChecked ? utcNow() : null,
                 $data['notes'] ?? null,
                 $id
             ]);

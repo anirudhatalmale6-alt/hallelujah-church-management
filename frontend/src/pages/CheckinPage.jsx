@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { checkin, members, settings as settingsApi } from '../utils/api';
 import { useAuth } from '../contexts/AuthContext';
-import { formatTime12h, fmtServiceDate } from '../utils/format';
+import { formatTime12h, fmtServiceDate, toChurchInputValue } from '../utils/format';
 import JsBarcode from 'jsbarcode';
 import QRCodeLib from 'qrcode';
 import {
@@ -567,12 +567,10 @@ function formatTime(dt) {
   });
 }
 
+// Was hardcoded to a -5h offset, so every check-in time in the edit box read an
+// hour early through the summer. Now uses the real Philadelphia zone.
 function toLocalInput(dt) {
-  if (!dt) return '';
-  const d = new Date(dt + (dt.includes('Z') || dt.includes('+') ? '' : 'Z'));
-  const offset = -5 * 60;
-  const local = new Date(d.getTime() + offset * 60000);
-  return local.toISOString().slice(0, 16);
+  return toChurchInputValue(dt);
 }
 
 function TodayLog() {

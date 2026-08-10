@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { attendance as attendanceApi, services as servicesApi, services as svcApi } from '../utils/api';
 import { useAuth } from '../contexts/AuthContext';
-import { formatTime12h, downloadCSV } from '../utils/format';
+import { formatTime12h, downloadCSV, formatStampChurch } from '../utils/format';
 import { loadPersonTypes, DEFAULT_PERSON_TYPES, colorFor } from '../utils/personTypes';
 import {
   UserCheck, Check, X, Clock, Search, AlertCircle,
@@ -26,12 +26,7 @@ const statusColors = {
 const statusInactive = 'bg-gray-100 text-gray-500 hover:bg-gray-200';
 
 // 'Jul 12, 3:45 PM' - when a user last saved attendance for this service.
-const formatStamp = (ts) => {
-  if (!ts) return '';
-  const d = new Date(String(ts).replace(' ', 'T'));
-  if (isNaN(d.getTime())) return '';
-  return d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-};
+const formatStamp = (ts) => formatStampChurch(ts);
 
 export default function AttendancePage() {
   const { user, canEdit, hasSectionAccess } = useAuth();

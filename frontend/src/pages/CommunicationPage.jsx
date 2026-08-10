@@ -4,6 +4,7 @@ import { loadPersonTypes, DEFAULT_PERSON_TYPES } from '../utils/personTypes';
 import { useAuth } from '../contexts/AuthContext';
 import Modal from '../components/Modal';
 import Pagination from '../components/Pagination';
+import { formatStampChurch, formatClockChurch, isChurchToday } from '../utils/format';
 import {
   Send, Mail, MessageSquare, Settings, Plus, Trash2, Eye, Check, X, Edit2,
   AlertCircle, Search, Users, Clock, CheckCircle, XCircle, Filter,
@@ -577,7 +578,7 @@ function SentTab({ setError }) {
                 <tbody className="divide-y divide-gray-100">
                   {messages.map(m => (
                     <tr key={m.id} className="hover:bg-gray-50">
-                      <td className="px-4 py-3 text-sm text-gray-600">{new Date(m.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })}</td>
+                      <td className="px-4 py-3 text-sm text-gray-600">{formatStampChurch(m.created_at, { year: 'numeric' })}</td>
                       <td className="px-4 py-3 text-sm font-medium text-gray-900 max-w-[200px] truncate">{m.subject || '(No subject)'}</td>
                       <td className="px-4 py-3 text-sm text-gray-600">{m.created_by_name || '—'}</td>
                       <td className="px-4 py-3 text-sm text-gray-500 capitalize">{m.message_type}</td>
@@ -659,12 +660,10 @@ function SentTab({ setError }) {
 
 function fmtSmsTime(ts) {
   if (!ts) return '';
-  const d = new Date(String(ts).replace(' ', 'T'));
-  if (isNaN(d.getTime())) return ts;
-  const now = new Date();
-  const opts = { hour: 'numeric', minute: '2-digit' };
-  if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString([], opts);
-  return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + d.toLocaleTimeString([], opts);
+  // Times are always shown on the church's clock (Philadelphia), not the clock of
+  // whatever device happens to be open.
+  if (isChurchToday(ts)) return formatClockChurch(ts);
+  return formatStampChurch(ts) || ts;
 }
 
 const SMS_STATUS = {
@@ -1081,7 +1080,7 @@ function SurveysTab({ setError, setMessage }) {
               <div key={r.id} className="border rounded-lg p-3">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-sm font-medium text-gray-900">{r.first_name ? `${r.first_name} ${r.last_name}` : (r.respondent_name || 'Anonymous')}</span>
-                  <span className="text-xs text-gray-400">{new Date(r.created_at).toLocaleDateString()}</span>
+                  <span className="text-xs text-gray-400">{formatStampChurch(r.created_at, { year: 'numeric', hour: undefined, minute: undefined })}</span>
                 </div>
                 {(viewResponses?.questions || []).map((q, qi) => (
                   <div key={qi} className="mb-1">
