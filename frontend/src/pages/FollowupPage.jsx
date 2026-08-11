@@ -53,6 +53,10 @@ export default function FollowupPage() {
   const [memberResults, setMemberResults] = useState([]);
   const [showDoneModal, setShowDoneModal] = useState(null);
   const [doneNotes, setDoneNotes] = useState('');
+  // Without this the Save button stayed live while the request was in flight, so a
+  // slow connection looked like a frozen screen and a second click created a duplicate.
+  const [saving, setSaving] = useState(false);
+  const [generating, setGenerating] = useState(false);
 
   const [filterStatus, setFilterStatus] = useState('');
   const [filterType, setFilterType] = useState('');
@@ -107,21 +111,27 @@ export default function FollowupPage() {
   }, [memberSearch]);
 
   const handleAutoGenerate = async () => {
+    if (generating) return;
+    setGenerating(true);
     try {
       const res = await followups.autoGenerate(7);
       alert(`Created: ${res.new_members || 0} new member follow-ups, ${res.visitors || 0} visitor follow-ups`);
       load();
     } catch (err) {
       alert(err.message || 'Failed');
+    } finally {
+      setGenerating(false);
     }
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (saving) return;
     if (!form.subject.trim()) {
       alert('Please enter a subject');
       return;
     }
+    setSaving(true);
     try {
       if (editing) {
         await followups.update(editing, {
@@ -158,6 +168,8 @@ export default function FollowupPage() {
       load();
     } catch (err) {
       alert(err.message || 'Failed');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -193,7 +205,8 @@ export default function FollowupPage() {
   };
 
   const handleMarkDone = async () => {
-    if (!showDoneModal) return;
+    if (!showDoneModal || saving) return;
+    setSaving(true);
     try {
       await followups.markDone(showDoneModal, doneNotes);
       setShowDoneModal(null);
@@ -201,6 +214,8 @@ export default function FollowupPage() {
       load();
     } catch (err) {
       alert(err.message || 'Failed');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -255,8 +270,9 @@ export default function FollowupPage() {
         </div>
         {effectiveAdmin && (
           <div className="flex gap-2">
-            <button onClick={handleAutoGenerate} className="btn bg-green-50 text-green-700 hover:bg-green-100 border border-green-200">
-              <RefreshCw size={14} /> Auto-Generate
+            <button onClick={handleAutoGenerate} disabled={generating}
+              className="btn bg-green-50 text-green-700 hover:bg-green-100 border border-green-200 disabled:opacity-60">
+              <RefreshCw size={14} className={generating ? 'animate-spin' : ''} /> {generating ? 'Working...' : 'Auto-Generate'}
             </button>
             <button onClick={() => { resetForm(); setEditing(null); setShowForm(true); }} className="btn btn-primary">
               <Plus size={14} /> New Follow-Up
@@ -325,9 +341,9 @@ export default function FollowupPage() {
                   className="input" rows={3} placeholder="Describe what was done..." />
               </div>
               <div className="flex justify-end gap-2">
-                <button onClick={() => setShowDoneModal(null)} className="btn bg-gray-100 text-gray-700 hover:bg-gray-200">Cancel</button>
-                <button onClick={handleMarkDone} className="btn bg-orange-600 text-white hover:bg-orange-700">
-                  <CheckSquare size={14} /> Submit for Approval
+                <button onClick={() => setShowDoneModal(null)} disabled={saving} className="btn bg-gray-100 text-gray-700 hover:bg-gray-200 disabled:opacity-50">Cancel</button>
+                <button onClick={handleMarkDone} disabled={saving} className="btn bg-orange-600 text-white hover:bg-orange-700 disabled:opacity-60">
+                  <CheckSquare size={14} /> {saving ? 'Submitting...' : 'Submit for Approval'}
                 </button>
               </div>
             </div>
@@ -337,11 +353,11 @@ export default function FollowupPage() {
 
       {/* Form modal (admin only) */}
       {showForm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setShowForm(false)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => { if (!saving) setShowForm(false); }}>
           <div className="bg-white rounded-xl shadow-xl w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between p-4 border-b">
               <h3 className="text-lg font-bold text-gray-900">{editing ? 'Edit Follow-Up' : 'New Follow-Up'}</h3>
-              <button onClick={() => setShowForm(false)} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
+              <button onClick={() => setShowForm(false)} disabled={saving} className="text-gray-400 hover:text-gray-600 disabled:opacity-40"><X size={20} /></button>
             </div>
             <form onSubmit={handleSubmit} className="p-4 space-y-4">
               <div>
@@ -488,8 +504,11 @@ export default function FollowupPage() {
               )}
 
               <div className="flex justify-end gap-2 pt-2">
-                <button type="button" onClick={() => setShowForm(false)} className="btn bg-gray-100 text-gray-700 hover:bg-gray-200">Cancel</button>
-                <button type="submit" className="btn btn-primary">{editing ? 'Update' : 'Create'}</button>
+                <button type="button" onClick={() => setShowForm(false)} disabled={saving}
+                  className="btn bg-gray-100 text-gray-700 hover:bg-gray-200 disabled:opacity-50">Cancel</button>
+                <button type="submit" disabled={saving} className="btn btn-primary disabled:opacity-60">
+                  {saving ? 'Saving...' : (editing ? 'Update' : 'Create')}
+                </button>
               </div>
             </form>
           </div>

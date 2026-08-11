@@ -33,6 +33,27 @@ function setUser(user) {
   localStorage.setItem('hitc_user', JSON.stringify(user));
 }
 
+// A stalled request used to hang forever - no timeout meant the screen just sat
+// there doing nothing, which reads as the whole system freezing. Give every call
+// a ceiling and a plain-English error instead. Uploads get a longer one.
+const DEFAULT_TIMEOUT_MS = 45000;
+const UPLOAD_TIMEOUT_MS = 300000;
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = DEFAULT_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      throw new ApiError('The server is taking too long to respond. Please check your internet connection and try again.', 0, {});
+    }
+    throw new ApiError('Could not reach the server. Please check your internet connection and try again.', 0, {});
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function request(endpoint, options = {}) {
   const { method = 'GET', body, params } = options;
 
@@ -63,7 +84,7 @@ async function request(endpoint, options = {}) {
     fetchOptions.body = JSON.stringify(body);
   }
 
-  const response = await fetch(url, fetchOptions);
+  const response = await fetchWithTimeout(url, fetchOptions);
   const data = await response.json().catch(() => ({}));
 
   if (!response.ok) {
@@ -132,11 +153,11 @@ export const members = {
     formData.append('member_id', memberId);
     const token = getToken();
     const url = `${API_BASE}/members.php?action=upload_photo&id=${memberId}&_t=${Date.now()}`;
-    const res = await fetch(url, {
+    const res = await fetchWithTimeout(url, {
       method: 'POST',
       headers: token ? { Authorization: `Bearer ${token}` } : {},
       body: formData,
-    });
+    }, UPLOAD_TIMEOUT_MS);
     const data = await res.json();
     if (!res.ok) throw new ApiError(data.error || 'Upload failed', res.status, data);
     return data;
@@ -467,11 +488,11 @@ export const documents = {
 
     const token = getToken();
     const url = `${API_BASE}/documents.php?action=upload&_t=${Date.now()}`;
-    const res = await fetch(url, {
+    const res = await fetchWithTimeout(url, {
       method: 'POST',
       headers: token ? { 'Authorization': `Bearer ${token}` } : {},
       body: formData,
-    });
+    }, UPLOAD_TIMEOUT_MS);
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new ApiError(data.error || 'Upload failed', res.status, data);
     return data;
@@ -498,11 +519,11 @@ export const meetingNotes = {
 
     const token = getToken();
     const url = `${API_BASE}/meeting_notes.php?action=upload_attachment&_t=${Date.now()}`;
-    const res = await fetch(url, {
+    const res = await fetchWithTimeout(url, {
       method: 'POST',
       headers: token ? { 'Authorization': `Bearer ${token}` } : {},
       body: formData,
-    });
+    }, UPLOAD_TIMEOUT_MS);
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new ApiError(data.error || 'Upload failed', res.status, data);
     return data;
