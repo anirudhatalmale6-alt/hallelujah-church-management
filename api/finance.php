@@ -693,6 +693,10 @@ switch ($method) {
                     if ($behindBy > 0.005) {
                         $alerts[] = [
                             'member_name' => $p['first_name'] . ' ' . $p['last_name'],
+                            // Sent separately as well so the screen can sort by last name
+                            // or by first name without having to guess where the split is.
+                            'first_name' => $p['first_name'],
+                            'last_name' => $p['last_name'],
                             'phone' => $p['phone'] ?? '',
                             'email' => $p['email'] ?? '',
                             'category' => $p['category_name'],

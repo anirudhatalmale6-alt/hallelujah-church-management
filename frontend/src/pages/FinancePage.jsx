@@ -5148,6 +5148,16 @@ function GeneralJournalView({ data, page, setPage, onDelete, onEdit, isAdmin }) 
 }
 
 /* ─── Pledges Tab ─── */
+
+// Sort people by last name or by first name, case-insensitive, with the other
+// name as the tie-breaker so people who share a name stay in a sensible order.
+function byName(mode) {
+  const primary = mode === 'first_name' ? 'first_name' : 'last_name';
+  const secondary = mode === 'first_name' ? 'last_name' : 'first_name';
+  const cmp = (x, y) => String(x || '').trim().localeCompare(String(y || '').trim(), undefined, { sensitivity: 'base' });
+  return (a, b) => cmp(a[primary], b[primary]) || cmp(a[secondary], b[secondary]);
+}
+
 function PledgesTab({ setError, setMessage, isAdmin }) {
   const [pledges, setPledges] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -5169,6 +5179,12 @@ function PledgesTab({ setError, setMessage, isAdmin }) {
   // Every active pledge, whatever the list filter shows — used to catch the same
   // person being pledged twice.
   const [activePledges, setActivePledges] = useState([]);
+  // Each of the two lists on this tab keeps its own search box and name order,
+  // so filtering the behind-schedule box doesn't touch the full pledge table.
+  const [alertSearch, setAlertSearch] = useState('');
+  const [alertSort, setAlertSort] = useState('last_name');
+  const [pledgeSearch, setPledgeSearch] = useState('');
+  const [pledgeSort, setPledgeSort] = useState('last_name');
 
   useEffect(() => {
     membersApi.list({ limit: 9999, sort: 'last_name' }).then(d => setMembersList(d.members || []));
@@ -5288,7 +5304,19 @@ function PledgesTab({ setError, setMessage, isAdmin }) {
 
   const freqLabel = { weekly: 'Weekly', monthly: 'Monthly', quarterly: 'Quarterly', annually: 'Annually' };
   const behindAlerts = alerts.filter(a => a.behind_by > 0);
-  const behindTotal = () => behindAlerts.reduce((s, a) => s + (a.behind_by || 0), 0);
+  const behindTotal = (list = behindAlerts) => list.reduce((s, a) => s + (a.behind_by || 0), 0);
+
+  const alertQuery = alertSearch.trim().toLowerCase();
+  const visibleAlerts = behindAlerts
+    .filter(a => !alertQuery || `${a.first_name || ''} ${a.last_name || ''} ${a.member_name || ''} ${a.category || ''} ${a.phone || ''}`.toLowerCase().includes(alertQuery))
+    .slice()
+    .sort(byName(alertSort));
+
+  const pledgeQuery = pledgeSearch.trim().toLowerCase();
+  const visiblePledges = pledges
+    .filter(p => !pledgeQuery || `${p.first_name || ''} ${p.last_name || ''} ${p.category_name || ''}`.toLowerCase().includes(pledgeQuery))
+    .slice()
+    .sort(byName(pledgeSort));
 
   // A printable / PDF "call sheet" so someone can be assigned each month to phone
   // the members who are behind on their pledge, and tick them off as they go.
@@ -5300,11 +5328,11 @@ function PledgesTab({ setError, setMessage, isAdmin }) {
     doc.text('Pledge Follow-Up Call Sheet', 14, 23);
     doc.setFontSize(9);
     doc.setTextColor(100);
-    doc.text(`Generated ${new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}   -   ${behindAlerts.length} behind schedule   -   Total balance to date ${formatCurrency(behindTotal())}`, 14, 29);
+    doc.text(`Generated ${new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}   -   ${visibleAlerts.length} behind schedule   -   Total balance to date ${formatCurrency(behindTotal(visibleAlerts))}`, 14, 29);
     doc.setTextColor(0);
     autoTable(doc, {
       head: [['#', 'Name', 'Phone', 'Pledge', 'Balance', 'Called', 'Notes']],
-      body: behindAlerts.map((a, i) => ([
+      body: visibleAlerts.map((a, i) => ([
         String(i + 1), a.member_name, a.phone || '-',
         `${freqLabel[a.frequency] || a.frequency} ${formatCurrency(a.pledge_amount)}`,
         formatCurrency(a.behind_by), '', '',
@@ -5319,7 +5347,7 @@ function PledgesTab({ setError, setMessage, isAdmin }) {
   };
 
   const printCallSheet = () => {
-    const rows = behindAlerts.map((a, i) => `
+    const rows = visibleAlerts.map((a, i) => `
       <tr><td>${i + 1}</td><td>${a.member_name}</td><td>${a.phone || '-'}</td>
       <td>${freqLabel[a.frequency] || a.frequency} ${formatCurrency(a.pledge_amount)}</td>
       <td class="r">${formatCurrency(a.behind_by)}</td><td class="chk"></td><td class="notes"></td></tr>`).join('');
@@ -5330,7 +5358,7 @@ function PledgesTab({ setError, setMessage, isAdmin }) {
       th{background:#991b1b;color:#fff;}tr:nth-child(even) td{background:#f9fafb;}.r{text-align:right;}
       .chk{width:44px;text-align:center;}.notes{width:170px;}</style></head><body>
       <h1>Hallelujah In The City</h1><h2>Pledge Follow-Up Call Sheet</h2>
-      <div class="meta">Generated ${new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })} &nbsp;&bull;&nbsp; ${behindAlerts.length} behind schedule &nbsp;&bull;&nbsp; Total balance to date ${formatCurrency(behindTotal())}</div>
+      <div class="meta">Generated ${new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })} &nbsp;&bull;&nbsp; ${visibleAlerts.length} behind schedule &nbsp;&bull;&nbsp; Total balance to date ${formatCurrency(behindTotal(visibleAlerts))}</div>
       <table><thead><tr><th>#</th><th>Name</th><th>Phone</th><th>Pledge</th><th>Balance</th><th>Called</th><th>Notes</th></tr></thead>
       <tbody>${rows}</tbody></table>
       <script>window.onload=function(){setTimeout(function(){window.print();},250);};<\/script></body></html>`;
@@ -5353,6 +5381,7 @@ function PledgesTab({ setError, setMessage, isAdmin }) {
               <p className="font-medium text-red-800">
                 {behindAlerts.length} pledge{behindAlerts.length !== 1 ? 's' : ''} behind schedule
                 {' — '}total balance to date {formatCurrency(behindTotal())}
+                {alertQuery && <span className="font-normal"> (showing {visibleAlerts.length})</span>}
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -5364,15 +5393,33 @@ function PledgesTab({ setError, setMessage, isAdmin }) {
               </button>
             </div>
           </div>
+          <div className="flex items-center gap-2 mb-2 flex-wrap">
+            <div className="relative flex-1 min-w-[180px]">
+              <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-red-400" />
+              <input type="text" placeholder="Search name, category or phone..." value={alertSearch}
+                onChange={e => setAlertSearch(e.target.value)}
+                className="w-full pl-9 pr-3 py-1.5 text-sm bg-white border border-red-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-300" />
+            </div>
+            <select value={alertSort} onChange={e => setAlertSort(e.target.value)}
+              className="py-1.5 px-2 text-sm bg-white border border-red-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-300">
+              <option value="last_name">A-Z by last name</option>
+              <option value="first_name">A-Z by first name</option>
+            </select>
+          </div>
           <div className="space-y-1">
-            {behindAlerts.map((a, i) => (
+            {visibleAlerts.length === 0 ? (
+              <p className="text-sm text-red-600 px-2 py-1">No one behind schedule matches "{alertSearch}".</p>
+            ) : visibleAlerts.map((a, i) => (
               <div key={i} className="flex items-center justify-between text-sm px-2 py-1 rounded hover:bg-red-100">
                 <span className="text-red-700">{a.member_name}{a.phone ? ` (${a.phone})` : ''} - {a.category} ({freqLabel[a.frequency]} {formatCurrency(a.pledge_amount)})</span>
                 <span className="text-red-800 font-medium">Balance {formatCurrency(a.behind_by)}</span>
               </div>
             ))}
           </div>
-          <p className="text-xs text-red-500 mt-2">The call sheet lists each person with their phone number and a blank "Called / Notes" column so you can assign someone to follow up each month.</p>
+          <p className="text-xs text-red-500 mt-2">
+            The call sheet lists each person with their phone number and a blank "Called / Notes" column so you can assign someone to follow up each month.
+            {alertQuery ? ' It prints only the names showing above right now — clear the search to print everyone.' : ''}
+          </p>
         </div>
       )}
 
@@ -5386,23 +5433,34 @@ function PledgesTab({ setError, setMessage, isAdmin }) {
         </div>
       </div>
 
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-3">
+      <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
+        <div className="flex items-center gap-3 flex-wrap">
           <h2 className="text-lg font-semibold text-gray-900">Member Pledges</h2>
           <select className="input w-auto text-sm" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
             <option value="active">Active</option>
             <option value="completed">Completed</option>
             <option value="cancelled">Cancelled</option>
           </select>
+          <div className="relative">
+            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input type="text" placeholder="Search name or category..." value={pledgeSearch}
+              onChange={e => setPledgeSearch(e.target.value)} className="input w-auto text-sm pl-9" />
+          </div>
+          <select className="input w-auto text-sm" value={pledgeSort} onChange={e => setPledgeSort(e.target.value)}>
+            <option value="last_name">A-Z by last name</option>
+            <option value="first_name">A-Z by first name</option>
+          </select>
         </div>
         <button onClick={openNew} className="btn-primary"><Plus size={16} /> Add Pledge</button>
       </div>
 
       <div className="card p-0 overflow-hidden">
-        {pledges.length === 0 ? (
+        {visiblePledges.length === 0 ? (
           <div className="text-center py-16">
             <Calendar size={48} className="text-gray-300 mx-auto mb-3" />
-            <p className="text-gray-500">No {statusFilter} pledges</p>
+            <p className="text-gray-500">
+              {pledgeQuery ? `No ${statusFilter} pledges match "${pledgeSearch}"` : `No ${statusFilter} pledges`}
+            </p>
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -5419,7 +5477,7 @@ function PledgesTab({ setError, setMessage, isAdmin }) {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {pledges.map(p => {
+                {visiblePledges.map(p => {
                   const pct = p.fulfillment_pct || 0;
                   const barColor = pct >= 100 ? 'bg-green-500' : pct >= 50 ? 'bg-amber-500' : 'bg-red-500';
                   return (
