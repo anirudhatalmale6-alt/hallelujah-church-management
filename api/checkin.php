@@ -16,8 +16,11 @@ function getUtcRangeForLocalDate(string $localDate): array {
     return [$start->format('Y-m-d H:i:s'), $end->format('Y-m-d H:i:s')];
 }
 
-// Determine attendance status based on check-in time vs service start time
-function getAttendanceStatus($db, $serviceId) {
+// Determine attendance status based on check-in time vs service start time.
+// $checkinUtc lets a correction to an old log be judged against when the person
+// actually arrived. Without it the comparison used "now", so fixing last Sunday's
+// record today would have stamped everybody "late".
+function getAttendanceStatus($db, $serviceId, ?string $checkinUtc = null) {
     if (!$serviceId) return 'present';
     $svc = $db->prepare("SELECT date, time FROM services WHERE id = ?");
     $svc->execute([$serviceId]);
@@ -25,12 +28,99 @@ function getAttendanceStatus($db, $serviceId) {
     if (!$service || !$service['time']) return 'present';
 
     $serviceStart = strtotime($service['date'] . ' ' . $service['time']);
-    $now = time();
-    $diffMinutes = ($now - $serviceStart) / 60;
+    $arrived = time();
+    if ($checkinUtc) {
+        try {
+            $arrived = (new DateTime($checkinUtc, new DateTimeZone('UTC')))->getTimestamp();
+        } catch (Exception $e) { /* fall back to now */ }
+    }
+    $diffMinutes = ($arrived - $serviceStart) / 60;
 
     // If check-in is more than 15 minutes after service start -> late
     if ($diffMinutes > 15) return 'late';
     return 'present';
+}
+
+// A single small setting read/written straight from here rather than through
+// settings.php, because settings.php is pastor/admin only and a volunteer running
+// the kiosk still has to be able to see - and set - which service check-ins go to.
+function getSetting(PDO $db, string $key, ?string $default = null): ?string {
+    try {
+        $stmt = $db->prepare("SELECT value FROM settings WHERE `key` = ?");
+        $stmt->execute([$key]);
+        $v = $stmt->fetchColumn();
+        return ($v === false || $v === null || $v === '') ? $default : (string)$v;
+    } catch (Exception $e) {
+        return $default;
+    }
+}
+
+function putSetting(PDO $db, string $key, ?string $value): void {
+    $db->prepare("INSERT INTO settings (`key`, value) VALUES (?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value)")
+       ->execute([$key, $value]);
+}
+
+// 'auto'   = when a service finishes, anyone still showing as checked in is
+//            closed out at the service end time (what the pastor expects today).
+// 'manual' = nobody is closed automatically; you check people out yourself with
+//            the Check Out button, or by scanning their QR / barcode / PIN again.
+function getCheckoutMode(PDO $db): string {
+    return getSetting($db, 'checkout_mode', 'auto') === 'manual' ? 'manual' : 'auto';
+}
+
+// The end of a service as a UTC timestamp. Service date/time are stored in
+// church-local time, so they have to be converted, not compared raw.
+function serviceEndUtc(array $svc): ?string {
+    if (empty($svc['time'])) return null;
+    $hours = (float)($svc['duration_hours'] ?? 0);
+    if ($hours <= 0) $hours = 2.0;
+    $endLocalTs = strtotime($svc['date'] . ' ' . $svc['time']) + (int)round($hours * 3600);
+    if ($endLocalTs === false) return null;
+    return churchToUtc(date('Y-m-d H:i:s', $endLocalTs));
+}
+
+// Closes out anyone left hanging. Cheap enough to run whenever the log is opened,
+// which matters because there is no cron job on this hosting plan - if it only ran
+// from a scheduler it would never run at all.
+function autoCheckoutSweep(PDO $db): int {
+    if (getCheckoutMode($db) !== 'auto') return 0;
+    $closed = 0;
+    try {
+        $services = $db->query("
+            SELECT id, date, time, COALESCE(duration_hours, 2.0) AS duration_hours
+            FROM services
+            WHERE time IS NOT NULL AND date >= DATE_SUB(CURDATE(), INTERVAL 60 DAY)
+        ")->fetchAll();
+
+        $nowUtc = utcNow();
+        foreach ($services as $svc) {
+            $endUtc = serviceEndUtc($svc);
+            if (!$endUtc || $endUtc >= $nowUtc) continue;  // still running
+            // GREATEST guards the odd case of someone scanned in after the service
+            // already ended - that gets a zero-length visit rather than a negative one.
+            $stmt = $db->prepare("
+                UPDATE checkin_logs SET check_out_time = GREATEST(?, check_in_time)
+                WHERE service_id = ? AND check_out_time IS NULL
+            ");
+            $stmt->execute([$endUtc, $svc['id']]);
+            $closed += $stmt->rowCount();
+        }
+
+        // Check-ins recorded without a service have no end time to work from, so
+        // they are given the default two hours, and only once their day is over -
+        // today's are left alone so the live "Currently Checked In" list stays real.
+        [$todayStartUtc] = getUtcRangeForLocalDate(date('Y-m-d'));
+        $stmt = $db->prepare("
+            UPDATE checkin_logs SET check_out_time = DATE_ADD(check_in_time, INTERVAL 2 HOUR)
+            WHERE service_id IS NULL AND check_out_time IS NULL AND check_in_time < ?
+        ");
+        $stmt->execute([$todayStartUtc]);
+        $closed += $stmt->rowCount();
+    } catch (Exception $e) {
+        // Never let the sweep break the page that triggered it.
+        error_log('autoCheckoutSweep: ' . $e->getMessage());
+    }
+    return $closed;
 }
 
 // Kiosk endpoints - no auth required
@@ -43,6 +133,61 @@ if ($method === 'GET' && $action === 'active_services') {
     $stmt->execute([$today]);
     $services = $stmt->fetchAll();
     jsonResponse(['services' => $services]);
+}
+
+// Which service everyone's check-ins are going into right now. Kept on the server
+// on purpose: with three people checking people in from three different phones, a
+// choice made on one device has to show up on all of them, or half the morning
+// lands on the wrong service (or on no service at all).
+if ($method === 'GET' && $action === 'active_service') {
+    $sid = getSetting($db, 'checkin_active_service');
+    $setAt = getSetting($db, 'checkin_active_service_at');
+    $service = null;
+
+    if ($sid) {
+        $stmt = $db->prepare("SELECT id, name, date, time, COALESCE(duration_hours, 2.0) AS duration_hours FROM services WHERE id = ?");
+        $stmt->execute([(int)$sid]);
+        $service = $stmt->fetch() ?: null;
+    }
+    // Back-filling an older service on purpose is legitimate, so the choice is never
+    // overridden - but a pick left over from a previous week would quietly file today's
+    // attendance under an old service, so the screen is told to warn about it.
+    $isToday = $service ? ($service['date'] === date('Y-m-d')) : null;
+
+    // Nothing chosen yet for today: suggest the sensible one instead of making the
+    // volunteer guess. Preference order is the service running now, then the next
+    // one due today, then today's last one.
+    $suggested = null;
+    if (!$service) {
+        $stmt = $db->prepare("
+            SELECT id, name, date, time, COALESCE(duration_hours, 2.0) AS duration_hours
+            FROM services WHERE date = ? AND time IS NOT NULL ORDER BY time ASC
+        ");
+        $stmt->execute([date('Y-m-d')]);
+        $todays = $stmt->fetchAll();
+        $nowTs = time();
+        foreach ($todays as $t) {
+            $startTs = strtotime($t['date'] . ' ' . $t['time']);
+            $endTs = $startTs + (int)round(((float)$t['duration_hours'] ?: 2.0) * 3600);
+            if ($nowTs >= $startTs - 3600 && $nowTs <= $endTs) { $suggested = $t; break; }
+        }
+        if (!$suggested) {
+            foreach ($todays as $t) {
+                if (strtotime($t['date'] . ' ' . $t['time']) > $nowTs) { $suggested = $t; break; }
+            }
+        }
+        if (!$suggested && $todays) $suggested = end($todays);
+    }
+
+    jsonResponse([
+        'service_id' => $service ? (int)$service['id'] : null,
+        'service' => $service,
+        'is_today' => $isToday,
+        'suggested' => $suggested,
+        'set_at' => $setAt,
+        'set_by' => getSetting($db, 'checkin_active_service_by'),
+        'checkout_mode' => getCheckoutMode($db),
+    ]);
 }
 
 if ($method === 'POST' && $action === 'quick_register') {
@@ -274,6 +419,10 @@ switch ($method) {
             jsonResponse(['code' => $code ?: null]);
 
         } elseif ($action === 'logs') {
+            // Close out finished services before reading, so the log the pastor is
+            // looking at is already correct. No-op when check-out mode is manual.
+            autoCheckoutSweep($db);
+
             // Get check-in logs with filters
             $dateFrom = $_GET['date_from'] ?? date('Y-m-d');
             $dateTo = $_GET['date_to'] ?? date('Y-m-d');
@@ -350,6 +499,8 @@ switch ($method) {
             jsonResponse(['report' => $report, 'date_from' => $dateFrom, 'date_to' => $dateTo]);
 
         } elseif ($action === 'today') {
+            autoCheckoutSweep($db);
+
             // Today's check-ins for dashboard
             [$utcStart, $utcEnd] = getUtcRangeForLocalDate(date('Y-m-d'));
             $stmt = $db->prepare("
@@ -436,7 +587,7 @@ switch ($method) {
             if ($serviceId) {
                 // A staff member checked this person in by hand, so the attendance
                 // record carries their name (a QR/PIN self check-in leaves it empty).
-                $attStatus = getAttendanceStatus($db, $serviceId);
+                $attStatus = getAttendanceStatus($db, $serviceId, $checkinTime);
                 $attStmt = $db->prepare("
                     INSERT INTO attendance (service_id, member_id, status, check_in_time, marked_by)
                     VALUES (?, ?, ?, ?, ?)
@@ -450,6 +601,36 @@ switch ($method) {
             $m = $stmt->fetch();
 
             jsonResponse(['message' => ($m['first_name'] ?? '') . ' ' . ($m['last_name'] ?? '') . ' checked in']);
+
+        } elseif ($action === 'set_active_service') {
+            // Deliberately not restricted to pastor/admin: anyone trusted to check
+            // people in has to be able to say which service they are checking in for.
+            $sid = $data['service_id'] ?? null;
+            $sid = ($sid === '' || $sid === null) ? null : (int)$sid;
+            if ($sid) {
+                $chk = $db->prepare("SELECT id FROM services WHERE id = ?");
+                $chk->execute([$sid]);
+                if (!$chk->fetch()) jsonResponse(['error' => 'Service not found'], 404);
+            }
+            putSetting($db, 'checkin_active_service', $sid ? (string)$sid : '');
+            putSetting($db, 'checkin_active_service_at', utcNow());
+            putSetting($db, 'checkin_active_service_by', $currentUser['name'] ?? ($currentUser['username'] ?? ''));
+            jsonResponse(['message' => 'Active service updated', 'service_id' => $sid]);
+
+        } elseif ($action === 'set_checkout_mode') {
+            requireRole($currentUser, ['pastor', 'admin']);
+            $mode = ($data['mode'] ?? 'auto') === 'manual' ? 'manual' : 'auto';
+            putSetting($db, 'checkout_mode', $mode);
+            $closed = $mode === 'auto' ? autoCheckoutSweep($db) : 0;
+            jsonResponse(['message' => 'Check-out mode set to ' . $mode, 'mode' => $mode, 'closed' => $closed]);
+
+        } elseif ($action === 'auto_checkout') {
+            $closed = autoCheckoutSweep($db);
+            jsonResponse([
+                'message' => $closed . ' check-in(s) closed out',
+                'closed' => $closed,
+                'mode' => getCheckoutMode($db),
+            ]);
 
         } elseif ($action === 'manual_checkout') {
             $logId = (int)($data['log_id'] ?? 0);
@@ -509,23 +690,67 @@ switch ($method) {
 
             $updates = [];
             $params = [];
+            // The screen sends church-local wall-clock time, because that is what the
+            // person typed. Storage is UTC, so it has to be converted - without this
+            // every hand-edited time was saved four hours out.
             if (isset($data['check_in_time']) && $data['check_in_time']) {
                 $updates[] = "check_in_time = ?";
-                $params[] = $data['check_in_time'];
+                $params[] = churchToUtc($data['check_in_time']);
             }
             if (isset($data['check_out_time'])) {
                 if ($data['check_out_time']) {
                     $updates[] = "check_out_time = ?";
-                    $params[] = $data['check_out_time'];
+                    $params[] = churchToUtc($data['check_out_time']);
                 } else {
                     $updates[] = "check_out_time = NULL";
                 }
             }
+            // Lets the pastor rescue a check-in that was recorded with no service
+            // (or against the wrong one) instead of deleting and redoing it.
+            $serviceChanged = array_key_exists('service_id', $data);
+            $newServiceId = null;
+            if ($serviceChanged) {
+                $newServiceId = ($data['service_id'] === '' || $data['service_id'] === null) ? null : (int)$data['service_id'];
+                $updates[] = "service_id = ?";
+                $params[] = $newServiceId;
+            }
             if (empty($updates)) jsonResponse(['error' => 'Nothing to update'], 400);
+
+            $existing = $db->prepare("SELECT member_id, service_id FROM checkin_logs WHERE id = ?");
+            $existing->execute([$logId]);
+            $before = $existing->fetch();
 
             $params[] = $logId;
             $stmt = $db->prepare("UPDATE checkin_logs SET " . implode(', ', $updates) . " WHERE id = ?");
             $stmt->execute($params);
+
+            // Keep the attendance register in step: moving a check-in onto a service
+            // has to actually mark the person present for it, otherwise the log looks
+            // right while the attendance report stays wrong.
+            if ($serviceChanged && $before) {
+                $after = $db->prepare("SELECT check_in_time FROM checkin_logs WHERE id = ?");
+                $after->execute([$logId]);
+                $ci = $after->fetchColumn() ?: utcNow();
+
+                if ($newServiceId) {
+                    $db->prepare("
+                        INSERT INTO attendance (service_id, member_id, status, check_in_time, marked_by)
+                        VALUES (?, ?, ?, ?, ?)
+                        ON DUPLICATE KEY UPDATE status = VALUES(status), check_in_time = VALUES(check_in_time), marked_by = VALUES(marked_by)
+                    ")->execute([$newServiceId, $before['member_id'], getAttendanceStatus($db, $newServiceId, $ci), $ci, $currentUser['user_id']]);
+                }
+                // The old service keeps its record only if another check-in still
+                // backs it up; otherwise the person was never there.
+                if (!empty($before['service_id']) && (int)$before['service_id'] !== (int)$newServiceId) {
+                    $others = $db->prepare("SELECT COUNT(*) FROM checkin_logs WHERE member_id = ? AND service_id = ? AND id <> ?");
+                    $others->execute([$before['member_id'], $before['service_id'], $logId]);
+                    if ((int)$others->fetchColumn() === 0) {
+                        $db->prepare("DELETE FROM attendance WHERE service_id = ? AND member_id = ?")
+                           ->execute([$before['service_id'], $before['member_id']]);
+                    }
+                }
+            }
+
             jsonResponse(['message' => 'Check-in log updated']);
 
         } elseif ($action === 'regenerate_code') {

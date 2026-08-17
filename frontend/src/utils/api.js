@@ -459,6 +459,12 @@ export const checkin = {
   deleteLog: (id) => request('checkin.php', { method: 'DELETE', params: { id } }),
   deleteCode: (id) => request('checkin.php', { method: 'DELETE', params: { action: 'code', id } }),
   markAbsent: () => request('checkin.php', { method: 'POST', body: {}, params: { action: 'mark_absent' } }),
+  // The service everyone is checking in for, shared across every device so three
+  // people on three phones all file into the same service.
+  activeService: () => request('checkin.php', { params: { action: 'active_service' } }),
+  setActiveService: (serviceId) => request('checkin.php', { method: 'POST', body: { service_id: serviceId || null }, params: { action: 'set_active_service' } }),
+  setCheckoutMode: (mode) => request('checkin.php', { method: 'POST', body: { mode }, params: { action: 'set_checkout_mode' } }),
+  autoCheckout: () => request('checkin.php', { method: 'POST', body: {}, params: { action: 'auto_checkout' } }),
 };
 
 // Follow-ups

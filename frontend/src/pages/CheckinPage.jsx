@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { checkin, members, settings as settingsApi } from '../utils/api';
 import { useAuth } from '../contexts/AuthContext';
-import { formatTime12h, fmtServiceDate, toChurchInputValue } from '../utils/format';
+import { formatTime12h, fmtServiceDate, toChurchInputValue, formatStampChurch, formatClockChurch, parseStamp } from '../utils/format';
 import JsBarcode from 'jsbarcode';
 import QRCodeLib from 'qrcode';
 import {
@@ -24,33 +24,98 @@ const TABS = [
   { key: 'offline', label: 'Offline', icon: WifiOff, perm: 'offline' },
 ];
 
-function ServiceSelector({ value, onChange, services }) {
+function ServiceSelector({ value, onChange, services, shared }) {
+  const chosen = services.find(s => String(s.id) === String(value));
   return (
     <div>
-      <label className="block text-sm font-medium text-gray-700 mb-1">Service (optional)</label>
+      <label className="block text-sm font-medium text-gray-700 mb-1">Service</label>
       <select value={value} onChange={e => onChange(e.target.value)} className="input">
         <option value="">-- No specific service --</option>
         {services.map(s => (
           <option key={s.id} value={s.id}>{s.name} - {fmtServiceDate(s.date)} ({formatTime12h(s.time)})</option>
         ))}
       </select>
+      {/* The single most expensive mistake on this screen is checking a queue of
+          people in with no service selected: the log shows a dash and nothing
+          reaches the attendance register. So say it plainly, in colour. */}
+      {chosen ? (
+        chosen.date === new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' }) ? (
+          <p className="mt-1.5 text-xs text-green-700 bg-green-50 border border-green-200 rounded-lg px-2 py-1.5">
+            Attendance is going into <span className="font-semibold">{chosen.name}</span> ({fmtServiceDate(chosen.date)}).
+            {shared?.set_by ? ` Chosen by ${shared.set_by} - everyone checking in is on this service.` : ' Everyone checking in is on this service.'}
+          </p>
+        ) : (
+          <p className="mt-1.5 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1.5">
+            Heads up: <span className="font-semibold">{chosen.name}</span> was on {fmtServiceDate(chosen.date)}, not today.
+            Anyone checked in now will be recorded against that older service. That is fine if you
+            are filling in a past service on purpose - otherwise change it above.
+          </p>
+        )
+      ) : (
+        <p className="mt-1.5 text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-2 py-1.5">
+          No service selected - people will be logged as present in the building but
+          will NOT be marked on any service attendance. Pick the service above.
+        </p>
+      )}
     </div>
   );
 }
 
-function useActiveServices() {
+// One shared choice of service for the whole church, held on the server.
+// Before this, each tab kept its own picker starting at "-- No specific service --",
+// and it only auto-picked when exactly one service existed - so on a Sunday with a
+// 1st and a 2nd service it sat on "none" until someone noticed. That is how two
+// check-ins ended up with a dash instead of a service. Now: the server suggests the
+// right service, whoever changes it changes it for everybody, and each device
+// re-checks so a change made on the pastor's phone reaches the volunteer's tablet.
+function useSharedService() {
   const [services, setServices] = useState([]);
+  const [serviceId, setServiceId] = useState('');
+  const [shared, setShared] = useState(null);
+  const [ready, setReady] = useState(false);
+  const touched = useRef(false);
+
+  const refresh = useCallback(async (force = false) => {
+    try {
+      const r = await checkin.activeService();
+      setShared(r);
+      // Don't yank the picker out from under someone mid-change unless this is the
+      // first load or an explicit refresh.
+      if (force || !touched.current) {
+        const next = r.service_id || r.suggested?.id || '';
+        setServiceId(next ? String(next) : '');
+      }
+    } catch {}
+    setReady(true);
+  }, []);
+
   useEffect(() => {
     checkin.activeServices().then(r => setServices(r.services || [])).catch(() => {});
-  }, []);
-  return services;
+    refresh(true);
+    const timer = setInterval(() => {
+      if (document.visibilityState === 'visible') refresh();
+    }, 30000);
+    return () => clearInterval(timer);
+  }, [refresh]);
+
+  const choose = useCallback(async (val) => {
+    touched.current = true;
+    setServiceId(val);
+    try {
+      await checkin.setActiveService(val || null);
+      refresh();
+    } catch {}
+    // Let a later poll pick up someone else's change again.
+    setTimeout(() => { touched.current = false; }, 60000);
+  }, [refresh]);
+
+  return { services, serviceId, choose, shared, ready };
 }
 
 function CheckinKiosk() {
   const [mode, setMode] = useState('pin');
   const [pinInput, setPinInput] = useState('');
-  const [selectedService, setSelectedService] = useState('');
-  const activeServices = useActiveServices();
+  const { services: activeServices, serviceId: selectedService, choose: setSelectedService, shared } = useSharedService();
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -61,10 +126,6 @@ function CheckinKiosk() {
   const [useCamera, setUseCamera] = useState(false);
   const [showLiveCamera, setShowLiveCamera] = useState(false);
   const pinRef = useRef(null);
-
-  useEffect(() => {
-    if (activeServices.length === 1) setSelectedService(activeServices[0].id);
-  }, [activeServices]);
 
   useEffect(() => {
     if (mode === 'pin' && pinRef.current && !showRegister) pinRef.current.focus();
@@ -132,7 +193,7 @@ function CheckinKiosk() {
   return (
     <div className="max-w-lg mx-auto">
       <div className="card p-4 mb-4">
-        <ServiceSelector value={selectedService} onChange={setSelectedService} services={activeServices} />
+        <ServiceSelector value={selectedService} onChange={setSelectedService} services={activeServices} shared={shared} />
       </div>
 
       <div className="flex gap-2 mb-4">
@@ -353,8 +414,7 @@ function CheckinKiosk() {
 function ManualCheckin() {
   const [search, setSearch] = useState('');
   const [memberList, setMemberList] = useState([]);
-  const activeServices = useActiveServices();
-  const [selectedService, setSelectedService] = useState('');
+  const { services: activeServices, serviceId: selectedService, choose: setSelectedService, shared } = useSharedService();
   const [loading, setLoading] = useState(false);
   const [todayLogs, setTodayLogs] = useState([]);
   const [message, setMessage] = useState('');
@@ -440,7 +500,7 @@ function ManualCheckin() {
     <div>
       <div className="card p-4 mb-4">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <ServiceSelector value={selectedService} onChange={setSelectedService} services={activeServices} />
+          <ServiceSelector value={selectedService} onChange={setSelectedService} services={activeServices} shared={shared} />
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Search person</label>
             <div className="relative">
@@ -543,7 +603,7 @@ function ManualCheckin() {
               <div>
                 <div className="font-medium text-gray-900">{log.first_name} {log.last_name}</div>
                 <div className="text-xs text-gray-500">
-                  In: {new Date(log.check_in_time + 'Z').toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' })} | {log.checkin_method?.toUpperCase()}
+                  In: {formatClock(log.check_in_time)} | {log.checkin_method?.toUpperCase()}
                   {log.service_name && ` | ${log.service_name}`}
                 </div>
               </div>
@@ -558,13 +618,20 @@ function ManualCheckin() {
   );
 }
 
+// This used to bolt a 'Z' onto the end of whatever the API sent unless it spotted a
+// 'Z' or a '+'. The API now sends a real ISO stamp carrying the Philadelphia offset,
+// which in summer is NEGATIVE ("...T11:55:38-04:00"), so the check for '+' missed it
+// and every row ended up as "...-04:00Z" - an unparseable date, hence "Invalid Date"
+// on every line. parseStamp in utils/format handles both shapes properly.
 function formatTime(dt) {
   if (!dt) return '-';
-  return new Date(dt + (dt.includes('Z') || dt.includes('+') ? '' : 'Z')).toLocaleString('en-US', {
-    timeZone: 'America/New_York',
-    month: 'short', day: 'numeric',
-    hour: '2-digit', minute: '2-digit',
-  });
+  return formatStampChurch(dt) || '-';
+}
+
+// Just the clock part - 'Aug 16' repeated down a column of today's check-ins is noise.
+function formatClock(dt) {
+  if (!dt) return '-';
+  return formatClockChurch(dt) || '-';
 }
 
 // Was hardcoded to a -5h offset, so every check-in time in the edit box read an
@@ -582,7 +649,14 @@ function TodayLog() {
   const [editLog, setEditLog] = useState(null);
   const [editIn, setEditIn] = useState('');
   const [editOut, setEditOut] = useState('');
+  const [editService, setEditService] = useState('');
   const [saving, setSaving] = useState(false);
+  const [services, setServices] = useState([]);
+  const [checkoutMode, setCheckoutMode] = useState('auto');
+  const [modeSaving, setModeSaving] = useState(false);
+  const [modeNote, setModeNote] = useState('');
+  const { user } = useAuth();
+  const canSetMode = ['admin', 'pastor'].includes(user?.role);
 
   const load = async () => {
     setLoading(true);
@@ -598,6 +672,29 @@ function TodayLog() {
 
   useEffect(() => { load(); }, [dateFrom, dateTo]);
 
+  useEffect(() => {
+    checkin.activeServices().then(r => setServices(r.services || [])).catch(() => {});
+    checkin.activeService().then(r => setCheckoutMode(r.checkout_mode || 'auto')).catch(() => {});
+  }, []);
+
+  const toggleCheckoutMode = async (auto) => {
+    setModeSaving(true);
+    setModeNote('');
+    try {
+      const res = await checkin.setCheckoutMode(auto ? 'auto' : 'manual');
+      setCheckoutMode(res.mode);
+      setModeNote(auto
+        ? (res.closed > 0
+            ? `Automatic check-out is on. ${res.closed} person(s) still showing as inside were just closed out.`
+            : 'Automatic check-out is on. Nothing needed closing.')
+        : 'Automatic check-out is off. You now check people out yourself - by button, QR or barcode.');
+      load();
+    } catch (err) {
+      setModeNote(err.message || 'Could not save that setting');
+    }
+    setModeSaving(false);
+  };
+
   const handleCheckout = async (logId) => {
     try { await checkin.manualCheckout(logId); load(); } catch {}
   };
@@ -611,6 +708,7 @@ function TodayLog() {
     setEditLog(log);
     setEditIn(toLocalInput(log.check_in_time));
     setEditOut(log.check_out_time ? toLocalInput(log.check_out_time) : '');
+    setEditService(log.service_id ? String(log.service_id) : '');
   };
 
   const saveEdit = async () => {
@@ -621,6 +719,7 @@ function TodayLog() {
         log_id: editLog.id,
         check_in_time: editIn ? editIn + ':00' : null,
         check_out_time: editOut ? editOut + ':00' : null,
+        service_id: editService || null,
       });
       setEditLog(null);
       load();
@@ -646,6 +745,33 @@ function TodayLog() {
         </div>
       </div>
 
+      {/* How people get checked out. The pastor asked for a box he can untick when he
+          wants to do it himself with the scanner instead. */}
+      <div className="card p-4 mb-4">
+        <label className={`flex items-start gap-3 ${canSetMode ? 'cursor-pointer' : 'opacity-70'}`}>
+          <input
+            type="checkbox"
+            className="mt-0.5 h-5 w-5 flex-shrink-0"
+            checked={checkoutMode === 'auto'}
+            disabled={!canSetMode || modeSaving}
+            onChange={e => toggleCheckoutMode(e.target.checked)}
+          />
+          <span className="text-sm text-gray-700 leading-snug">
+            <span className="font-semibold text-gray-900">Check everyone out automatically when the service ends.</span>
+            <br />
+            Leave this ticked and nobody has to be checked out by hand - each person's
+            clock-out time is set to the moment their service finished (start time plus
+            the service length). Untick it when you want to check people out yourself:
+            with the Check Out button on this page, or by scanning their card - the same
+            QR or barcode that checked them in checks them out the second time it is scanned.
+          </span>
+        </label>
+        {!canSetMode && (
+          <p className="mt-2 text-xs text-gray-500">Only an admin or the pastor can change this setting.</p>
+        )}
+        {modeNote && <p className="mt-2 text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded-lg px-2 py-1.5">{modeNote}</p>}
+      </div>
+
       <div className="grid grid-cols-3 gap-4 mb-4">
         <div className="card p-4 text-center">
           <div className="text-2xl font-bold text-green-600">{summary.checked_in || 0}</div>
@@ -669,6 +795,19 @@ function TodayLog() {
               Edit Check-In: {editLog.first_name} {editLog.last_name}
             </h3>
             <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Service</label>
+                <select value={editService} onChange={e => setEditService(e.target.value)} className="input">
+                  <option value="">-- No specific service --</option>
+                  {services.map(s => (
+                    <option key={s.id} value={s.id}>{s.name} - {fmtServiceDate(s.date)} ({formatTime12h(s.time)})</option>
+                  ))}
+                </select>
+                <p className="text-xs text-gray-500 mt-1">
+                  Putting a check-in on a service also marks the person present on that
+                  service's attendance - this is how you rescue a row showing a dash.
+                </p>
+              </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Check-In Time</label>
                 <input type="datetime-local" value={editIn} onChange={e => setEditIn(e.target.value)} className="input" />
@@ -715,8 +854,10 @@ function TodayLog() {
               <tbody>
                 {logs.map(log => {
                   let duration = '';
-                  if (log.check_out_time) {
-                    const mins = Math.round((new Date(log.check_out_time) - new Date(log.check_in_time)) / 60000);
+                  const inAt = parseStamp(log.check_in_time);
+                  const outAt = parseStamp(log.check_out_time);
+                  if (inAt && outAt) {
+                    const mins = Math.max(0, Math.round((outAt - inAt) / 60000));
                     const h = Math.floor(mins / 60);
                     const m = mins % 60;
                     duration = h > 0 ? `${h}h ${m}m` : `${m}m`;
@@ -724,7 +865,13 @@ function TodayLog() {
                   return (
                     <tr key={log.id} className="border-b hover:bg-gray-50">
                       <td className="px-4 py-3 font-medium">{log.first_name} {log.last_name}</td>
-                      <td className="px-4 py-3 text-gray-600">{log.service_name || '-'}</td>
+                      <td className="px-4 py-3 text-gray-600">
+                        {log.service_name || (
+                          <button onClick={() => openEdit(log)} className="text-xs font-medium px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 hover:bg-amber-200" title="This check-in is not on any service - click to put it on one">
+                            No service - fix
+                          </button>
+                        )}
+                      </td>
                       <td className="px-4 py-3">{formatTime(log.check_in_time)}</td>
                       <td className="px-4 py-3">
                         {log.check_out_time ? formatTime(log.check_out_time) : (
