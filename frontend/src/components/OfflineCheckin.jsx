@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { checkin } from '../utils/api';
-import { formatTime12h } from '../utils/format';
+import { formatTime12h, fmtServiceDate } from '../utils/format';
 import {
   WifiOff, Wifi, Download, Upload, Trash2, Check, X,
   RefreshCw, User, Clock, AlertCircle, Loader, UserPlus
@@ -65,6 +65,12 @@ export default function OfflineCheckin() {
   const [showSyncConfirm, setShowSyncConfirm] = useState(false);
   const [syncProgress, setSyncProgress] = useState({ current: 0, total: 0 });
   const [syncResults, setSyncResults] = useState(null); // { success: number, failed: number, failedItems: [] }
+  // Open by default the first time, then remembered - so the person who has done this
+  // before is not made to read it again every Sunday.
+  const [showHelp, setShowHelp] = useState(() => localStorage.getItem('hitc_offline_help_seen') !== '1');
+  useEffect(() => {
+    if (showHelp) localStorage.setItem('hitc_offline_help_seen', '1');
+  }, [showHelp]);
 
   // Monitor online/offline
   useEffect(() => {
@@ -78,10 +84,30 @@ export default function OfflineCheckin() {
     };
   }, []);
 
-  // Auto-select single service
+  // Pick the service for them. Selecting only when exactly one exists meant that on
+  // a Sunday with a 1st and a 2nd service it stayed on "none", and every offline
+  // check-in then synced up with no service attached - present in the building, but
+  // on nobody's attendance. Prefer the one running now, then the next one today.
   useEffect(() => {
-    if (cachedServices.length === 1) setSelectedService(cachedServices[0].id);
-  }, [cachedServices]);
+    if (selectedService) return;
+    if (cachedServices.length === 1) { setSelectedService(cachedServices[0].id); return; }
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+    const todays = cachedServices
+      .filter(s => s.date === today && s.time)
+      .sort((a, b) => String(a.time).localeCompare(String(b.time)));
+    if (!todays.length) return;
+    const now = Date.now();
+    const startOf = (s) => {
+      const [y, m, d] = s.date.split('-').map(Number);
+      const [hh, mm] = String(s.time).split(':').map(Number);
+      return new Date(y, m - 1, d, hh || 0, mm || 0).getTime();
+    };
+    const running = todays.find(s => {
+      const start = startOf(s);
+      return now >= start - 3600000 && now <= start + ((Number(s.duration_hours) || 2) * 3600000);
+    });
+    setSelectedService(String((running || todays.find(s => startOf(s) > now) || todays[todays.length - 1]).id));
+  }, [cachedServices, selectedService]);
 
   // Focus input on mode switch
   useEffect(() => {
@@ -119,6 +145,15 @@ export default function OfflineCheckin() {
     e?.preventDefault();
     if (pinInput.length < 4) return;
     const member = cachedMembers.find(m => m.pin_code === pinInput);
+    if (member && offlineLog.some(l => l.member_id === member.member_id && String(l.service_id || '') === String(selectedService || ''))) {
+      // Two taps on the same card would otherwise queue the person twice and create
+      // a duplicate the moment it syncs.
+      setResult({ success: false, message: `${member.first_name} ${member.last_name} is already on the offline list` });
+      setPinInput('');
+      setTimeout(() => setResult(null), 3000);
+      pinRef.current?.focus();
+      return;
+    }
     if (member) {
       const entry = {
         id: Date.now() + '-' + Math.random().toString(36).substr(2, 6),
@@ -145,7 +180,16 @@ export default function OfflineCheckin() {
 
   // Validate QR / barcode
   const handleQrScan = useCallback((code) => {
-    const member = cachedMembers.find(m => m.qr_code === code);
+    // The QR on the front and the barcode on the back can now be regenerated
+    // separately, so they are not always the same string. Online already matched
+    // either one; offline only ever checked qr_code, so a barcode scan failed here.
+    const scanned = String(code || '').trim();
+    const member = cachedMembers.find(m => m.qr_code === scanned || (m.barcode_code || m.qr_code) === scanned);
+    if (member && offlineLog.some(l => l.member_id === member.member_id && String(l.service_id || '') === String(selectedService || ''))) {
+      setResult({ success: false, message: `${member.first_name} ${member.last_name} is already on the offline list` });
+      setTimeout(() => setResult(null), 3000);
+      return;
+    }
     if (member) {
       const entry = {
         id: Date.now() + '-' + Math.random().toString(36).substr(2, 6),
@@ -236,8 +280,10 @@ export default function OfflineCheckin() {
           });
         }
         successCount++;
-      } catch {
-        failedItems.push(entry);
+      } catch (err) {
+        // Keep the reason with the entry. "1 check-in failed" with no explanation is
+        // useless when you are standing in the foyer trying to fix it.
+        failedItems.push({ ...entry, sync_error: err.message || 'Upload failed' });
       }
     }
 
@@ -296,6 +342,66 @@ export default function OfflineCheckin() {
               hour: '2-digit', minute: '2-digit',
             })}
           </span>
+        )}
+      </div>
+
+      {/* Plain-English instructions. This tab is used on the one morning the wifi is
+          down, by whoever happens to be holding the tablet - so the steps have to be
+          on the screen, not in a document nobody can open. */}
+      <div className="card p-4 bg-blue-50 border-blue-200">
+        <button
+          onClick={() => setShowHelp(h => !h)}
+          className="w-full flex items-center justify-between text-left"
+        >
+          <span className="flex items-center gap-2 font-semibold text-blue-900">
+            <AlertCircle size={18} className="text-blue-600" /> How to use Offline Check-In
+          </span>
+          <span className="text-xs font-medium text-blue-700">{showHelp ? 'Hide' : 'Show me'}</span>
+        </button>
+        {showHelp && (
+          <div className="mt-3 text-sm text-blue-900 space-y-3">
+            <p className="font-medium">
+              Do step 1 while the internet is still working - ideally the day before, or
+              any Sunday morning before people arrive.
+            </p>
+            <ol className="list-decimal list-outside ml-5 space-y-2">
+              <li>
+                <span className="font-semibold">Press "Download Member Data".</span> This copies
+                everyone's PIN, QR and barcode onto this device, plus the list of services. It
+                only works while you are online. You will see how many members were saved.
+              </li>
+              <li>
+                <span className="font-semibold">When the internet drops, come back to this tab.</span>{' '}
+                Everything below keeps working with no connection at all. Do not log out and do
+                not clear the browser data - that is where the copy is kept.
+              </li>
+              <li>
+                <span className="font-semibold">Pick the service</span> at the top of Offline
+                Check-In. It is filled in for you when there is a service today. If it says
+                "No specific service" the people you check in will not be counted on any
+                service's attendance.
+              </li>
+              <li>
+                <span className="font-semibold">Check people in</span> by typing their 4-digit
+                PIN, or by scanning the QR on the front of the card or the barcode on the back.
+                Someone with no card yet goes in under "New Person". Each one is added to the
+                pending list below, with the real time it happened.
+              </li>
+              <li>
+                <span className="font-semibold">When the internet is back, press "Sync to Server".</span>{' '}
+                Every pending check-in is sent up with its original time, so the log and the
+                attendance are correct even though they were taken offline. Anything that fails
+                stays on the list so you can retry it - nothing is thrown away.
+              </li>
+            </ol>
+            <p className="text-xs">
+              Worth knowing: the copy on this device is only as fresh as the last download, so a
+              member added this week will not be in it until you download again. Use the same
+              device for the whole service - the pending list lives on this device only, not in
+              your account. And scanning the same card twice will tell you the person is already
+              on the list instead of adding them again.
+            </p>
+          </div>
         )}
       </div>
 
@@ -358,7 +464,7 @@ export default function OfflineCheckin() {
 
           {/* Service selector */}
           <div className="mb-4">
-            <label className="block text-sm font-medium text-gray-700 mb-1">Service (optional)</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Service</label>
             <select
               value={selectedService}
               onChange={e => setSelectedService(e.target.value)}
@@ -367,10 +473,24 @@ export default function OfflineCheckin() {
               <option value="">-- No specific service --</option>
               {cachedServices.map(s => (
                 <option key={s.id} value={s.id}>
-                  {s.name} - {s.date} ({formatTime12h(s.time)})
+                  {s.name} - {fmtServiceDate(s.date)} ({formatTime12h(s.time)})
                 </option>
               ))}
             </select>
+            {selectedService ? (
+              <p className="mt-1.5 text-xs text-green-700 bg-green-50 border border-green-200 rounded-lg px-2 py-1.5">
+                These check-ins will go into{' '}
+                <span className="font-semibold">
+                  {(cachedServices.find(s => String(s.id) === String(selectedService)) || {}).name}
+                </span>{' '}
+                when you sync.
+              </p>
+            ) : (
+              <p className="mt-1.5 text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-2 py-1.5">
+                No service selected - these people will be logged as present in the building but
+                will NOT be marked on any service attendance. Pick the service above.
+              </p>
+            )}
           </div>
 
           {/* Mode toggle */}
@@ -627,14 +747,23 @@ export default function OfflineCheckin() {
                 </div>
               )}
               {syncResults.failed > 0 && (
-                <div className="flex items-center justify-between p-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm">
-                  <div className="flex items-center gap-2">
-                    <X size={16} className="shrink-0" />
-                    {syncResults.failed} check-in{syncResults.failed !== 1 ? 's' : ''} failed
+                <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <X size={16} className="shrink-0" />
+                      {syncResults.failed} check-in{syncResults.failed !== 1 ? 's' : ''} failed - still on the list below, nothing lost
+                    </div>
+                    <button onClick={retryFailed} className="btn btn-sm bg-red-100 text-red-700 hover:bg-red-200">
+                      <RefreshCw size={12} /> Retry
+                    </button>
                   </div>
-                  <button onClick={retryFailed} className="btn btn-sm bg-red-100 text-red-700 hover:bg-red-200">
-                    <RefreshCw size={12} /> Retry
-                  </button>
+                  <ul className="mt-2 space-y-1">
+                    {syncResults.failedItems.map((f, i) => (
+                      <li key={i} className="text-xs">
+                        <span className="font-medium">{f.first_name} {f.last_name}:</span> {f.sync_error || 'Upload failed'}
+                      </li>
+                    ))}
+                  </ul>
                 </div>
               )}
             </div>

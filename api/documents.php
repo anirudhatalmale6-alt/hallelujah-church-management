@@ -12,6 +12,44 @@ if (!is_dir($uploadDir)) {
     mkdir($uploadDir, 0755, true);
 }
 
+// Typed notes need two extra columns (batch 22). This system is also cloned for the
+// Love & Healing site, so never assume the migration has been run there - check, and
+// fall back to plain upload behaviour rather than breaking the whole page.
+function notesColumnsExist(PDO $db): bool {
+    static $exists = null;
+    if ($exists !== null) return $exists;
+    try {
+        $s = $db->query("SELECT COUNT(*) FROM information_schema.columns
+                         WHERE table_schema = DATABASE() AND table_name = 'documents'
+                         AND column_name IN ('is_note', 'note_content')");
+        $exists = ((int)$s->fetchColumn() === 2);
+    } catch (Exception $e) {
+        $exists = false;
+    }
+    return $exists;
+}
+
+function requireNotesSupport(PDO $db): void {
+    if (!notesColumnsExist($db)) {
+        jsonResponse(['error' => 'Typed notes are not set up on this database yet. An administrator needs to open api/migrate_batch22.php once.'], 400);
+    }
+}
+
+// The downloadable copy of a typed note. Plain text on purpose - it opens on any
+// phone, any computer, with no program to install.
+function noteToText(string $title, string $content, string $author): string {
+    $lines = [
+        $title,
+        str_repeat('=', max(3, min(70, strlen($title)))),
+        'Hallelujah In The City' . ($author !== '' ? '  |  ' . $author : ''),
+        'Last saved ' . date('F j, Y \a\t g:i A'),
+        '',
+        $content,
+        '',
+    ];
+    return implode("\r\n", $lines);
+}
+
 switch ($method) {
     case 'GET':
         if ($action === 'download') {
@@ -60,6 +98,21 @@ switch ($method) {
             readfile($filePath);
             exit();
 
+        } elseif ($action === 'note') {
+            // Full text of one typed note, fetched only when it is opened.
+            requireNotesSupport($db);
+            $id = (int)($_GET['id'] ?? 0);
+            if (!$id) jsonResponse(['error' => 'ID required'], 400);
+            $stmt = $db->prepare("
+                SELECT d.*, u.name as uploaded_by_name
+                FROM documents d JOIN users u ON u.id = d.uploaded_by
+                WHERE d.id = ? AND d.is_note = 1
+            ");
+            $stmt->execute([$id]);
+            $note = $stmt->fetch();
+            if (!$note) jsonResponse(['error' => 'Note not found'], 404);
+            jsonResponse(['note' => $note]);
+
         } elseif ($action === 'categories') {
             jsonResponse(['categories' => [
                 ['value' => 'sermon', 'label' => 'Sermons'],
@@ -94,18 +147,34 @@ switch ($method) {
                 $where[] = "d.category = ?";
                 $params[] = $category;
             }
+            $hasNotes = notesColumnsExist($db);
+
             if ($search) {
-                $where[] = "(d.title LIKE ? OR d.description LIKE ? OR d.file_name LIKE ?)";
+                // Typed notes are searched by their text too, which is the whole point
+                // of having them in here rather than as loose files.
                 $s = "%$search%";
-                $params[] = $s;
-                $params[] = $s;
-                $params[] = $s;
+                if ($hasNotes) {
+                    $where[] = "(d.title LIKE ? OR d.description LIKE ? OR d.file_name LIKE ? OR d.note_content LIKE ?)";
+                    $params = array_merge($params, [$s, $s, $s, $s]);
+                } else {
+                    $where[] = "(d.title LIKE ? OR d.description LIKE ? OR d.file_name LIKE ?)";
+                    $params = array_merge($params, [$s, $s, $s]);
+                }
             }
 
             $whereStr = $where ? 'WHERE ' . implode(' AND ', $where) : '';
 
+            // note_content is deliberately left out of the list - a few long sermons
+            // would make this response huge for no benefit. A short preview comes
+            // along instead, and the full text is fetched when a note is opened.
+            $noteCols = $hasNotes
+                ? "COALESCE(d.is_note, 0) AS is_note, LEFT(COALESCE(d.note_content, ''), 240) AS note_preview,"
+                : "0 AS is_note, '' AS note_preview,";
             $stmt = $db->prepare("
-                SELECT d.*, u.name as uploaded_by_name
+                SELECT d.id, d.title, d.category, d.file_name, d.file_size, d.file_type,
+                       d.description, d.uploaded_by, d.created_at,
+                       $noteCols
+                       u.name as uploaded_by_name
                 FROM documents d
                 JOIN users u ON u.id = d.uploaded_by
                 $whereStr
@@ -159,6 +228,73 @@ switch ($method) {
             ]);
 
             jsonResponse(['message' => 'Document uploaded', 'id' => (int)$db->lastInsertId()], 201);
+
+        } elseif ($action === 'create_note') {
+            // A note typed in the system rather than uploaded. It becomes an ordinary
+            // row in documents so search, the category cards and folder permissions
+            // all keep working, plus a plain .txt copy on disk so Download still
+            // hands over a real file.
+            requireNotesSupport($db);
+            $data = getRequestBody();
+            $title = trim($data['title'] ?? '');
+            if ($title === '') jsonResponse(['error' => 'A title is required'], 400);
+
+            $category = $data['category'] ?? 'other';
+            $validCategories = ['sermon', 'meeting_notes', 'policy', 'form', 'other'];
+            if (!in_array($category, $validCategories)) $category = 'other';
+
+            $content = (string)($data['content'] ?? '');
+            $description = $data['description'] ?? '';
+
+            $safeName = time() . '_' . preg_replace('/[^a-zA-Z0-9._-]/', '_', $title) . '.txt';
+            $destPath = $uploadDir . $safeName;
+            if (@file_put_contents($destPath, noteToText($title, $content, $currentUser['name'] ?? '')) === false) {
+                jsonResponse(['error' => 'Could not save the note on the server'], 500);
+            }
+
+            $stmt = $db->prepare("
+                INSERT INTO documents (title, category, file_path, file_name, file_size, file_type, description, uploaded_by, is_note, note_content)
+                VALUES (?, ?, ?, ?, ?, 'text/plain', ?, ?, 1, ?)
+            ");
+            $stmt->execute([
+                $title, $category, $destPath, $title . '.txt',
+                filesize($destPath) ?: 0, $description, $currentUser['user_id'], $content,
+            ]);
+
+            jsonResponse(['message' => 'Note saved', 'id' => (int)$db->lastInsertId()], 201);
+
+        } elseif ($action === 'update_note') {
+            requireNotesSupport($db);
+            $id = (int)($_GET['id'] ?? 0);
+            if (!$id) jsonResponse(['error' => 'ID required'], 400);
+
+            $stmt = $db->prepare("SELECT * FROM documents WHERE id = ? AND is_note = 1");
+            $stmt->execute([$id]);
+            $note = $stmt->fetch();
+            if (!$note) jsonResponse(['error' => 'Note not found'], 404);
+
+            $data = getRequestBody();
+            $title = trim($data['title'] ?? $note['title']);
+            if ($title === '') jsonResponse(['error' => 'A title is required'], 400);
+            $content = array_key_exists('content', $data) ? (string)$data['content'] : (string)$note['note_content'];
+            $category = $data['category'] ?? $note['category'];
+            $validCategories = ['sermon', 'meeting_notes', 'policy', 'form', 'other'];
+            if (!in_array($category, $validCategories)) $category = 'other';
+            $description = array_key_exists('description', $data) ? $data['description'] : $note['description'];
+
+            // Rewrite the downloadable copy in place so it never drifts from the text
+            // being read on screen.
+            @file_put_contents($note['file_path'], noteToText($title, $content, $currentUser['name'] ?? ''));
+
+            $db->prepare("
+                UPDATE documents SET title = ?, category = ?, description = ?, note_content = ?, file_name = ?, file_size = ?
+                WHERE id = ?
+            ")->execute([
+                $title, $category, $description, $content, $title . '.txt',
+                @filesize($note['file_path']) ?: 0, $id,
+            ]);
+
+            jsonResponse(['message' => 'Note updated']);
 
         } else {
             jsonResponse(['error' => 'Use action=upload with multipart form data'], 400);

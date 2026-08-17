@@ -503,6 +503,11 @@ export const documents = {
     if (!res.ok) throw new ApiError(data.error || 'Upload failed', res.status, data);
     return data;
   },
+  // Notes typed straight into the system. They are ordinary documents with their
+  // text kept in the database, so they sit in the same list as the uploads.
+  getNote: (id) => request('documents.php', { params: { action: 'note', id } }),
+  createNote: (data) => request('documents.php', { method: 'POST', body: data, params: { action: 'create_note' } }),
+  updateNote: (id, data) => request('documents.php', { method: 'POST', body: data, params: { action: 'update_note', id } }),
   update: (id, data) => request('documents.php', { method: 'PUT', body: data, params: { id } }),
   delete: (id) => request('documents.php', { method: 'DELETE', params: { id } }),
   bulkDelete: (ids) => request('documents.php', { method: 'DELETE', params: { ids: ids.join(',') } }),

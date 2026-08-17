@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, Suspense } from 'react';
 import { documents, meetingNotes } from '../utils/api';
 import { useAuth } from '../contexts/AuthContext';
+import { formatStampChurch, fmtServiceDate } from '../utils/format';
 
 // The PDF engine is only fetched the first time someone opens a PDF, so it
 // doesn't slow down the rest of the system.
@@ -27,6 +28,18 @@ const CATEGORY_ICONS = {
   form: '📄',
   other: '📁',
 };
+
+// 'Monday, August 17, 2026' from a plain 'YYYY-MM-DD'. Built from the parts by hand
+// because new Date('2026-08-17') is read as UTC midnight, which in Philadelphia is
+// the evening BEFORE - so every meeting date printed a day early.
+function fmtLongDate(dateStr) {
+  if (!dateStr) return '';
+  const [y, m, d] = String(dateStr).split('-').map(Number);
+  if (!y || !m || !d) return String(dateStr);
+  return new Date(y, m - 1, d).toLocaleDateString('en-US', {
+    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+  });
+}
 
 function formatSize(bytes) {
   if (!bytes) return '0 B';
@@ -127,6 +140,71 @@ function FileViewer({ file, onClose }) {
   );
 }
 
+// ===================== NOTE READER =====================
+// A typed note is text, not a file, so it gets its own reader rather than being
+// pushed through the file viewer. Print here matches the meeting-note print sheet.
+function NoteReader({ note, onClose, onEdit }) {
+  if (!note) return null;
+
+  const printNote = () => {
+    const esc = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const w = window.open('', '_blank');
+    if (!w) return;
+    w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(note.title)}</title><style>
+      body { font-family: Georgia, serif; max-width: 800px; margin: 40px auto; padding: 20px; color: #222; }
+      h1 { font-size: 24px; margin-bottom: 4px; }
+      .meta { color: #666; font-size: 14px; margin-bottom: 20px; border-bottom: 2px solid #1a365d; padding-bottom: 10px; }
+      .content { white-space: pre-wrap; line-height: 1.6; }
+      .footer { margin-top: 40px; border-top: 1px solid #ccc; padding-top: 10px; font-size: 12px; color: #999; }
+      @media print { body { margin: 0; } }
+    </style></head><body>
+      <h1>${esc(note.title)}</h1>
+      <div class="meta">${esc(CATEGORY_LABELS[note.category] || note.category)} | By: ${esc(note.uploaded_by_name || '')} | ${formatStampChurch(note.created_at, { year: 'numeric', month: 'long', day: 'numeric', hour: undefined, minute: undefined })}</div>
+      ${note.description ? `<p><em>${esc(note.description)}</em></p>` : ''}
+      <div class="content">${esc(note.note_content)}</div>
+      <div class="footer">Hallelujah In The City</div>
+    </body></html>`);
+    w.document.close();
+    w.print();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-2 sm:p-6" onClick={onClose}>
+      <div className="bg-white rounded-lg shadow-xl w-full max-w-3xl h-[92vh] flex flex-col overflow-hidden"
+        onClick={e => e.stopPropagation()}>
+        <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-200 bg-gray-50">
+          <BookOpen size={18} className="text-primary-700 flex-shrink-0" />
+          <div className="flex-1 min-w-0">
+            <div className="font-semibold text-gray-900 truncate">{note.title}</div>
+            <div className="text-xs text-gray-500 truncate">
+              {CATEGORY_LABELS[note.category] || note.category} &middot; by {note.uploaded_by_name} &middot; {formatStampChurch(note.created_at)}
+            </div>
+          </div>
+          <button onClick={() => onEdit(note)} className="btn btn-sm bg-gray-100 text-gray-700 hover:bg-gray-200 flex items-center gap-1" title="Edit this note">
+            <Edit2 size={14} /> <span className="hidden sm:inline">Edit</span>
+          </button>
+          <button onClick={printNote} className="btn btn-sm bg-gray-100 text-gray-700 hover:bg-gray-200 flex items-center gap-1" title="Print">
+            <Printer size={14} /> <span className="hidden sm:inline">Print</span>
+          </button>
+          <a href={documents.downloadUrl(note.id)} target="_blank" rel="noreferrer"
+            className="btn btn-sm bg-gray-100 text-gray-700 hover:bg-gray-200 flex items-center gap-1" title="Download a copy">
+            <Download size={14} /> <span className="hidden sm:inline">Download</span>
+          </a>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-700 p-1" title="Close">
+            <X size={20} />
+          </button>
+        </div>
+        <div className="flex-1 overflow-auto p-6">
+          {note.description && <p className="text-sm text-gray-500 italic mb-4">{note.description}</p>}
+          <div className="whitespace-pre-wrap text-[15px] leading-relaxed text-gray-800">
+            {note.note_content || <span className="text-gray-400">This note is empty.</span>}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ===================== DOCUMENTS TAB =====================
 function DocumentsTab() {
   const [docs, setDocs] = useState([]);
@@ -146,6 +224,76 @@ function DocumentsTab() {
   const [uploadCategory, setUploadCategory] = useState('other');
   const [uploadDescription, setUploadDescription] = useState('');
   const fileRef = useRef(null);
+
+  // Typed notes: write one here instead of uploading a file someone typed elsewhere.
+  const emptyNote = { title: '', category: 'sermon', description: '', content: '' };
+  const [showNote, setShowNote] = useState(false);
+  const [noteForm, setNoteForm] = useState(emptyNote);
+  const [noteEditId, setNoteEditId] = useState(null);
+  const [noteSaving, setNoteSaving] = useState(false);
+  const [noteError, setNoteError] = useState('');
+  const [readingNote, setReadingNote] = useState(null);
+
+  const openNewNote = () => {
+    setNoteEditId(null);
+    setNoteForm(emptyNote);
+    setNoteError('');
+    setShowNote(true);
+  };
+
+  const openNoteReader = async (id) => {
+    try {
+      const res = await documents.getNote(id);
+      setReadingNote(res.note);
+    } catch (err) {
+      alert(err.message || 'Could not open this note');
+    }
+  };
+
+  const openEditNote = async (note) => {
+    // The list only carries a preview of the text, so fetch the full note first -
+    // otherwise saving would silently truncate it to the preview.
+    let full = note;
+    if (note.note_content === undefined) {
+      try {
+        const res = await documents.getNote(note.id);
+        full = res.note;
+      } catch (err) {
+        alert(err.message || 'Could not open this note');
+        return;
+      }
+    }
+    setReadingNote(null);
+    setNoteEditId(full.id);
+    setNoteForm({
+      title: full.title || '',
+      category: full.category || 'other',
+      description: full.description || '',
+      content: full.note_content || '',
+    });
+    setNoteError('');
+    setShowNote(true);
+  };
+
+  const saveNote = async () => {
+    if (!noteForm.title.trim() || noteSaving) return;
+    setNoteSaving(true);
+    setNoteError('');
+    try {
+      if (noteEditId) {
+        await documents.updateNote(noteEditId, noteForm);
+      } else {
+        await documents.createNote(noteForm);
+      }
+      setShowNote(false);
+      setNoteEditId(null);
+      setNoteForm(emptyNote);
+      load();
+    } catch (err) {
+      setNoteError(err.message || 'Could not save the note');
+    }
+    setNoteSaving(false);
+  };
 
   const load = async () => {
     setLoading(true);
@@ -281,11 +429,70 @@ function DocumentsTab() {
               className="input pl-9" placeholder="Search documents..."
             />
           </div>
-          <button onClick={() => setShowUpload(true)} className="btn btn-primary whitespace-nowrap">
+          {/* There is no bare `.btn` rule in index.css, so the layout utilities have to
+              be spelled out here or the icon and the label land on separate lines. */}
+          <button onClick={openNewNote}
+            className="inline-flex items-center gap-2 whitespace-nowrap flex-shrink-0 font-medium py-2 px-4 rounded-lg transition-colors duration-200 bg-green-50 text-green-700 hover:bg-green-100 border border-green-200">
+            <Plus size={14} /> New Note
+          </button>
+          <button onClick={() => setShowUpload(true)} className="btn btn-primary whitespace-nowrap flex-shrink-0">
             <Upload size={14} /> Upload Files
           </button>
         </div>
+        <p className="text-xs text-gray-500 mt-2">
+          Upload Files is for something already written elsewhere. New Note lets you type
+          it here - a sermon, a policy, anything - and it is saved in the folder you pick,
+          searchable by its words, and editable afterwards.
+        </p>
       </div>
+
+      {/* New / Edit typed note */}
+      {showNote && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => !noteSaving && setShowNote(false)}>
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-4 border-b">
+              <h3 className="text-lg font-bold">{noteEditId ? 'Edit Note' : 'New Note'}</h3>
+              <button onClick={() => !noteSaving && setShowNote(false)} disabled={noteSaving} className="text-gray-400 hover:text-gray-600 disabled:opacity-40"><X size={20} /></button>
+            </div>
+            <div className="p-4 space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Title</label>
+                  <input type="text" value={noteForm.title} autoFocus
+                    onChange={e => setNoteForm(f => ({ ...f, title: e.target.value }))}
+                    className="input" placeholder="e.g. Sunday sermon - The Good Shepherd" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Folder</label>
+                  <select value={noteForm.category} onChange={e => setNoteForm(f => ({ ...f, category: e.target.value }))} className="input">
+                    {Object.entries(CATEGORY_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Short description (optional)</label>
+                <input type="text" value={noteForm.description}
+                  onChange={e => setNoteForm(f => ({ ...f, description: e.target.value }))}
+                  className="input" placeholder="One line, shown under the title in the list" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Note</label>
+                <textarea value={noteForm.content}
+                  onChange={e => setNoteForm(f => ({ ...f, content: e.target.value }))}
+                  className="input text-sm" rows={14}
+                  placeholder="Type the sermon, the policy, the notes... Anything you type here is saved and can be edited later." />
+              </div>
+              {noteError && <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{noteError}</p>}
+              <div className="flex justify-end gap-2 pt-2">
+                <button onClick={() => setShowNote(false)} disabled={noteSaving} className="btn bg-gray-100 text-gray-700 disabled:opacity-50">Cancel</button>
+                <button onClick={saveNote} disabled={!noteForm.title.trim() || noteSaving} className="btn btn-primary disabled:opacity-60">
+                  <Save size={14} /> {noteSaving ? 'Saving...' : (noteEditId ? 'Update Note' : 'Save Note')}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Upload modal - supports multiple files */}
       {showUpload && (
@@ -386,7 +593,9 @@ function DocumentsTab() {
                   className="h-4 w-4 rounded border-gray-300 text-primary-700 focus:ring-primary-500 cursor-pointer flex-shrink-0"
                 />
                 <div className="flex-shrink-0">
-                  {getFileIcon(doc.file_type)}
+                  {Number(doc.is_note) === 1
+                    ? <BookOpen size={20} className="text-green-600" />
+                    : getFileIcon(doc.file_type)}
                 </div>
                 <div className="flex-1 min-w-0">
                   {editing === doc.id ? (
@@ -404,12 +613,14 @@ function DocumentsTab() {
                   ) : (
                     <>
                       <button
-                        onClick={() => setViewing({
-                          title: doc.title, name: doc.file_name, type: doc.file_type,
-                          viewUrl: documents.viewUrl(doc.id), downloadUrl: documents.downloadUrl(doc.id),
-                        })}
+                        onClick={() => Number(doc.is_note) === 1
+                          ? openNoteReader(doc.id)
+                          : setViewing({
+                              title: doc.title, name: doc.file_name, type: doc.file_type,
+                              viewUrl: documents.viewUrl(doc.id), downloadUrl: documents.downloadUrl(doc.id),
+                            })}
                         className="font-medium text-gray-900 truncate hover:text-primary-700 hover:underline text-left w-full"
-                        title="Click to read this document"
+                        title={Number(doc.is_note) === 1 ? 'Click to read this note' : 'Click to read this document'}
                       >
                         {doc.title}
                       </button>
@@ -417,22 +628,33 @@ function DocumentsTab() {
                         <span className="px-2 py-0.5 rounded-full font-medium bg-gray-100 text-gray-600">
                           {CATEGORY_LABELS[doc.category] || doc.category}
                         </span>
-                        <span>{formatSize(doc.file_size)}</span>
-                        <span>{doc.file_name}</span>
+                        {Number(doc.is_note) === 1 ? (
+                          <span className="px-2 py-0.5 rounded-full font-medium bg-green-100 text-green-700">Note</span>
+                        ) : (
+                          <>
+                            <span>{formatSize(doc.file_size)}</span>
+                            <span>{doc.file_name}</span>
+                          </>
+                        )}
                         <span>by {doc.uploaded_by_name}</span>
-                        <span>{new Date(doc.created_at).toLocaleDateString()}</span>
+                        <span>{formatStampChurch(doc.created_at)}</span>
                       </div>
                       {doc.description && <div className="text-xs text-gray-500 mt-1">{doc.description}</div>}
+                      {Number(doc.is_note) === 1 && doc.note_preview && !doc.description && (
+                        <div className="text-xs text-gray-500 mt-1 truncate">{doc.note_preview}</div>
+                      )}
                     </>
                   )}
                 </div>
                 {editing !== doc.id && (
                   <div className="flex items-center gap-2 flex-shrink-0">
                     <button
-                      onClick={() => setViewing({
-                        title: doc.title, name: doc.file_name, type: doc.file_type,
-                        viewUrl: documents.viewUrl(doc.id), downloadUrl: documents.downloadUrl(doc.id),
-                      })}
+                      onClick={() => Number(doc.is_note) === 1
+                        ? openNoteReader(doc.id)
+                        : setViewing({
+                            title: doc.title, name: doc.file_name, type: doc.file_type,
+                            viewUrl: documents.viewUrl(doc.id), downloadUrl: documents.downloadUrl(doc.id),
+                          })}
                       className="text-primary-700 hover:text-primary-900" title="View in the system">
                       <Eye size={17} />
                     </button>
@@ -440,7 +662,10 @@ function DocumentsTab() {
                       className="text-blue-600 hover:text-blue-800" title="Download">
                       <Download size={16} />
                     </a>
-                    <button onClick={() => handleEdit(doc)} className="text-gray-400 hover:text-blue-600" title="Edit">
+                    <button
+                      onClick={() => Number(doc.is_note) === 1 ? openEditNote(doc) : handleEdit(doc)}
+                      className="text-gray-400 hover:text-blue-600"
+                      title={Number(doc.is_note) === 1 ? 'Edit this note' : 'Edit'}>
                       <Edit2 size={14} />
                     </button>
                     <button onClick={() => handleDelete(doc.id)} className="text-gray-400 hover:text-red-600" title="Delete">
@@ -455,6 +680,7 @@ function DocumentsTab() {
       </div>
 
       <FileViewer file={viewing} onClose={() => setViewing(null)} />
+      <NoteReader note={readingNote} onClose={() => setReadingNote(null)} onEdit={openEditNote} />
     </div>
   );
 }
@@ -476,6 +702,13 @@ function MeetingNotesTab() {
 
   const emptyForm = { title: '', meeting_date: new Date().toISOString().split('T')[0], subjects: [''], content: '' };
   const [form, setForm] = useState(emptyForm);
+  // Files chosen inside the New Note form. An attachment needs a note id, so these
+  // are held here and uploaded the moment the note is saved - previously you had to
+  // save the note, find it in the list, open it, and only then attach anything.
+  const [formFiles, setFormFiles] = useState([]);
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState('');
+  const formFileRef = useRef(null);
 
   const load = async () => {
     setLoading(true);
@@ -518,35 +751,71 @@ function MeetingNotesTab() {
       subjects: (note.subjects && note.subjects.length > 0) ? note.subjects : [''],
       content: note.content || '',
     });
+    setFormFiles([]);
+    setFormError('');
     setShowForm(true);
   };
 
   const openNew = () => {
     setEditingId(null);
     setForm(emptyForm);
+    setFormFiles([]);
+    setFormError('');
     setShowForm(true);
   };
 
   const handleSave = async () => {
+    if (saving) return;
     const subjects = form.subjects.filter(s => s.trim());
     const payload = { ...form, subjects };
+    setSaving(true);
+    setFormError('');
     try {
+      let noteId = editingId;
       if (editingId) {
         await meetingNotes.update(editingId, payload);
       } else {
-        await meetingNotes.create(payload);
+        const res = await meetingNotes.create(payload);
+        noteId = res.id || res.note_id;
       }
+
+      // Attach whatever was picked in the form. A file that fails is reported by
+      // name rather than swallowed, so nobody thinks it went up when it did not.
+      const failed = [];
+      if (noteId && formFiles.length) {
+        for (const file of formFiles) {
+          try {
+            await meetingNotes.uploadAttachment(noteId, file);
+          } catch {
+            failed.push(file.name);
+          }
+        }
+      }
+
+      if (failed.length) {
+        setFormError(`The note was saved, but these files did not upload: ${failed.join(', ')}. You can attach them again from the note itself.`);
+        setFormFiles([]);
+        if (formFileRef.current) formFileRef.current.value = '';
+        load();
+        setSaving(false);
+        return;
+      }
+
       setShowForm(false);
+      const wasEditing = editingId;
       setEditingId(null);
       setForm(emptyForm);
+      setFormFiles([]);
+      if (formFileRef.current) formFileRef.current.value = '';
       load();
-      if (expandedId === editingId) {
-        const res = await meetingNotes.view(editingId);
+      if (expandedId && expandedId === (wasEditing || noteId)) {
+        const res = await meetingNotes.view(expandedId);
         setExpandedNote(res.note);
       }
     } catch (err) {
-      alert(err.message || 'Save failed');
+      setFormError(err.message || 'Save failed');
     }
+    setSaving(false);
   };
 
   const handleDelete = async (id) => {
@@ -600,7 +869,7 @@ function MeetingNotesTab() {
       @media print { body { margin: 0; } }
     </style></head><body>
       <h1>${note.title}</h1>
-      <div class="meta">Date: ${new Date(note.meeting_date).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })} | By: ${note.created_by_name || 'Unknown'}</div>
+      <div class="meta">Date: ${fmtLongDate(note.meeting_date)} | By: ${note.created_by_name || 'Unknown'}</div>
       ${subjects.length > 0 ? `<div class="subjects"><h3>Subjects</h3><ul>${subjects.map(s => `<li>${s}</li>`).join('')}</ul></div>` : ''}
       <div class="content">${(note.content || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
       <div class="footer">Hallelujah In The City - Meeting Notes</div>
@@ -629,11 +898,11 @@ function MeetingNotesTab() {
 
       {/* New / Edit Note Form */}
       {showForm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setShowForm(false)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => !saving && setShowForm(false)}>
           <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between p-4 border-b">
               <h3 className="text-lg font-bold">{editingId ? 'Edit Meeting Note' : 'New Meeting Note'}</h3>
-              <button onClick={() => setShowForm(false)} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
+              <button onClick={() => !saving && setShowForm(false)} disabled={saving} className="text-gray-400 hover:text-gray-600 disabled:opacity-40"><X size={20} /></button>
             </div>
             <div className="p-4 space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -687,10 +956,38 @@ function MeetingNotesTab() {
                 />
               </div>
 
+              {/* Attach files right here, instead of having to save first and come back */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Attach files (optional)</label>
+                <input ref={formFileRef} type="file" multiple
+                  onChange={e => setFormFiles(Array.from(e.target.files))}
+                  className="input" />
+                {formFiles.length > 0 ? (
+                  <ul className="mt-2 space-y-1">
+                    {formFiles.map((f, i) => (
+                      <li key={i} className="flex items-center gap-2 text-xs text-gray-600">
+                        <Paperclip size={12} className="text-gray-400" />
+                        <span className="truncate">{f.name}</span>
+                        <span className="text-gray-400">{formatSize(f.size)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-xs text-gray-500 mt-1">
+                    Pick as many as you like - agendas, photos, a signed sheet. They upload
+                    as soon as the note is saved, and you can add more later from the note itself.
+                  </p>
+                )}
+              </div>
+
+              {formError && <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{formError}</p>}
+
               <div className="flex justify-end gap-2 pt-2">
-                <button onClick={() => setShowForm(false)} className="btn bg-gray-100 text-gray-700">Cancel</button>
-                <button onClick={handleSave} disabled={!form.title || !form.meeting_date} className="btn btn-primary">
-                  <Save size={14} /> {editingId ? 'Update Note' : 'Save Note'}
+                <button onClick={() => setShowForm(false)} disabled={saving} className="btn bg-gray-100 text-gray-700 disabled:opacity-50">Cancel</button>
+                <button onClick={handleSave} disabled={!form.title || !form.meeting_date || saving} className="btn btn-primary disabled:opacity-60">
+                  <Save size={14} /> {saving
+                    ? (formFiles.length ? 'Saving and uploading...' : 'Saving...')
+                    : (editingId ? 'Update Note' : 'Save Note')}
                 </button>
               </div>
             </div>
@@ -723,7 +1020,7 @@ function MeetingNotesTab() {
                 <div className="flex-1 min-w-0">
                   <div className="font-medium text-gray-900">{note.title}</div>
                   <div className="flex items-center gap-3 text-xs text-gray-500 flex-wrap mt-1">
-                    <span className="flex items-center gap-1"><Calendar size={12} /> {new Date(note.meeting_date).toLocaleDateString()}</span>
+                    <span className="flex items-center gap-1"><Calendar size={12} /> {fmtServiceDate(note.meeting_date)}</span>
                     <span className="flex items-center gap-1"><User size={12} /> {note.created_by_name}</span>
                     {note.subjects && note.subjects.length > 0 && (
                       <span>{note.subjects.length} subject{note.subjects.length > 1 ? 's' : ''}</span>
@@ -829,8 +1126,8 @@ function MeetingNotesTab() {
 
                       {/* Meta */}
                       <div className="text-xs text-gray-400 pt-2 border-t flex gap-4 flex-wrap">
-                        <span>Created: {new Date(expandedNote.created_at).toLocaleString()}</span>
-                        {expandedNote.updated_by_name && <span>Last edited by: {expandedNote.updated_by_name} at {new Date(expandedNote.updated_at).toLocaleString()}</span>}
+                        <span>Created: {formatStampChurch(expandedNote.created_at)}</span>
+                        {expandedNote.updated_by_name && <span>Last edited by: {expandedNote.updated_by_name} at {formatStampChurch(expandedNote.updated_at)}</span>}
                       </div>
                     </div>
                   ) : null}

@@ -578,6 +578,16 @@ switch ($method) {
             $method = in_array($data['method'] ?? '', ['manual', 'offline']) ? $data['method'] : 'manual';
             $checkinTime = !empty($data['check_in_time']) ? churchToUtc($data['check_in_time']) : utcNow();
 
+            // An offline sync can carry someone who has since been deleted. Without
+            // this the insert died on the foreign key and the browser got a blank
+            // 500 - the sync just said "1 check-in failed" with no reason.
+            $who = $db->prepare("SELECT first_name, last_name FROM members WHERE id = ?");
+            $who->execute([$memberId]);
+            $m = $who->fetch();
+            if (!$m) {
+                jsonResponse(['error' => 'That person is no longer in the system (member #' . $memberId . '), so this check-in cannot be saved.'], 404);
+            }
+
             $stmt = $db->prepare("
                 INSERT INTO checkin_logs (member_id, service_id, check_in_time, checkin_method, checked_in_by, notes)
                 VALUES (?, ?, ?, ?, ?, ?)
@@ -595,10 +605,6 @@ switch ($method) {
                 ");
                 $attStmt->execute([$serviceId, $memberId, $attStatus, $checkinTime, $currentUser['user_id']]);
             }
-
-            $stmt = $db->prepare("SELECT first_name, last_name FROM members WHERE id = ?");
-            $stmt->execute([$memberId]);
-            $m = $stmt->fetch();
 
             jsonResponse(['message' => ($m['first_name'] ?? '') . ' ' . ($m['last_name'] ?? '') . ' checked in']);
 
