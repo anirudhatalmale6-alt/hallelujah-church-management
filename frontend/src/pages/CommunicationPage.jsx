@@ -102,6 +102,8 @@ function ComposeTab({ setError, setMessage }) {
   const [scheduledAt, setScheduledAt] = useState('');
   const [recurringPattern, setRecurringPattern] = useState('');
   const [sending, setSending] = useState(false);
+  // Grouped reasons for any email that the provider refused on the last send.
+  const [sendProblems, setSendProblems] = useState([]);
   const [memberSearch, setMemberSearch] = useState('');
   const [configStatus, setConfigStatus] = useState(null);
   const [consentStats, setConsentStats] = useState(null);
@@ -206,6 +208,9 @@ function ComposeTab({ setError, setMessage }) {
       }
       const result = await msgApi.send(sendData);
       setMessage((result && result.message) ? result.message : 'Message sent!');
+      // Emails failing used to be a silent number. Show the actual reason now, so a
+      // provider that has stopped accepting mail is obvious the moment it happens.
+      setSendProblems((result && result.email_problems) || []);
       setSubject('');
       setBody('');
       setRecipientIds([]);
@@ -228,7 +233,24 @@ function ComposeTab({ setError, setMessage }) {
       {notConfigured && (
         <div className="mb-4 p-4 bg-amber-50 border border-amber-200 rounded-xl">
           <p className="text-amber-800 font-medium">Email not configured yet</p>
-          <p className="text-amber-600 text-sm">Go to Settings tab to add your SendGrid API key before sending emails.</p>
+          <p className="text-amber-600 text-sm">Go to the Settings tab, pick an email service and add its key, before sending emails.</p>
+        </div>
+      )}
+
+      {sendProblems.length > 0 && (
+        <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-xl">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-red-800 font-medium">Some emails did not go out</p>
+              <ul className="text-red-700 text-sm mt-1 space-y-1">
+                {sendProblems.map((p, i) => (
+                  <li key={i}>{p.count} {p.count === 1 ? 'email' : 'emails'}: {p.reason}</li>
+                ))}
+              </ul>
+              <p className="text-red-600 text-xs mt-2">The texts are separate and are not affected by this.</p>
+            </div>
+            <button onClick={() => setSendProblems([])} className="text-red-400 hover:text-red-600 flex-shrink-0"><X size={18} /></button>
+          </div>
         </div>
       )}
 
@@ -620,6 +642,26 @@ function SentTab({ setError }) {
             <div className="border rounded-lg p-4 bg-white">
               <div className="text-sm text-gray-700" dangerouslySetInnerHTML={{ __html: viewData.message?.body || '' }} />
             </div>
+            {/* When something failed, say WHY right at the top. A run of failures is
+                almost always one shared cause, so the reasons are grouped rather than
+                repeated once per person. */}
+            {(() => {
+              const reasons = {};
+              (viewData.recipients || []).filter(r => r.status === 'failed' && r.error_message)
+                .forEach(r => { reasons[r.error_message] = (reasons[r.error_message] || 0) + 1; });
+              const list = Object.entries(reasons).sort((a, b) => b[1] - a[1]);
+              if (!list.length) return null;
+              return (
+                <div className="p-4 bg-red-50 border border-red-200 rounded-xl">
+                  <p className="text-red-800 font-medium text-sm mb-1">Why these did not go out</p>
+                  <ul className="text-sm text-red-700 space-y-1">
+                    {list.map(([why, n]) => (
+                      <li key={why}>{n} {n === 1 ? 'message' : 'messages'}: {why}</li>
+                    ))}
+                  </ul>
+                </div>
+              );
+            })()}
             {viewData.recipients && viewData.recipients.length > 0 && (
               <div>
                 <h4 className="text-sm font-semibold text-gray-700 mb-2">Recipients ({viewData.recipients.length})</h4>
@@ -636,10 +678,15 @@ function SentTab({ setError }) {
                     <tbody className="divide-y">
                       {viewData.recipients.map(r => (
                         <tr key={r.id}>
-                          <td className="px-3 py-1.5">{r.name}</td>
-                          <td className="px-3 py-1.5 capitalize">{r.channel}</td>
-                          <td className="px-3 py-1.5 text-gray-500">{r.email || r.phone}</td>
-                          <td className="px-3 py-1.5 text-center">
+                          <td className="px-3 py-1.5">
+                            {r.name}
+                            {r.status === 'failed' && r.error_message && (
+                              <div className="text-xs text-red-600 mt-0.5">{r.error_message}</div>
+                            )}
+                          </td>
+                          <td className="px-3 py-1.5 capitalize align-top">{r.channel}</td>
+                          <td className="px-3 py-1.5 text-gray-500 align-top">{r.email || r.phone}</td>
+                          <td className="px-3 py-1.5 text-center align-top">
                             {r.status === 'sent' ? <CheckCircle size={14} className="text-green-500 inline" /> : r.status === 'failed' ? <XCircle size={14} className="text-red-500 inline" /> : <Clock size={14} className="text-gray-400 inline" />}
                           </td>
                         </tr>
@@ -827,16 +874,28 @@ function InboxTab({ setError, onRead }) {
 
 function SettingsTab({ setError, setMessage }) {
   const [config, setConfig] = useState({
-    msg_sendgrid_key: '', msg_from_email: '', msg_from_name: '',
+    msg_sendgrid_key: '', msg_brevo_key: '', msg_from_email: '', msg_from_name: '',
     msg_twilio_sid: '', msg_twilio_token: '', msg_twilio_number: '',
   });
+  // Which service the emails actually leave through. Kept separate from the
+  // secrets above because it has to save even when no new key was typed in.
+  const [provider, setProvider] = useState('sendgrid');
+  const [smtp, setSmtp] = useState({ host: '', port: '587', user: '', pass: '', secure: 'tls', passSaved: false });
+  const [saved, setSaved] = useState({ sendgrid: false, brevo: false });
   const [copy, setCopy] = useState({ enabled: false, phone: '', email: '' });
   const [saving, setSaving] = useState(false);
   const [testEmail, setTestEmail] = useState('');
+  const [testing, setTesting] = useState(false);
 
   useEffect(() => {
     msgApi.config().then(d => {
       setConfig(prev => ({ ...prev, msg_from_email: d.from_email || '', msg_from_name: d.from_name || '' }));
+      setProvider(d.email_provider || 'sendgrid');
+      setSaved({ sendgrid: !!d.sendgrid_saved, brevo: !!d.brevo_saved });
+      setSmtp({
+        host: d.smtp_host || '', port: d.smtp_port || '587', user: d.smtp_user || '',
+        pass: '', secure: d.smtp_secure || 'tls', passSaved: !!d.smtp_pass_saved,
+      });
       setCopy({ enabled: !!d.copy_enabled, phone: d.copy_phone || '', email: d.copy_email || '' });
     }).catch(() => {});
   }, []);
@@ -844,6 +903,14 @@ function SettingsTab({ setError, setMessage }) {
   const handleSave = async () => {
     const toSave = {};
     Object.entries(config).forEach(([k, v]) => { if (v && v.trim()) toSave[k] = v.trim(); });
+    toSave.msg_email_provider = provider;
+    toSave.msg_smtp_host = (smtp.host || '').trim();
+    toSave.msg_smtp_port = (smtp.port || '').trim();
+    toSave.msg_smtp_user = (smtp.user || '').trim();
+    toSave.msg_smtp_secure = smtp.secure;
+    // Only send the mailbox password when a new one was typed, so re-saving the
+    // page does not wipe the password already on file.
+    if (smtp.pass && smtp.pass.trim()) toSave.msg_smtp_pass = smtp.pass.trim();
     // Monitoring-copy settings always go up (so they can be turned off / cleared).
     toSave.msg_copy_enabled = copy.enabled ? '1' : '';
     toSave.msg_copy_phone = (copy.phone || '').trim();
@@ -852,29 +919,123 @@ function SettingsTab({ setError, setMessage }) {
     try {
       const result = await msgApi.saveConfig(toSave);
       setMessage(result.message || 'Configuration saved!');
+      if (config.msg_sendgrid_key) setSaved(s => ({ ...s, sendgrid: true }));
+      if (config.msg_brevo_key) setSaved(s => ({ ...s, brevo: true }));
+      if (smtp.pass) setSmtp(s => ({ ...s, pass: '', passSaved: true }));
+      setConfig(c => ({ ...c, msg_sendgrid_key: '', msg_brevo_key: '' }));
     } catch (err) { setError(err.message); }
     setSaving(false);
   };
 
   const handleTest = async () => {
     if (!testEmail) { setError('Enter an email to test'); return; }
+    setTesting(true);
     try {
       const result = await msgApi.testEmail(testEmail);
       if (result.success) setMessage(result.message || 'Test email sent! Check your inbox.');
       else setError(result.message || 'Failed to send test email.');
     } catch (err) { setError(err.message); }
+    setTesting(false);
   };
+
+  const PROVIDERS = [
+    { id: 'brevo', name: 'Brevo', note: 'Free forever - 300 emails a day. Recommended.' },
+    { id: 'sendgrid', name: 'SendGrid', note: 'Paid once the free credits run out.' },
+    { id: 'smtp', name: 'Our own mailbox', note: 'Send through your church email account.' },
+  ];
 
   return (
     <div className="max-w-2xl">
       <div className="card mb-6">
-        <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2"><Mail size={20} /> Email Settings (SendGrid)</h3>
+        <h3 className="text-lg font-semibold text-gray-900 mb-1 flex items-center gap-2"><Mail size={20} /> Email Settings</h3>
+        <p className="text-sm text-gray-500 mb-4">Choose which service your church emails are sent through. You only fill in the one you pick.</p>
         <div className="space-y-4">
-          <div>
-            <label className="label">SendGrid API Key</label>
-            <input type="password" className="input" placeholder="SG.xxxxxxxxxxxx" value={config.msg_sendgrid_key} onChange={e => setConfig(c => ({ ...c, msg_sendgrid_key: e.target.value }))} />
-            <p className="text-xs text-gray-400 mt-1">Get your free API key at sendgrid.com</p>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {PROVIDERS.map(p => (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => {
+                  setProvider(p.id);
+                  // Fill in the Hostinger settings the church is already on, so the
+                  // only thing left to type is the mailbox password.
+                  if (p.id === 'smtp') {
+                    setSmtp(s => s.host ? s : {
+                      ...s,
+                      host: 'smtp.hostinger.com',
+                      port: '465',
+                      secure: 'ssl',
+                      user: s.user || (config.msg_from_email || ''),
+                    });
+                  }
+                }}
+                className={`text-left rounded-lg border-2 p-3 transition ${provider === p.id ? 'border-blue-600 bg-blue-50' : 'border-gray-200 hover:border-gray-300'}`}
+              >
+                <div className="text-sm font-semibold text-gray-900 flex items-center gap-1">
+                  {provider === p.id && <Check size={14} className="text-blue-600 flex-shrink-0" />}
+                  {p.name}
+                </div>
+                <div className="text-xs text-gray-500 mt-1">{p.note}</div>
+              </button>
+            ))}
           </div>
+
+          {provider === 'brevo' && (
+            <div>
+              <label className="label">Brevo API Key</label>
+              <input type="password" className="input" placeholder={saved.brevo ? 'A key is already saved - type a new one to replace it' : 'xkeysib-xxxxxxxxxxxx'} value={config.msg_brevo_key} onChange={e => setConfig(c => ({ ...c, msg_brevo_key: e.target.value }))} />
+              <p className="text-xs text-gray-400 mt-1">
+                Free account at brevo.com &rarr; SMTP &amp; API &rarr; Generate a new API key. 300 emails a day, free forever.
+                {saved.brevo && <span className="text-green-600 font-medium"> A key is saved.</span>}
+              </p>
+            </div>
+          )}
+
+          {provider === 'sendgrid' && (
+            <div>
+              <label className="label">SendGrid API Key</label>
+              <input type="password" className="input" placeholder={saved.sendgrid ? 'A key is already saved - type a new one to replace it' : 'SG.xxxxxxxxxxxx'} value={config.msg_sendgrid_key} onChange={e => setConfig(c => ({ ...c, msg_sendgrid_key: e.target.value }))} />
+              <p className="text-xs text-gray-400 mt-1">
+                sendgrid.com. Note: once the free credits are used up SendGrid refuses every email until the plan is paid.
+                {saved.sendgrid && <span className="text-green-600 font-medium"> A key is saved.</span>}
+              </p>
+            </div>
+          )}
+
+          {provider === 'smtp' && (
+            <div className="space-y-4 rounded-lg bg-gray-50 p-4">
+              <p className="text-xs text-gray-500">Send through a mailbox the church already owns. For a Hostinger / Titan mailbox use smtp.hostinger.com, port 465, SSL.</p>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="sm:col-span-2">
+                  <label className="label">Mail server (SMTP host)</label>
+                  <input className="input" placeholder="smtp.hostinger.com" value={smtp.host} onChange={e => setSmtp(s => ({ ...s, host: e.target.value }))} />
+                </div>
+                <div>
+                  <label className="label">Port</label>
+                  <input className="input" placeholder="465" value={smtp.port} onChange={e => setSmtp(s => ({ ...s, port: e.target.value }))} />
+                </div>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div>
+                  <label className="label">Security</label>
+                  <select className="input" value={smtp.secure} onChange={e => setSmtp(s => ({ ...s, secure: e.target.value }))}>
+                    <option value="ssl">SSL (port 465)</option>
+                    <option value="tls">STARTTLS (port 587)</option>
+                    <option value="none">None</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="label">Mailbox address</label>
+                  <input className="input" placeholder="Info@hallelujahinthecity.org" value={smtp.user} onChange={e => setSmtp(s => ({ ...s, user: e.target.value }))} />
+                </div>
+                <div>
+                  <label className="label">Mailbox password</label>
+                  <input type="password" className="input" placeholder={smtp.passSaved ? 'Already saved - type to replace' : 'Mailbox password'} value={smtp.pass} onChange={e => setSmtp(s => ({ ...s, pass: e.target.value }))} />
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="label">From Email</label>
@@ -889,8 +1050,9 @@ function SettingsTab({ setError, setMessage }) {
             <div className="flex-1">
               <label className="label">Test Email</label>
               <input className="input" placeholder="your@email.com" value={testEmail} onChange={e => setTestEmail(e.target.value)} />
+              <p className="text-xs text-gray-400 mt-1">Save your settings first, then send yourself a test. If it fails you will see the exact reason.</p>
             </div>
-            <button onClick={handleTest} className="btn-secondary">Send Test</button>
+            <button onClick={handleTest} disabled={testing} className="btn-secondary">{testing ? 'Sending...' : 'Send Test'}</button>
           </div>
         </div>
       </div>
