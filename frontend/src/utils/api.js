@@ -427,6 +427,10 @@ export const messaging = {
   thread: (phone, memberId) => request('messaging.php', { params: { action: 'thread', phone, id: memberId } }),
   reply: (data) => request('messaging.php', { method: 'POST', body: data, params: { action: 'reply' } }),
   setSmsStatus: (phone, status) => request('messaging.php', { method: 'POST', body: { phone, status }, params: { action: 'set_status' } }),
+  // Unfinished messages. saveDraft with a draft_id updates that draft in place.
+  drafts: () => request('messaging.php', { params: { action: 'drafts' } }),
+  getDraft: (id) => request('messaging.php', { params: { action: 'draft', id } }),
+  saveDraft: (data) => request('messaging.php', { method: 'POST', body: data, params: { action: 'save_draft' } }),
 };
 
 // Surveys
@@ -511,6 +515,8 @@ export const documents = {
   update: (id, data) => request('documents.php', { method: 'PUT', body: data, params: { id } }),
   delete: (id) => request('documents.php', { method: 'DELETE', params: { id } }),
   bulkDelete: (ids) => request('documents.php', { method: 'DELETE', params: { ids: ids.join(',') } }),
+  // Move a whole selection into another folder in one call.
+  bulkMove: (ids, category) => request('documents.php', { method: 'PUT', body: { ids, category }, params: { action: 'bulk_move' } }),
   downloadUrl: (id) => `${API_BASE}/documents.php?action=download&id=${id}&token=${getToken()}`,
   viewUrl: (id) => `${API_BASE}/documents.php?action=view&id=${id}&token=${getToken()}`,
 };

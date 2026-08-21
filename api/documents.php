@@ -302,6 +302,52 @@ switch ($method) {
         break;
 
     case 'PUT':
+        // Move a whole selection into another folder in one go. Doing it one file
+        // at a time through the Edit form is fine for one, painful for twenty.
+        if ($action === 'bulk_move') {
+            $data = getRequestBody();
+            $category = trim((string)($data['category'] ?? ''));
+            $valid = ['sermon', 'meeting_notes', 'policy', 'form', 'other'];
+            if (!in_array($category, $valid, true)) jsonResponse(['error' => 'Pick a folder to move them into.'], 400);
+
+            $ids = [];
+            foreach ((array)($data['ids'] ?? []) as $raw) {
+                $n = (int)$raw;
+                if ($n > 0) $ids[] = $n;
+            }
+            $ids = array_values(array_unique($ids));
+            if (!$ids) jsonResponse(['error' => 'No documents selected.'], 400);
+
+            // A leader may only move files out of the folders they can actually see,
+            // otherwise the folder permissions could be side-stepped by a bulk move.
+            if (!in_array($currentUser['role'], ['pastor', 'admin'])) {
+                $fStmt = $db->prepare("SELECT folder FROM user_document_folders WHERE user_id = ?");
+                $fStmt->execute([$currentUser['user_id']]);
+                $allowed = array_column($fStmt->fetchAll(), 'folder');
+                if (empty($allowed) || !in_array($category, $allowed, true)) {
+                    jsonResponse(['error' => 'You do not have access to that folder.'], 403);
+                }
+                $ph = implode(',', array_fill(0, count($ids), '?'));
+                $aph = implode(',', array_fill(0, count($allowed), '?'));
+                $chk = $db->prepare("SELECT COUNT(*) FROM documents WHERE id IN ($ph) AND category NOT IN ($aph)");
+                $chk->execute(array_merge($ids, $allowed));
+                if ((int)$chk->fetchColumn() > 0) {
+                    jsonResponse(['error' => 'Some of those files are in a folder you do not have access to.'], 403);
+                }
+            }
+
+            $ph = implode(',', array_fill(0, count($ids), '?'));
+            $stmt = $db->prepare("UPDATE documents SET category = ? WHERE id IN ($ph)");
+            $stmt->execute(array_merge([$category], $ids));
+            $moved = $stmt->rowCount();
+
+            jsonResponse([
+                'message' => $moved . ' ' . ($moved === 1 ? 'item' : 'items') . ' moved',
+                'moved' => $moved,
+                'category' => $category,
+            ]);
+        }
+
         $id = (int)($_GET['id'] ?? 0);
         if (!$id) jsonResponse(['error' => 'ID required'], 400);
 

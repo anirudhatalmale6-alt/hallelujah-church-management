@@ -134,18 +134,35 @@ export default function FollowupPage() {
     setSaving(true);
     try {
       if (editing) {
-        await followups.update(editing, {
+        // The first person ticked keeps this follow-up; anyone else ticked gets
+        // their own copy, exactly the way creating one for several people works.
+        const chosen = form.assigned_to_list.length
+          ? form.assigned_to_list
+          : (form.assigned_to ? [String(form.assigned_to)] : ['']);
+        const [keep, ...extra] = chosen;
+        const shared = {
           subject: form.subject, type: form.type,
           custom_type: form.type === 'other' ? form.custom_type || null : null,
           priority: form.priority,
-          assigned_to: form.assigned_to || null,
           notes: form.notes, due_date: form.due_date || null, status: form.status,
           can_edit: form.can_edit ? 1 : 0,
           remind_email: form.remind_email ? 1 : 0,
           remind_sms: form.remind_sms ? 1 : 0,
           reminder_days_before: parseInt(form.reminder_days_before) || 7,
           recurrence: form.recurrence || 'none',
-        });
+        };
+        await followups.update(editing, { ...shared, assigned_to: keep || null });
+        for (const uid of extra) {
+          if (!uid) continue;
+          await followups.create({
+            ...shared,
+            member_id: form.member_id || null,
+            assigned_to: uid,
+            // A copy starts fresh - it should not inherit a repeat schedule that
+            // is already owned by the original.
+            recurrence: 'none',
+          });
+        }
       } else {
         const assignees = form.assigned_to_list.length > 0 ? form.assigned_to_list : [form.assigned_to || null];
         for (const uid of assignees) {
@@ -184,7 +201,8 @@ export default function FollowupPage() {
       subject: f.subject || `${f.first_name || ''} ${f.last_name || ''}`.trim(),
       member_id: f.member_id || '', member_name: `${f.first_name || ''} ${f.last_name || ''}`.trim(),
       type: f.type, custom_type: f.custom_type || '', priority: f.priority, assigned_to: f.assigned_to || '',
-      assigned_to_list: [],
+      // Tick whoever it is already with, so the list opens showing the truth.
+      assigned_to_list: f.assigned_to ? [String(f.assigned_to)] : [],
       notes: f.notes || '', due_date: f.due_date || '', status: f.status,
       can_edit: !!f.can_edit,
       remind_email: !!Number(f.remind_email), remind_sms: !!Number(f.remind_sms),
@@ -400,34 +418,51 @@ export default function FollowupPage() {
               )}
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Assign To{!editing && usersList.length > 1 ? ' (select one or more)' : ''}</label>
-                {editing ? (
-                  <select value={form.assigned_to} onChange={e => setForm(f => ({ ...f, assigned_to: e.target.value }))} className="input">
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Assign To{usersList.length > 1 ? ' (select one or more)' : ''}
+                </label>
+                {/* Editing used to drop down to a single name, so a follow-up could
+                    never be handed to a second person after it was created. Same
+                    checkbox list in both modes now - except for a leader editing
+                    their own task, since only an admin may create the extra copies. */}
+                {editing && !effectiveAdmin ? (
+                  <select value={form.assigned_to} onChange={e => setForm(f => ({ ...f, assigned_to: e.target.value, assigned_to_list: e.target.value ? [String(e.target.value)] : [] }))} className="input">
                     <option value="">-- Unassigned --</option>
                     {usersList.map(u => <option key={u.id} value={u.id}>{u.name} ({u.role})</option>)}
                   </select>
                 ) : (
-                  <div className="border border-gray-300 rounded-lg p-2 space-y-1 max-h-40 overflow-y-auto">
-                    {usersList.map(u => (
-                      <label key={u.id} className="flex items-center gap-2 px-2 py-1 rounded hover:bg-gray-50 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={form.assigned_to_list.includes(String(u.id))}
-                          onChange={e => {
-                            const uid = String(u.id);
-                            setForm(f => ({
-                              ...f,
-                              assigned_to_list: e.target.checked
-                                ? [...f.assigned_to_list, uid]
-                                : f.assigned_to_list.filter(id => id !== uid),
-                            }));
-                          }}
-                          className="w-4 h-4 text-primary-600 rounded"
-                        />
-                        <span className="text-sm text-gray-700">{u.name} ({u.role})</span>
-                      </label>
-                    ))}
-                  </div>
+                <div className="border border-gray-300 rounded-lg p-2 space-y-1 max-h-40 overflow-y-auto">
+                  {usersList.map(u => (
+                    <label key={u.id} className="flex items-center gap-2 px-2 py-1 rounded hover:bg-gray-50 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={form.assigned_to_list.includes(String(u.id))}
+                        onChange={e => {
+                          const uid = String(u.id);
+                          setForm(f => ({
+                            ...f,
+                            assigned_to_list: e.target.checked
+                              ? [...f.assigned_to_list, uid]
+                              : f.assigned_to_list.filter(id => id !== uid),
+                          }));
+                        }}
+                        className="w-4 h-4 text-primary-600 rounded"
+                      />
+                      <span className="text-sm text-gray-700">{u.name} ({u.role})</span>
+                    </label>
+                  ))}
+                </div>
+                )}
+                {editing && form.assigned_to_list.length > 1 && (
+                  <p className="text-xs text-gray-500 mt-1">
+                    This one stays with {usersList.find(u => String(u.id) === form.assigned_to_list[0])?.name || 'the first person ticked'}.
+                    {' '}The other {form.assigned_to_list.length - 1 === 1
+                      ? 'person gets their own copy of it.'
+                      : `${form.assigned_to_list.length - 1} people each get their own copy of it.`}
+                  </p>
+                )}
+                {editing && form.assigned_to_list.length === 0 && (
+                  <p className="text-xs text-gray-500 mt-1">Nobody ticked means this follow-up goes back to unassigned.</p>
                 )}
               </div>
 

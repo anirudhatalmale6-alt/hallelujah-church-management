@@ -219,6 +219,7 @@ function DocumentsTab() {
   const [viewing, setViewing] = useState(null);
   const [selectedIds, setSelectedIds] = useState([]);
   const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [bulkMoving, setBulkMoving] = useState(false);
 
   const [uploadFiles, setUploadFiles] = useState([]);
   const [uploadCategory, setUploadCategory] = useState('other');
@@ -389,6 +390,25 @@ function DocumentsTab() {
       alert(err.message || 'Delete failed');
     }
     setBulkDeleting(false);
+  };
+
+  // Move the whole selection into another folder. One file at a time still works
+  // through Edit; this is for when there are twenty of them.
+  const handleBulkMove = async (category) => {
+    if (!category || !selectedIds.length) return;
+    const n = selectedIds.length;
+    const label = CATEGORY_LABELS[category] || category;
+    if (!confirm(`Move ${n} ${n === 1 ? 'item' : 'items'} into ${label}?`)) return;
+    setBulkMoving(true);
+    try {
+      const res = await documents.bulkMove(selectedIds, category);
+      setSelectedIds([]);
+      await load();
+      alert(res.message ? `${res.message} into ${label}.` : 'Moved.');
+    } catch (err) {
+      alert(err.message || 'Move failed');
+    }
+    setBulkMoving(false);
   };
 
   const categoryCounts = {};
@@ -573,7 +593,17 @@ function DocumentsTab() {
               {selectedIds.length > 0 ? (
                 <>
                   <span className="text-sm font-medium text-primary-800">{selectedIds.length} selected</span>
-                  <div className="ml-auto flex gap-2">
+                  <div className="ml-auto flex flex-wrap items-center gap-2">
+                    <label className="text-sm text-gray-600">Move to</label>
+                    <select
+                      value=""
+                      disabled={bulkMoving}
+                      onChange={e => { const v = e.target.value; e.target.value = ''; handleBulkMove(v); }}
+                      className="input text-sm w-auto py-1.5"
+                    >
+                      <option value="">{bulkMoving ? 'Moving...' : 'Choose folder...'}</option>
+                      {Object.entries(CATEGORY_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                    </select>
                     <button onClick={() => setSelectedIds([])} className="btn-secondary text-sm">Clear</button>
                     <button onClick={handleBulkDelete} disabled={bulkDeleting} className="btn-danger text-sm">
                       <Trash2 size={14} /> {bulkDeleting ? 'Deleting...' : 'Delete selected'}
@@ -581,7 +611,7 @@ function DocumentsTab() {
                   </div>
                 </>
               ) : (
-                <span className="text-xs text-gray-500">Select all</span>
+                <span className="text-xs text-gray-500">Select all &mdash; then move or delete them together</span>
               )}
             </div>
             {docs.map(doc => (

@@ -13,25 +13,45 @@ import {
 
 const typeColors = { sent: 'bg-green-100 text-green-700', draft: 'bg-gray-100 text-gray-700', queued: 'bg-blue-100 text-blue-700', sending: 'bg-amber-100 text-amber-700', failed: 'bg-red-100 text-red-700' };
 
+// A hand-typed recipient can be a bare string or an already-built object. Both
+// sending and saving a draft need it in the same shape.
+const toContact = (c) => {
+  if (typeof c === 'string') {
+    return c.includes('@') ? { email: c, phone: null, name: c } : { email: null, phone: c, name: c };
+  }
+  return { email: c?.email || null, phone: c?.phone || null, name: c?.name || 'Unknown' };
+};
+
 export default function CommunicationPage() {
   const { isAdmin } = useAuth();
   const [tab, setTab] = useState('compose');
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [unread, setUnread] = useState(0);
+  const [draftCount, setDraftCount] = useState(0);
+  // Set when a draft is opened from the Drafts tab; Compose picks it up and clears it.
+  const [openDraftId, setOpenDraftId] = useState(null);
 
   const refreshUnread = useCallback(async () => {
     try { const r = await msgApi.inboxUnread(); setUnread(r.unread || 0); } catch { /* ignore */ }
   }, []);
 
+  const refreshDrafts = useCallback(async () => {
+    try { const r = await msgApi.drafts(); setDraftCount((r.drafts || []).length); } catch { /* ignore */ }
+  }, []);
+
   useEffect(() => {
     refreshUnread();
+    refreshDrafts();
     const t = setInterval(refreshUnread, 60000);
     return () => clearInterval(t);
-  }, [refreshUnread]);
+  }, [refreshUnread, refreshDrafts]);
+
+  const handleOpenDraft = (id) => { setOpenDraftId(id); setTab('compose'); };
 
   const tabs = [
     { key: 'compose', label: 'Compose', icon: Send },
+    { key: 'drafts', label: 'Drafts', icon: Edit2, badge: draftCount },
     { key: 'inbox', label: 'Inbox', icon: Inbox, badge: unread },
     { key: 'sent', label: 'Sent Messages', icon: Mail },
     { key: 'surveys', label: 'Surveys', icon: ClipboardList },
@@ -75,7 +95,18 @@ export default function CommunicationPage() {
         </div>
       )}
 
-      {tab === 'compose' && <ComposeTab setError={setError} setMessage={setMessage} />}
+      {tab === 'compose' && (
+        <ComposeTab
+          setError={setError}
+          setMessage={setMessage}
+          openDraftId={openDraftId}
+          onDraftOpened={() => setOpenDraftId(null)}
+          onDraftsChanged={refreshDrafts}
+        />
+      )}
+      {tab === 'drafts' && (
+        <DraftsTab setError={setError} setMessage={setMessage} onOpen={handleOpenDraft} onChanged={refreshDrafts} />
+      )}
       {tab === 'inbox' && <InboxTab setError={setError} onRead={refreshUnread} />}
       {tab === 'sent' && <SentTab setError={setError} />}
       {tab === 'surveys' && <SurveysTab setError={setError} setMessage={setMessage} />}
@@ -85,7 +116,7 @@ export default function CommunicationPage() {
   );
 }
 
-function ComposeTab({ setError, setMessage }) {
+function ComposeTab({ setError, setMessage, openDraftId, onDraftOpened, onDraftsChanged }) {
   const { canEdit, hasSectionAccess } = useAuth();
   const canSend = canEdit && hasSectionAccess('communication', 'send');
   const [membersList, setMembersList] = useState([]);
@@ -115,6 +146,10 @@ function ComposeTab({ setError, setMessage }) {
   const [attachmentNames, setAttachmentNames] = useState([]);
   const [attachmentUploading, setAttachmentUploading] = useState(false);
   const [personTypes, setPersonTypes] = useState(DEFAULT_PERSON_TYPES);
+  // The draft currently being worked on, if this started from the Drafts tab.
+  // Saving again updates that same draft rather than making another one.
+  const [draftId, setDraftId] = useState(null);
+  const [savingDraft, setSavingDraft] = useState(false);
 
   useEffect(() => {
     membersApi.list({ limit: 9999, sort: 'last_name' }).then(d => setMembersList(d.members || []));
@@ -123,6 +158,33 @@ function ComposeTab({ setError, setMessage }) {
     msgApi.consentStats().then(d => setConsentStats(d)).catch(() => {});
     loadPersonTypes().then(setPersonTypes).catch(() => {});
   }, []);
+
+  // Put a saved draft back exactly as it was left - message, people, attachments.
+  useEffect(() => {
+    if (!openDraftId) return;
+    let cancelled = false;
+    msgApi.getDraft(openDraftId).then(({ draft }) => {
+      if (cancelled || !draft) return;
+      const saved = draft.recipients_saved || {};
+      setDraftId(draft.id);
+      setMessageType(draft.message_type || 'email');
+      setSubject(draft.subject || '');
+      // The body is stored the way it will be sent (<br> for email), so turn it
+      // back into plain line breaks for the text box.
+      setBody(String(draft.body || '').replace(/<br\s*\/?>/gi, '\n'));
+      setMode(draft.recipient_type === 'direct' ? 'direct' : 'people');
+      setRecipientIds((saved.recipient_ids || []).map(Number));
+      setDirectContacts(saved.direct_contacts || []);
+      setAttachmentNames(draft.attachment_names || []);
+      setSendType(saved.send_type || 'now');
+      setScheduledAt(saved.scheduled_at || '');
+      setRecurringPattern(saved.recurring_pattern || '');
+      setSendProblems([]);
+      setMessage('Draft opened. Finish it and send, or save it again.');
+    }).catch(err => setError(err.message || 'Could not open that draft.'))
+      .finally(() => { if (!cancelled) onDraftOpened && onDraftOpened(); });
+    return () => { cancelled = true; };
+  }, [openDraftId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const filteredMembers = membersList.filter(m => {
     if (!memberSearch) return true;
@@ -164,6 +226,38 @@ function ComposeTab({ setError, setMessage }) {
     return recipientIds.length;
   };
 
+  // Park the message half-finished. Deliberately no validation beyond "there is
+  // something here" - the whole point of a draft is that it is not ready yet.
+  const handleSaveDraft = async () => {
+    if (savingDraft) return;
+    if (!subject.trim() && !body.trim()) { setError('Write a subject or a message first, then it can be saved.'); return; }
+    const contacts = [...directContacts];
+    if (mode === 'direct' && directInput.trim()) { contacts.push(directInput.trim()); setDirectContacts(contacts); setDirectInput(''); }
+    setSavingDraft(true);
+    setError('');
+    try {
+      const res = await msgApi.saveDraft({
+        draft_id: draftId || undefined,
+        message_type: messageType,
+        send_type: sendType,
+        subject: subject || '',
+        body: messageType === 'email' ? (body || '').replace(/\n/g, '<br>') : (body || ''),
+        recipient_type: mode === 'direct' ? 'direct' : 'individual',
+        recipient_ids: mode === 'people' ? recipientIds : [],
+        direct_contacts: mode === 'direct' ? contacts.map(toContact) : [],
+        scheduled_at: sendType === 'scheduled' ? scheduledAt : null,
+        recurring_pattern: sendType === 'recurring' ? recurringPattern : null,
+        attachment_names: attachmentNames,
+      });
+      setDraftId(res.draft_id);
+      setMessage('Saved to Drafts. You can come back and finish it any time.');
+      onDraftsChanged && onDraftsChanged();
+    } catch (err) {
+      setError(err.message || 'Could not save the draft.');
+    }
+    setSavingDraft(false);
+  };
+
   const handleSend = async () => {
     if (!body.trim()) { setError('Message body is required'); return; }
     if (messageType === 'email' && !subject.trim()) { setError('Subject is required for email'); return; }
@@ -193,13 +287,10 @@ function ComposeTab({ setError, setMessage }) {
         attachment_name: attachmentNames.length > 0 ? attachmentNames[0] : null,
         attachment_names: attachmentNames.length > 0 ? attachmentNames : null,
       };
+      // If this started life as a draft, sending it finishes it off.
+      if (draftId) sendData.draft_id = draftId;
       if (mode === 'direct') {
-        sendData.direct_contacts = (finalDirectContacts || []).map(c => {
-          if (typeof c === 'string') {
-            return c.includes('@') ? { email: c, phone: null, name: c } : { email: null, phone: c, name: c };
-          }
-          return { email: c?.email || null, phone: c?.phone || null, name: c?.name || 'Unknown' };
-        });
+        sendData.direct_contacts = (finalDirectContacts || []).map(toContact);
         if (saveToContacts && saveContactName && saveContactName.trim()) {
           sendData.save_to_contacts = true;
           sendData.save_contact_name = saveContactName.trim();
@@ -220,6 +311,7 @@ function ComposeTab({ setError, setMessage }) {
       setSaveContactName('');
       setAttachmentNames([]);
       setRecurringPattern('');
+      if (draftId) { setDraftId(null); onDraftsChanged && onDraftsChanged(); }
     } catch (err) {
       setError(err && err.message ? err.message : 'Failed to send. Please try again.');
     }
@@ -455,10 +547,18 @@ function ComposeTab({ setError, setMessage }) {
                 {getRecipientCount()} recipient{getRecipientCount() !== 1 ? 's' : ''}
               </div>
               {canSend ? (
-                <button onClick={handleSend} disabled={sending || notConfigured} className="btn-primary">
-                  {sending ? <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" /> : <Send size={16} />}
-                  {sendType === 'now' ? 'Send Now' : 'Schedule'}
-                </button>
+                <div className="flex items-center gap-2">
+                  {/* Not ready to send yet? Park it. Saving again updates the same
+                      draft instead of leaving copies behind. */}
+                  <button onClick={handleSaveDraft} disabled={savingDraft} className="btn-secondary">
+                    {savingDraft ? <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600" /> : <Edit2 size={16} />}
+                    {draftId ? 'Update draft' : 'Save as draft'}
+                  </button>
+                  <button onClick={handleSend} disabled={sending || notConfigured} className="btn-primary">
+                    {sending ? <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" /> : <Send size={16} />}
+                    {sendType === 'now' ? 'Send Now' : 'Schedule'}
+                  </button>
+                </div>
               ) : (
                 <span className="text-sm text-gray-400 italic">View only — you don't have permission to send messages.</span>
               )}
@@ -534,6 +634,93 @@ function ComposeTab({ setError, setMessage }) {
         )}
       </div>
     </>
+  );
+}
+
+/* ─── Drafts Tab ───
+   Messages that were started but not sent. Nothing here has gone out to anybody. */
+function DraftsTab({ setError, setMessage, onOpen, onChanged }) {
+  const { canEdit, hasSectionAccess } = useAuth();
+  const canSend = canEdit && hasSectionAccess('communication', 'send');
+  const [drafts, setDrafts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [deletingId, setDeletingId] = useState(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try { const d = await msgApi.drafts(); setDrafts(d.drafts || []); }
+    catch (err) { setError(err.message || 'Could not load drafts.'); }
+    setLoading(false);
+  }, [setError]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleDelete = async (d) => {
+    if (!confirm(`Delete this draft${d.subject ? ` ("${d.subject}")` : ''}? It has not been sent to anyone.`)) return;
+    setDeletingId(d.id);
+    try {
+      await msgApi.delete(d.id);
+      setMessage('Draft deleted.');
+      await load();
+      onChanged && onChanged();
+    } catch (err) { setError(err.message || 'Could not delete that draft.'); }
+    setDeletingId(null);
+  };
+
+  const typeLabel = (t) => (t === 'both' ? 'Email + Text' : t === 'sms' ? 'Text' : 'Email');
+
+  if (loading) return <div className="card text-center text-gray-400 py-10">Loading drafts...</div>;
+
+  if (drafts.length === 0) {
+    return (
+      <div className="card text-center py-12">
+        <Edit2 size={32} className="mx-auto text-gray-300 mb-3" />
+        <p className="text-gray-700 font-medium">No drafts yet</p>
+        <p className="text-gray-500 text-sm mt-1">
+          Start writing in Compose and click "Save as draft" to finish it later. Nothing saved here has been sent.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="card p-0 overflow-hidden">
+      <div className="px-4 py-3 bg-gray-50 border-b text-sm text-gray-600">
+        {drafts.length} unfinished {drafts.length === 1 ? 'message' : 'messages'} &mdash; none of these have been sent.
+      </div>
+      <div className="divide-y">
+        {drafts.map(d => (
+          <div key={d.id} className="flex flex-col sm:flex-row sm:items-center gap-3 px-4 py-3 hover:bg-gray-50">
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-medium text-gray-900 truncate">{d.subject || '(no subject yet)'}</span>
+                <span className="px-2 py-0.5 rounded-full text-xs bg-gray-100 text-gray-600">{typeLabel(d.message_type)}</span>
+                {d.attachment_count > 0 && (
+                  <span className="px-2 py-0.5 rounded-full text-xs bg-blue-50 text-blue-700">
+                    {d.attachment_count} {d.attachment_count === 1 ? 'file' : 'files'}
+                  </span>
+                )}
+              </div>
+              {d.preview && <p className="text-sm text-gray-500 mt-0.5 truncate">{d.preview}</p>}
+              <p className="text-xs text-gray-400 mt-0.5">
+                Last saved {formatStampChurch(d.updated_at || d.created_at)}
+                {d.created_by_name ? ` by ${d.created_by_name}` : ''}
+              </p>
+            </div>
+            <div className="flex gap-2 flex-shrink-0">
+              {canSend && (
+                <button onClick={() => onOpen(d.id)} className="btn-primary text-sm">
+                  <Edit2 size={14} /> Continue
+                </button>
+              )}
+              <button onClick={() => handleDelete(d)} disabled={deletingId === d.id} className="btn-danger text-sm">
+                <Trash2 size={14} /> {deletingId === d.id ? 'Deleting...' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 

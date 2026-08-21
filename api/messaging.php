@@ -366,6 +366,9 @@ switch ($method) {
             $where = [];
             $params = [];
             if ($status) { $where[] = 'm.status = ?'; $params[] = $status; }
+            // Drafts are unfinished, not history - they live on their own tab and
+            // must never pad out Sent Messages.
+            else { $where[] = "m.status <> 'draft'"; }
             $whereClause = $where ? 'WHERE ' . implode(' AND ', $where) : '';
 
             $total = (int)$db->prepare("SELECT COUNT(*) FROM messages m $whereClause")->execute($params) ?
@@ -376,6 +379,47 @@ switch ($method) {
             $total = (int)$db->query("SELECT FOUND_ROWS()")->fetchColumn();
 
             jsonResponse(['messages' => $messages, 'total' => $total, 'page' => $page, 'pages' => max(1, ceil($total / $limit))]);
+        }
+
+        // Unfinished messages, newest first. Everyone who may send can see the
+        // team's drafts - the church writes these together.
+        if ($action === 'drafts') {
+            $stmt = $db->query("
+                SELECT m.id, m.subject, m.body, m.message_type, m.recipient_type,
+                       m.attachment_path, m.created_at, m.sent_at AS updated_at,
+                       u.name AS created_by_name
+                FROM messages m
+                LEFT JOIN users u ON u.id = m.created_by
+                WHERE m.status = 'draft'
+                ORDER BY COALESCE(m.sent_at, m.created_at) DESC
+                LIMIT 100
+            ");
+            $drafts = [];
+            foreach ($stmt->fetchAll() as $d) {
+                $plain = trim(strip_tags(str_ireplace(['<br>', '<br/>', '<br />'], "\n", (string)$d['body'])));
+                $d['preview'] = mb_substr($plain, 0, 160);
+                $d['attachment_count'] = $d['attachment_path'] ? count(array_filter(explode(',', $d['attachment_path']))) : 0;
+                unset($d['body'], $d['attachment_path']);
+                $drafts[] = $d;
+            }
+            jsonResponse(['drafts' => $drafts]);
+        }
+
+        // One draft, with everything needed to put the Compose form back the way
+        // it was left - including who it was going to.
+        if ($action === 'draft') {
+            if (!$id) jsonResponse(['error' => 'ID required'], 400);
+            $stmt = $db->prepare("SELECT * FROM messages WHERE id = ? AND status = 'draft'");
+            $stmt->execute([$id]);
+            $draft = $stmt->fetch();
+            if (!$draft) jsonResponse(['error' => 'Draft not found'], 404);
+
+            $draft['recipients_saved'] = $draft['recipient_filter'] ? json_decode($draft['recipient_filter'], true) : null;
+            $draft['attachment_names'] = array_values(array_filter(array_map(
+                fn($p) => basename(trim($p)),
+                explode(',', (string)$draft['attachment_path'])
+            )));
+            jsonResponse(['draft' => $draft]);
         }
 
         // Get single message with recipients
@@ -655,6 +699,72 @@ switch ($method) {
         }
 
         // Create and send message
+        // Park an unfinished message. Saving the same draft again updates it in
+        // place (pass its id) instead of piling up copies of the same message.
+        if ($action === 'save_draft') {
+            requireSectionEdit($currentUser, 'communication', 'send');
+            $data = getRequestBody();
+
+            $subject = (string)($data['subject'] ?? '');
+            $body = (string)($data['body'] ?? '');
+            if (trim($subject) === '' && trim(strip_tags($body)) === '') {
+                jsonResponse(['error' => 'Nothing to save yet - write a subject or a message first.'], 400);
+            }
+
+            // The whole recipient choice is kept as-is so reopening the draft puts
+            // the exact same people back in the box.
+            $saved = [
+                'recipient_ids'    => array_values(array_map('intval', (array)($data['recipient_ids'] ?? []))),
+                'direct_contacts'  => array_values((array)($data['direct_contacts'] ?? [])),
+                'group_name'       => $data['group_name'] ?? null,
+                'person_type'      => $data['person_type'] ?? null,
+                'attachment_names' => array_values((array)($data['attachment_names'] ?? [])),
+                'send_type'        => $data['send_type'] ?? 'now',
+                'scheduled_at'     => $data['scheduled_at'] ?? null,
+                'recurring_pattern'=> $data['recurring_pattern'] ?? null,
+            ];
+            $attachmentPath = $saved['attachment_names']
+                ? implode(',', array_map(fn($n) => __DIR__ . '/uploads/' . $n, $saved['attachment_names']))
+                : null;
+
+            $draftId = (int)($data['draft_id'] ?? 0);
+            if ($draftId) {
+                // Make sure we are not overwriting something already sent.
+                $own = $db->prepare("SELECT id FROM messages WHERE id = ? AND status = 'draft'");
+                $own->execute([$draftId]);
+                if (!$own->fetchColumn()) jsonResponse(['error' => 'That draft no longer exists.'], 404);
+                $db->prepare("
+                    UPDATE messages
+                       SET subject = ?, body = ?, message_type = ?, recipient_type = ?,
+                           recipient_filter = ?, attachment_path = ?, sent_at = NOW()
+                     WHERE id = ? AND status = 'draft'
+                ")->execute([
+                    $subject, $body,
+                    $data['message_type'] ?? 'email',
+                    $data['recipient_type'] ?? 'individual',
+                    json_encode($saved), $attachmentPath, $draftId,
+                ]);
+            } else {
+                // sent_at doubles as "last touched" for a draft, so the list can be
+                // ordered by when it was actually last worked on.
+                $db->prepare("
+                    INSERT INTO messages
+                        (subject, body, message_type, send_type, status, recipient_type,
+                         recipient_filter, attachment_path, total_recipients, created_by, sent_at)
+                    VALUES (?, ?, ?, 'now', 'draft', ?, ?, ?, 0, ?, NOW())
+                ")->execute([
+                    $subject, $body,
+                    $data['message_type'] ?? 'email',
+                    $data['recipient_type'] ?? 'individual',
+                    json_encode($saved), $attachmentPath,
+                    $currentUser['user_id'],
+                ]);
+                $draftId = (int)$db->lastInsertId();
+            }
+
+            jsonResponse(['message' => 'Draft saved', 'draft_id' => $draftId], 201);
+        }
+
         if ($action === 'send') {
             requireSectionEdit($currentUser, 'communication', 'send');
             $data = getRequestBody();
@@ -696,6 +806,15 @@ switch ($method) {
                 $currentUser['user_id'],
             ]);
             $messageId = (int)$db->lastInsertId();
+
+            // Sending a draft finishes it - the real message row above replaces it,
+            // so the draft must not linger on the Drafts tab.
+            if (!empty($data['draft_id'])) {
+                try {
+                    $db->prepare("DELETE FROM messages WHERE id = ? AND status = 'draft'")
+                       ->execute([(int)$data['draft_id']]);
+                } catch (Exception $e) { /* a leftover draft must never fail a send */ }
+            }
 
             // Build recipient list
             $recipients = [];
@@ -924,8 +1043,19 @@ switch ($method) {
         break;
 
     case 'DELETE':
-        requireRole($currentUser, ['pastor', 'admin']);
         if (!$id) jsonResponse(['error' => 'Message ID required'], 400);
+
+        // A draft is unfinished work, not church history: anyone allowed to write
+        // messages may throw one away. Sent messages stay pastor/admin only.
+        $isDraft = $db->prepare("SELECT 1 FROM messages WHERE id = ? AND status = 'draft'");
+        $isDraft->execute([$id]);
+        if ($isDraft->fetchColumn()) {
+            requireSectionEdit($currentUser, 'communication', 'send');
+            $db->prepare("DELETE FROM messages WHERE id = ? AND status = 'draft'")->execute([$id]);
+            jsonResponse(['message' => 'Draft deleted']);
+        }
+
+        requireRole($currentUser, ['pastor', 'admin']);
         $db->prepare("DELETE FROM messages WHERE id = ?")->execute([$id]);
         jsonResponse(['message' => 'Message deleted']);
         break;
