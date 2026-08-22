@@ -13,6 +13,9 @@ import {
 
 const typeColors = { sent: 'bg-green-100 text-green-700', draft: 'bg-gray-100 text-gray-700', queued: 'bg-blue-100 text-blue-700', sending: 'bg-amber-100 text-amber-700', failed: 'bg-red-100 text-red-700' };
 
+// How many picked names to show as chips before folding the rest away.
+const CHIP_LIMIT = 25;
+
 // A hand-typed recipient can be a bare string or an already-built object. Both
 // sending and saving a draft need it in the same shape.
 const toContact = (c) => {
@@ -136,6 +139,9 @@ function ComposeTab({ setError, setMessage, openDraftId, onDraftOpened, onDrafts
   // Grouped reasons for any email that the provider refused on the last send.
   const [sendProblems, setSendProblems] = useState([]);
   const [memberSearch, setMemberSearch] = useState('');
+  // Selected-name chips are folded past CHIP_LIMIT so a send to the whole church
+  // does not bury the Send button under hundreds of names.
+  const [showAllChips, setShowAllChips] = useState(false);
   const [configStatus, setConfigStatus] = useState(null);
   const [consentStats, setConsentStats] = useState(null);
   const [directContacts, setDirectContacts] = useState([]);
@@ -220,6 +226,12 @@ function ComposeTab({ setError, setMessage, openDraftId, onDraftOpened, onDrafts
   const toggleRecipient = (id) => {
     setRecipientIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
   };
+
+  // The picked people, in the order they were picked, for the chips above the
+  // Send button. Anyone whose record has since gone is simply skipped.
+  const selectedMembers = recipientIds
+    .map(id => membersList.find(m => m.id === id))
+    .filter(Boolean);
 
   const getRecipientCount = () => {
     if (mode === 'direct') return directContacts.length;
@@ -550,6 +562,40 @@ function ComposeTab({ setError, setMessage, openDraftId, onDraftOpened, onDrafts
                 </div>
               )}
             </div>
+
+            {/* Who is this actually going to? Reading it off the checkbox list
+                below means scrolling the whole membership to find the one person
+                who was ticked by mistake, so the picked names sit right here next
+                to the count and each can be removed on the spot. */}
+            {mode === 'people' && selectedMembers.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5 pb-1">
+                {(showAllChips ? selectedMembers : selectedMembers.slice(0, CHIP_LIMIT)).map(m => (
+                  <span key={m.id} className="inline-flex items-center gap-1 pl-2.5 pr-1 py-1 rounded-full bg-primary-50 text-primary-700 text-xs font-medium max-w-[15rem]">
+                    <span className="truncate">{m.first_name} {m.last_name}</span>
+                    <button
+                      type="button"
+                      onClick={() => toggleRecipient(m.id)}
+                      title={`Remove ${m.first_name} ${m.last_name}`}
+                      aria-label={`Remove ${m.first_name} ${m.last_name}`}
+                      className="rounded-full p-0.5 text-primary-400 hover:text-red-600 hover:bg-white flex-shrink-0"
+                    >
+                      <X size={12} />
+                    </button>
+                  </span>
+                ))}
+                {/* Past a certain number the names stop being useful and just push
+                    the Send button off the screen, so the rest stay folded away. */}
+                {selectedMembers.length > CHIP_LIMIT && (
+                  <button
+                    type="button"
+                    onClick={() => setShowAllChips(v => !v)}
+                    className="text-xs font-medium text-gray-500 hover:text-gray-800 underline underline-offset-2"
+                  >
+                    {showAllChips ? 'Show fewer' : `+${selectedMembers.length - CHIP_LIMIT} more`}
+                  </button>
+                )}
+              </div>
+            )}
 
             <div className="flex items-center justify-between">
               <div className="text-sm text-gray-500">
