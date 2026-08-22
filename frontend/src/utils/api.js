@@ -420,6 +420,7 @@ export const messaging = {
   delete: (id) => request('messaging.php', { method: 'DELETE', params: { id } }),
   config: () => request('messaging.php', { params: { action: 'config' } }),
   consentStats: () => request('messaging.php', { params: { action: 'consent_stats' } }),
+  twilioNumbers: () => request('messaging.php', { params: { action: 'twilio_numbers' } }),
   saveConfig: (data) => request('messaging.php', { method: 'POST', body: data, params: { action: 'config' } }),
   testEmail: (email) => request('messaging.php', { method: 'POST', body: { email }, params: { action: 'test_email' } }),
   inbox: () => request('messaging.php', { params: { action: 'inbox' } }),

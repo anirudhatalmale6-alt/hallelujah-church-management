@@ -283,9 +283,73 @@ function formatPhone($phone) {
     return '+1' . $digits;
 }
 
+// Turn a Twilio refusal into one sentence the pastor can act on. Twilio's own
+// wording ("Invalid From Number (caller ID)") reads like the RECIPIENT's number
+// is wrong, when in fact the problem is the church's own sending number in
+// Settings - which is what made a whole broadcast look like bad member data.
+function explainSmsError($response, $curlError = '', $fromNumber = '') {
+    $body = json_decode((string)$response, true);
+    $code = is_array($body) ? (int)($body['code'] ?? 0) : 0;
+    $msg  = is_array($body) ? trim((string)($body['message'] ?? '')) : '';
+    $from = $fromNumber !== '' ? $fromNumber : 'the number saved in Settings';
+
+    switch ($code) {
+        case 21212: // From is not a valid phone number / not on this account
+        case 21606: // From is not a valid, SMS-capable number for this account
+        case 21210: // From is not verified for this account
+            return 'The church text number in Settings > Messaging (' . $from . ') is not a working sending '
+                 . 'number on your Twilio account, so Twilio refused every text. This is the SENDING number, '
+                 . 'not the member\'s number. Fix it in Settings > Messaging and send again.';
+        case 21266: // To == From
+            return 'Twilio will not text a number from itself. The "send me a copy" number in '
+                 . 'Settings > Messaging is the same as the church text number - change one of them.';
+        case 21211:
+            return 'This person\'s phone number is not a valid number, so it could not be texted. '
+                 . 'Check the number on their profile.';
+        case 21610:
+            return 'This person replied STOP to a previous text, so Twilio blocks any further texts to them. '
+                 . 'They have to text START to opt back in.';
+        case 21614:
+            return 'This number cannot receive texts (it looks like a landline).';
+        case 30034:
+            return 'Twilio blocked the text because the church number is not registered for A2P 10DLC yet.';
+        case 20003:
+            return 'Twilio rejected the login. Check the Account SID and Auth Token in Settings > Messaging.';
+    }
+    if ($msg !== '') return $msg;
+    return $curlError !== '' ? $curlError : 'Unknown error';
+}
+
+// The SMS-capable numbers this Twilio account actually owns. Returns [] on any
+// problem - this only ever feeds a helper list, it must never block a save.
+function twilioOwnedNumbers($accountSid, $authToken) {
+    $ch = curl_init("https://api.twilio.com/2010-04-01/Accounts/$accountSid/IncomingPhoneNumbers.json?PageSize=50");
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => 20,
+        CURLOPT_USERPWD => "$accountSid:$authToken",
+    ]);
+    $resp = curl_exec($ch);
+    $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+    if ($code !== 200) return [];
+    $j = json_decode($resp, true);
+    if (!isset($j['incoming_phone_numbers'])) return [];
+    $out = [];
+    foreach ($j['incoming_phone_numbers'] as $n) {
+        if (empty($n['capabilities']['sms'])) continue;
+        $out[] = ['number' => $n['phone_number'] ?? '', 'label' => $n['friendly_name'] ?? ($n['phone_number'] ?? '')];
+    }
+    return $out;
+}
+
 // Twilio SMS/MMS sending
 function sendSMS($to, $body, $accountSid, $authToken, $fromNumber, $mediaUrl = null, $returnDetails = false) {
     $to = formatPhone($to);
+    // Normalise the sender too. It used to be passed through exactly as typed,
+    // so "(267) 433-2021" or a number pasted without the +1 was refused by Twilio.
+    $fromNumber = trim((string)$fromNumber);
+    if ($fromNumber !== '' && strpos($fromNumber, '+') !== 0) $fromNumber = formatPhone($fromNumber);
     $url = "https://api.twilio.com/2010-04-01/Accounts/$accountSid/Messages.json";
     $data = ['To' => $to, 'From' => $fromNumber, 'Body' => $body];
     if ($mediaUrl) $data['MediaUrl'] = $mediaUrl;
@@ -326,6 +390,10 @@ function sendActivityCopy($db, $settings, $summaryText, $emailSubject = null, $e
     if (empty($settings['msg_copy_enabled']) || $settings['msg_copy_enabled'] === '0') return;
     try {
         $copyPhone = trim($settings['msg_copy_phone'] ?? '');
+        // Twilio refuses to text a number from itself (error 21266), so if the
+        // copy number IS the church text number just skip the text copy quietly.
+        $fromNum = trim((string)($settings['msg_twilio_number'] ?? ''));
+        if ($copyPhone !== '' && $fromNum !== '' && formatPhone($copyPhone) === formatPhone($fromNum)) $copyPhone = '';
         if ($copyPhone !== '' && !empty($settings['msg_twilio_sid'])) {
             sendSMS($copyPhone, $summaryText, $settings['msg_twilio_sid'], $settings['msg_twilio_token'], $settings['msg_twilio_number']);
         }
@@ -489,7 +557,21 @@ switch ($method) {
                 'copy_enabled' => !empty($settings['msg_copy_enabled']) && $settings['msg_copy_enabled'] !== '0',
                 'copy_phone' => $settings['msg_copy_phone'] ?? '',
                 'copy_email' => $settings['msg_copy_email'] ?? '',
+                // The church's own sending number is not a secret (every member sees
+                // it on their phone) and it MUST be visible here - it silently went
+                // wrong once and every text failed with no clue where to look.
+                'twilio_number' => $settings['msg_twilio_number'] ?? '',
             ]);
+        }
+
+        // Which numbers are actually on the Twilio account? Powers the picker in
+        // Settings so the sending number can be chosen instead of typed.
+        if ($action === 'twilio_numbers') {
+            $settings = getMessagingSettings($db);
+            if (empty($settings['msg_twilio_sid']) || empty($settings['msg_twilio_token'])) {
+                jsonResponse(['numbers' => [], 'error' => 'Add your Twilio Account SID and Auth Token first.']);
+            }
+            jsonResponse(['numbers' => twilioOwnedNumbers($settings['msg_twilio_sid'], $settings['msg_twilio_token'])]);
         }
 
         // Two-way texting: list of conversations (one row per phone), newest first
@@ -592,6 +674,38 @@ switch ($method) {
             $keys = ['msg_sendgrid_key', 'msg_brevo_key', 'msg_smtp_pass',
                      'msg_from_email', 'msg_from_name',
                      'msg_twilio_sid', 'msg_twilio_token', 'msg_twilio_number'];
+
+            // Guard the church text number. A number that Twilio does not own
+            // is accepted silently and then refuses EVERY text, which looks
+            // exactly like the members' numbers being wrong. Check it here, once,
+            // instead of finding out after a broadcast has already failed.
+            if (isset($data['msg_twilio_number']) && $data['msg_twilio_number'] !== '') {
+                $wanted = trim((string)$data['msg_twilio_number']);
+                if (strpos($wanted, '+') !== 0) $wanted = formatPhone($wanted);
+                $data['msg_twilio_number'] = $wanted;
+
+                $existing = getMessagingSettings($db);
+                $sid   = $data['msg_twilio_sid']   ?? ($existing['msg_twilio_sid']   ?? '');
+                $token = $data['msg_twilio_token'] ?? ($existing['msg_twilio_token'] ?? '');
+                if ($sid !== '' && $token !== '') {
+                    $owned = twilioOwnedNumbers($sid, $token);
+                    // Only reject when we got a real list back. An outage or a
+                    // timeout returns [] and must never lock the pastor out.
+                    if ($owned) {
+                        $numbers = array_column($owned, 'number');
+                        if (!in_array($wanted, $numbers, true)) {
+                            $labels = array_map(function ($n) { return $n['label'] . ' (' . $n['number'] . ')'; }, $owned);
+                            jsonResponse([
+                                'error' => 'That is not a text number on your Twilio account, so no text would go out. '
+                                         . 'Your Twilio account has: ' . implode(', ', $labels) . '. '
+                                         . 'Please use one of those as the church text number.',
+                                'available_numbers' => $owned,
+                            ], 400);
+                        }
+                    }
+                }
+            }
+
             $saved = [];
             foreach ($keys as $key) {
                 if (isset($data[$key]) && $data[$key] !== '') {
@@ -659,8 +773,7 @@ switch ($method) {
             if (!$memberId) $memberId = findMemberByPhone($db, $phone);
             $res = sendSMS($phone, $body, $settings['msg_twilio_sid'], $settings['msg_twilio_token'], $settings['msg_twilio_number'], null, true);
             if (!$res['success']) {
-                $err = json_decode($res['response'], true);
-                jsonResponse(['error' => 'Text failed: ' . ($err['message'] ?? ($res['curl_error'] ?: 'Unknown error'))], 502);
+                jsonResponse(['error' => 'Text failed: ' . explainSmsError($res['response'], $res['curl_error'], (string)$settings['msg_twilio_number'])], 502);
             }
             $ok = json_decode($res['response'], true);
             logSmsConversation($db, $memberId, formatPhone($phone), 'out', $body, $ok['sid'] ?? null, (int)$currentUser['user_id'], true);
@@ -905,6 +1018,7 @@ switch ($method) {
                 $pendingRecps->execute([$messageId]);
 
                 $emailErrors = [];
+                $smsErrors = [];
                 foreach ($pendingRecps->fetchAll() as $recp) {
                     $success = false;
                     if ($recp['channel'] === 'email') {
@@ -938,17 +1052,19 @@ switch ($method) {
                         );
                         $success = $smsResult['success'];
                         if (!$success) {
-                            $errBody = json_decode($smsResult['response'], true);
-                            $errMsg = $errBody['message'] ?? ($smsResult['curl_error'] ?: 'Unknown error');
+                            $errMsg = explainSmsError($smsResult['response'], $smsResult['curl_error'], (string)$settings['msg_twilio_number']);
                             $db->prepare("UPDATE message_recipients SET error_message = ? WHERE id = ?")->execute([$errMsg, $recp['id']]);
+                            $smsErrors[$errMsg] = ($smsErrors[$errMsg] ?? 0) + 1;
                         } else {
                             // Log the outgoing text so the Inbox thread has full context
                             $okBody = json_decode($smsResult['response'], true);
                             logSmsConversation($db, $recp['member_id'] ? (int)$recp['member_id'] : null, formatPhone($recp['phone']), 'out', $smsBody, $okBody['sid'] ?? null, (int)$currentUser['user_id'], true);
                         }
                     } elseif ($recp['channel'] === 'sms') {
+                        $notSetUp = 'Texting is not set up - add the Twilio details in Settings > Messaging.';
                         $db->prepare("UPDATE message_recipients SET error_message = ? WHERE id = ?")
-                           ->execute(['Texting is not set up - add the Twilio details in Settings > Messaging.', $recp['id']]);
+                           ->execute([$notSetUp, $recp['id']]);
+                        $smsErrors[$notSetUp] = ($smsErrors[$notSetUp] ?? 0) + 1;
                     }
 
                     $newStatus = $success ? 'sent' : 'failed';
@@ -983,12 +1099,18 @@ switch ($method) {
                 foreach ($emailErrors as $why => $howMany) {
                     $emailProblems[] = ['count' => $howMany, 'reason' => $why];
                 }
+                arsort($smsErrors);
+                $smsProblems = [];
+                foreach ($smsErrors as $why => $howMany) {
+                    $smsProblems[] = ['count' => $howMany, 'reason' => $why];
+                }
                 jsonResponse([
                     'message' => "Sent to $sentCount recipients" . ($failedCount > 0 ? " ($failedCount failed)" : '') . $skippedNote,
                     'id' => $messageId,
                     'sent' => $sentCount,
                     'failed' => $failedCount,
                     'email_problems' => array_slice($emailProblems, 0, 5),
+                    'sms_problems' => array_slice($smsProblems, 0, 5),
                     'sms_skipped' => count($smsSkipped),
                     'sms_skipped_names' => array_slice($smsSkipped, 0, 50),
                 ], 201);

@@ -301,7 +301,12 @@ function ComposeTab({ setError, setMessage, openDraftId, onDraftOpened, onDrafts
       setMessage((result && result.message) ? result.message : 'Message sent!');
       // Emails failing used to be a silent number. Show the actual reason now, so a
       // provider that has stopped accepting mail is obvious the moment it happens.
-      setSendProblems((result && result.email_problems) || []);
+      // Texts get the same treatment - a wrong church text number refuses every
+      // single one, and that has to be readable without opening each recipient.
+      setSendProblems([
+        ...(((result && result.email_problems) || []).map(p => ({ ...p, channel: 'email' }))),
+        ...(((result && result.sms_problems) || []).map(p => ({ ...p, channel: 'text' }))),
+      ]);
       setSubject('');
       setBody('');
       setRecipientIds([]);
@@ -333,13 +338,17 @@ function ComposeTab({ setError, setMessage, openDraftId, onDraftOpened, onDrafts
         <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-xl">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <p className="text-red-800 font-medium">Some emails did not go out</p>
+              <p className="text-red-800 font-medium">Some messages did not go out</p>
               <ul className="text-red-700 text-sm mt-1 space-y-1">
                 {sendProblems.map((p, i) => (
-                  <li key={i}>{p.count} {p.count === 1 ? 'email' : 'emails'}: {p.reason}</li>
+                  <li key={i}>
+                    {p.count} {p.channel === 'text'
+                      ? (p.count === 1 ? 'text' : 'texts')
+                      : (p.count === 1 ? 'email' : 'emails')}: {p.reason}
+                  </li>
                 ))}
               </ul>
-              <p className="text-red-600 text-xs mt-2">The texts are separate and are not affected by this.</p>
+              <p className="text-red-600 text-xs mt-2">Emails and texts go out separately - a problem with one does not affect the other.</p>
             </div>
             <button onClick={() => setSendProblems([])} className="text-red-400 hover:text-red-600 flex-shrink-0"><X size={18} /></button>
           </div>
@@ -1070,13 +1079,24 @@ function SettingsTab({ setError, setMessage }) {
   const [smtp, setSmtp] = useState({ host: '', port: '587', user: '', pass: '', secure: 'tls', passSaved: false });
   const [saved, setSaved] = useState({ sendgrid: false, brevo: false });
   const [copy, setCopy] = useState({ enabled: false, phone: '', email: '' });
+  const [twilioNumbers, setTwilioNumbers] = useState([]);
   const [saving, setSaving] = useState(false);
   const [testEmail, setTestEmail] = useState('');
   const [testing, setTesting] = useState(false);
 
   useEffect(() => {
     msgApi.config().then(d => {
-      setConfig(prev => ({ ...prev, msg_from_email: d.from_email || '', msg_from_name: d.from_name || '' }));
+      setConfig(prev => ({
+        ...prev,
+        msg_from_email: d.from_email || '',
+        msg_from_name: d.from_name || '',
+        // Show the church text number that is actually in use. It used to be a
+        // blank box, so nobody could tell it had been changed to a wrong number.
+        msg_twilio_number: d.twilio_number || '',
+      }));
+      if (d.sms_configured) {
+        msgApi.twilioNumbers().then(r => setTwilioNumbers((r && r.numbers) || [])).catch(() => {});
+      }
       setProvider(d.email_provider || 'sendgrid');
       setSaved({ sendgrid: !!d.sendgrid_saved, brevo: !!d.brevo_saved });
       setSmtp({
@@ -1256,8 +1276,29 @@ function SettingsTab({ setError, setMessage }) {
             <input type="password" className="input" placeholder="Auth token" value={config.msg_twilio_token} onChange={e => setConfig(c => ({ ...c, msg_twilio_token: e.target.value }))} />
           </div>
           <div>
-            <label className="label">From Phone Number</label>
+            <label className="label">Church text number (the number your texts come from)</label>
             <input className="input" placeholder="+1234567890" value={config.msg_twilio_number} onChange={e => setConfig(c => ({ ...c, msg_twilio_number: e.target.value }))} />
+            {/* This has to be one of the numbers Twilio actually rents to the
+                church. Typing any other number - the office line, a cell - is
+                accepted by the box but then refuses every single text. */}
+            {twilioNumbers.length > 0 && (
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <span className="text-xs text-gray-500">On your Twilio account:</span>
+                {twilioNumbers.map(n => (
+                  <button
+                    key={n.number}
+                    type="button"
+                    onClick={() => setConfig(c => ({ ...c, msg_twilio_number: n.number }))}
+                    className={`text-xs px-2 py-1 rounded-lg border ${config.msg_twilio_number === n.number ? 'bg-red-50 border-red-200 text-red-700 font-medium' : 'bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100'}`}
+                  >
+                    {n.label}
+                  </button>
+                ))}
+              </div>
+            )}
+            <p className="text-xs text-gray-500 mt-2">
+              This must be a number Twilio rents to the church. Your own office or cell number will not work here &mdash; Twilio refuses every text sent from a number it does not own.
+            </p>
           </div>
           <p className="text-xs text-gray-400">Get your Twilio credentials at twilio.com/console</p>
         </div>
