@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import ReactDOM from 'react-dom';
-import { finance as financeApi, members as membersApi, services as servicesApi, auditLog as auditLogApi, reports as reportsApi, settings as settingsApi } from '../utils/api';
+import { useNavigate } from 'react-router-dom';
+import { finance as financeApi, members as membersApi, services as servicesApi, auditLog as auditLogApi, reports as reportsApi, settings as settingsApi, messaging as msgApi } from '../utils/api';
+import { openComposeWith } from '../utils/composePrefill';
 import { useAuth } from '../contexts/AuthContext';
 import { formatTime12h, downloadCSV, fmtServiceDate } from '../utils/format';
 import Modal from '../components/Modal';
@@ -13,8 +15,76 @@ import {
   Download, FileText, Search, TrendingUp, PieChart,
   Calendar, CreditCard, Users, ChevronDown, ChevronUp,
   Printer, Settings, Tag, Eye, EyeOff, ShieldCheck, Receipt,
-  BarChart3, Wallet, BookOpen, ChevronRight, Landmark, Store, HandCoins
+  BarChart3, Wallet, BookOpen, ChevronRight, Landmark, Store, HandCoins,
+  Heart, Send
 } from 'lucide-react';
+
+// --- One-click thank-you / pledge reminder ---------------------------------
+// Both buttons do the same thing: fetch the pastor's own wording, work out each
+// person's figures, and hand the whole message to the Compose screen. Nothing
+// is sent from here - Compose opens with the message written and waits for him
+// to press Send.
+const FREQ_WORD = { weekly: 'weekly', monthly: 'monthly', quarterly: 'quarterly', annually: 'yearly' };
+
+async function composeFromTemplate(navigate, { kind, people, note }) {
+  const { templates } = await msgApi.templates();
+  const isThanks = kind === 'thanks';
+  const merge = {};
+  people.forEach(p => { merge[String(p.member_id)] = p.vars || {}; });
+  openComposeWith(navigate, {
+    recipient_ids: people.map(p => p.member_id),
+    message_type: 'email',
+    subject: templates[isThanks ? 'msg_tpl_thanks_subject' : 'msg_tpl_reminder_subject'] || '',
+    body: templates[isThanks ? 'msg_tpl_thanks_body' : 'msg_tpl_reminder_body'] || '',
+    sms_body: templates[isThanks ? 'msg_tpl_thanks_sms' : 'msg_tpl_reminder_sms'] || '',
+    merge,
+    note,
+  });
+}
+
+// The figures behind {amount}, {fund} and {date} on a thank-you.
+function thanksVars(d) {
+  return {
+    amount: formatCurrency(d.amount),
+    fund: d.category_name || '',
+    date: d.donation_date
+      ? new Date(d.donation_date + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
+      : '',
+  };
+}
+
+// The same person can be behind on more than one pledge, and each one is its
+// own row in the alert list. A reminder has to talk about the whole of what
+// they owe - otherwise clicking one row would understate it, and reminding
+// everyone would silently keep only one of that person's pledges. So a
+// member's rows are combined into a single set of figures here.
+function combineAlertsByMember(list) {
+  const byMember = new Map();
+  list.forEach(a => {
+    if (!a.member_id) return;
+    const key = String(a.member_id);
+    if (!byMember.has(key)) byMember.set(key, []);
+    byMember.get(key).push(a);
+  });
+  return Array.from(byMember.entries()).map(([id, rows]) => {
+    const funds = Array.from(new Set(rows.map(r => r.category).filter(Boolean)));
+    const freqs = Array.from(new Set(rows.map(r => r.frequency).filter(Boolean)));
+    const sum = (f) => rows.reduce((t, r) => t + (Number(r[f]) || 0), 0);
+    return {
+      member_id: Number(id),
+      member_name: rows[0].member_name,
+      vars: {
+        fund: funds.join(' and '),
+        pledge_amount: formatCurrency(sum('pledge_amount')),
+        // Two pledges on different schedules cannot honestly be called
+        // "monthly", so together they are described as regular giving.
+        frequency: freqs.length === 1 ? (FREQ_WORD[freqs[0]] || freqs[0]) : 'regular',
+        amount_behind: formatCurrency(sum('behind_by')),
+        total_given: formatCurrency(sum('paid')),
+      },
+    };
+  });
+}
 
 const paymentMethods = [
   { value: 'cash', label: 'Cash' },
@@ -605,6 +675,25 @@ function RecordGivingTab({ setError, setMessage }) {
   const [editForm, setEditForm] = useState({});
   const [editSaving, setEditSaving] = useState(false);
   const [deleteId, setDeleteId] = useState(null);
+  const navigate = useNavigate();
+  const [thankingId, setThankingId] = useState(null);
+
+  // Opens the Compose screen with the thank-you already written. It does NOT
+  // send - he reads it and presses Send himself.
+  const thankFor = async (d) => {
+    if (!d.member_id) return;
+    setThankingId(d.id);
+    try {
+      await composeFromTemplate(navigate, {
+        kind: 'thanks',
+        people: [{ member_id: Number(d.member_id), vars: thanksVars(d) }],
+        note: `Thank-you for ${d.member_first_name} ${d.member_last_name} - ${formatCurrency(d.amount)} toward ${d.category_name}.`,
+      });
+    } catch (err) {
+      setError((err && err.message) || 'Could not open the thank-you message.');
+      setThankingId(null);
+    }
+  };
 
   function createEmptyEntry() {
     return { member_id: '', category_id: '', amount: '', payment_method: 'cash', donor_name: '', notes: '', deposit_to: '', key: Date.now() + Math.random() };
@@ -891,6 +980,13 @@ function RecordGivingTab({ setError, setMessage }) {
                       <td className="px-4 py-2 text-sm text-gray-500 hidden lg:table-cell max-w-xs truncate" title={d.notes || ''}>{d.notes || '-'}</td>
                       <td className="px-4 py-2">
                         <div className="flex items-center justify-end gap-1">
+                          {d.member_id && (
+                            <button onClick={() => thankFor(d)} disabled={thankingId === d.id}
+                              title={`Say thank you to ${d.member_first_name}`}
+                              className="px-2 py-1 text-xs font-medium text-pink-700 bg-pink-50 hover:bg-pink-100 rounded inline-flex items-center gap-1 disabled:opacity-50">
+                              <Heart size={12} /> Thank
+                            </button>
+                          )}
                           <button onClick={() => { setEditDonation(d); setEditForm({ member_id: d.member_id || '', donor_name: d.donor_name || '', amount: d.amount, category_id: d.category_id, payment_method: d.payment_method, notes: d.notes || '', donation_date: d.donation_date, deposit_to: d.routed_account_id || '' }); }} className="p-1.5 text-gray-400 hover:text-primary-700 hover:bg-primary-50 rounded"><Edit2 size={14} /></button>
                           <button onClick={() => setDeleteId(d.id)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded"><Trash2 size={14} /></button>
                         </div>
@@ -912,6 +1008,12 @@ function RecordGivingTab({ setError, setMessage }) {
                     <div className="text-right">
                       <div className="text-sm font-semibold text-green-700">{formatCurrency(d.amount)}</div>
                       <div className="flex items-center gap-1 mt-1 justify-end">
+                        {d.member_id && (
+                          <button onClick={() => thankFor(d)} disabled={thankingId === d.id}
+                            className="px-2 py-1 text-xs font-medium text-pink-700 bg-pink-50 hover:bg-pink-100 rounded inline-flex items-center gap-1 disabled:opacity-50">
+                            <Heart size={12} /> Thank
+                          </button>
+                        )}
                         <button onClick={() => { setEditDonation(d); setEditForm({ member_id: d.member_id || '', donor_name: d.donor_name || '', amount: d.amount, category_id: d.category_id, payment_method: d.payment_method, notes: d.notes || '', donation_date: d.donation_date, deposit_to: d.routed_account_id || '' }); }} className="p-1.5 text-gray-400 hover:text-primary-700 hover:bg-primary-50 rounded"><Edit2 size={14} /></button>
                         <button onClick={() => setDeleteId(d.id)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded"><Trash2 size={14} /></button>
                       </div>
@@ -1594,6 +1696,28 @@ function HistoryTab({ setError, setMessage, isAdmin }) {
   const [expCategories, setExpCategories] = useState([]);
   const [showCols, setShowCols] = useState({ type: true, description: true, method: true, account: true, status: true, by: true });
   const toggleCol = (col) => setShowCols(prev => ({ ...prev, [col]: !prev[col] }));
+  const navigate = useNavigate();
+  const [thankingKey, setThankingKey] = useState(null);
+
+  // Same one-click thank-you as on the Record Giving tab, for a gift found
+  // later in the history. Only gifts with a member behind them can be thanked.
+  const thankForEntry = async (e) => {
+    if (e.source !== 'donation' || !e.member_id) return;
+    setThankingKey(e.source + e.id);
+    try {
+      await composeFromTemplate(navigate, {
+        kind: 'thanks',
+        people: [{
+          member_id: Number(e.member_id),
+          vars: thanksVars({ amount: e.amount, category_name: e.fund, donation_date: e.date }),
+        }],
+        note: `Thank-you for ${e.member_first_name} ${e.member_last_name} - ${formatCurrency(e.amount)} toward ${e.fund}.`,
+      });
+    } catch (err) {
+      setError((err && err.message) || 'Could not open the thank-you message.');
+      setThankingKey(null);
+    }
+  };
 
   const [bankAccounts, setBankAccounts] = useState([]);
   const [transferAccounts, setTransferAccounts] = useState([]);
@@ -1859,6 +1983,13 @@ function HistoryTab({ setError, setMessage, isAdmin }) {
                         <div className="flex items-center justify-end gap-1">
                           {isAdmin && e.source === 'expense' && e.status !== 'approved' && (
                             <button onClick={() => handleApprove(e)} className="p-1.5 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded" title="Approve"><ShieldCheck size={14} /></button>
+                          )}
+                          {e.source === 'donation' && e.member_id && (
+                            <button onClick={() => thankForEntry(e)} disabled={thankingKey === e.source + e.id}
+                              title={`Say thank you to ${e.member_first_name}`}
+                              className="px-2 py-1 text-xs font-medium text-pink-700 bg-pink-50 hover:bg-pink-100 rounded inline-flex items-center gap-1 disabled:opacity-50">
+                              <Heart size={12} /> Thank
+                            </button>
                           )}
                           <button onClick={() => openEdit(e)} className="p-1.5 text-gray-400 hover:text-primary-700 hover:bg-primary-50 rounded" title="Edit"><Edit2 size={14} /></button>
                           {isAdmin && (
@@ -5175,6 +5306,26 @@ function PledgesTab({ setError, setMessage, isAdmin }) {
   const [paymentPledge, setPaymentPledge] = useState(null);
   const [paymentForm, setPaymentForm] = useState({ amount: '', payment_method: 'cash', notes: '', donation_date: new Date().toISOString().split('T')[0] });
   const [paymentSaving, setPaymentSaving] = useState(false);
+  const navigate = useNavigate();
+  const [reminding, setReminding] = useState(false);
+
+  // Open a pledge reminder on the Compose screen. Whether it is one person or
+  // everyone behind, each of them gets their own pledge amount and their own
+  // balance - the wording is shared, the figures are not.
+  const remind = async (list) => {
+    const people = combineAlertsByMember(list);
+    if (people.length === 0) { setError('No one to remind here.'); return; }
+    const note = people.length === 1
+      ? `Pledge reminder for ${people[0].member_name}.`
+      : `Pledge reminder for ${people.length} people behind schedule.`;
+    setReminding(true);
+    try {
+      await composeFromTemplate(navigate, { kind: 'reminder', people, note });
+    } catch (err) {
+      setError((err && err.message) || 'Could not open the reminder message.');
+      setReminding(false);
+    }
+  };
   const [bankAccounts, setBankAccounts] = useState([]);
   // Every active pledge, whatever the list filter shows — used to catch the same
   // person being pledged twice.
@@ -5385,6 +5536,12 @@ function PledgesTab({ setError, setMessage, isAdmin }) {
               </p>
             </div>
             <div className="flex items-center gap-2">
+              <button onClick={() => remind(visibleAlerts)}
+                disabled={reminding || visibleAlerts.length === 0}
+                className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-lg border border-red-300 text-white bg-red-600 hover:bg-red-700 disabled:opacity-50"
+                title="Open a reminder message for everyone listed below - each person gets their own figures">
+                <Send size={14} /> Remind {alertQuery ? 'those showing' : 'everyone'}
+              </button>
               <button onClick={printCallSheet} className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-lg border border-red-300 text-red-700 bg-white hover:bg-red-100" title="Print a call sheet to phone these members">
                 <Printer size={14} /> Print call sheet
               </button>
@@ -5412,7 +5569,16 @@ function PledgesTab({ setError, setMessage, isAdmin }) {
             ) : visibleAlerts.map((a, i) => (
               <div key={i} className="flex items-center justify-between text-sm px-2 py-1 rounded hover:bg-red-100">
                 <span className="text-red-700">{a.member_name}{a.phone ? ` (${a.phone})` : ''} - {a.category} ({freqLabel[a.frequency]} {formatCurrency(a.pledge_amount)})</span>
-                <span className="text-red-800 font-medium">Balance {formatCurrency(a.behind_by)}</span>
+                <span className="flex items-center gap-2 flex-shrink-0">
+                  <span className="text-red-800 font-medium">Balance {formatCurrency(a.behind_by)}</span>
+                  {a.member_id && (
+                    <button onClick={() => remind(behindAlerts.filter(x => x.member_id === a.member_id))} disabled={reminding}
+                      title={`Send ${a.member_name} a gentle reminder`}
+                      className="px-2 py-0.5 text-xs font-medium text-red-700 bg-white border border-red-300 rounded hover:bg-red-100 disabled:opacity-50">
+                      Remind
+                    </button>
+                  )}
+                </span>
               </div>
             ))}
           </div>

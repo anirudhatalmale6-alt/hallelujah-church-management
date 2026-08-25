@@ -382,6 +382,93 @@ function getMessagingSettings($db) {
     return $settings;
 }
 
+// --- Message wording -------------------------------------------------------
+// The thank-you and pledge-reminder wording lives in the settings table under
+// msg_tpl_*, so it travels with the rest of the messaging settings and needs no
+// new table. A blank saved value means "fall back to the wording below", which
+// is also how the Reset button works - it simply saves blank.
+function defaultMessageTemplates() {
+    return [
+        'msg_tpl_thanks_sms' =>
+            "Thank you {first name}! We received your gift of {amount} toward {fund}. "
+            . "It is a real blessing to this church. God bless you. - {church}",
+        'msg_tpl_thanks_subject' => "Thank you for your gift, {first name}",
+        'msg_tpl_thanks_body' =>
+            "Dear {first name},\n\n"
+            . "Thank you for your gift of {amount} toward {fund}, received on {date}.\n\n"
+            . "Your giving keeps the work of this church going, and we do not take it for granted.\n\n"
+            . "God bless you,\n{church}",
+        'msg_tpl_reminder_sms' =>
+            "Hello {first name}, a gentle reminder about your {frequency} pledge of {pledge amount} "
+            . "toward {fund}. The balance outstanding so far is {amount behind}. "
+            . "Thank you for standing with us. - {church}",
+        'msg_tpl_reminder_subject' => "A gentle reminder about your pledge",
+        'msg_tpl_reminder_body' =>
+            "Dear {first name},\n\n"
+            . "This is a gentle reminder about your {frequency} pledge of {pledge amount} toward {fund}.\n\n"
+            . "So far the balance outstanding is {amount behind}.\n\n"
+            . "There is no pressure at all - we only want to make it easy for you to keep up with what "
+            . "you set out to give. If anything has changed for you, please just let us know.\n\n"
+            . "God bless you,\n{church}",
+    ];
+}
+
+// Every placeholder the wording is allowed to use. Anything not on this list is
+// left alone, so an ordinary { in someone's writing is never touched.
+function mergeFieldNames() {
+    return ['first name', 'last name', 'full name', 'church',
+            'amount', 'fund', 'date',
+            'pledge amount', 'frequency', 'amount behind', 'total given'];
+}
+
+function getMessageTemplates($db) {
+    $saved = getMessagingSettings($db);
+    $out = [];
+    foreach (defaultMessageTemplates() as $k => $default) {
+        $v = isset($saved[$k]) ? (string)$saved[$k] : '';
+        $out[$k] = trim($v) !== '' ? $v : $default;
+    }
+    return $out;
+}
+
+// Fill the placeholders for ONE person. Both spellings work - {first name} and
+// {first_name} - because both get typed.
+function applyMergeFields($text, array $vars) {
+    $text = (string)$text;
+    if ($text === '' || strpos($text, '{') === false) return $text;
+    $replace = [];
+    foreach ($vars as $name => $value) {
+        $value = is_scalar($value) ? (string)$value : '';
+        $replace['{' . $name . '}'] = $value;
+        $replace['{' . str_replace(' ', '_', $name) . '}'] = $value;
+    }
+    return strtr($text, $replace);
+}
+
+// Build that person's values. EVERY known field is seeded blank first, so a
+// placeholder with nothing behind it comes out empty rather than reaching a
+// member as the literal text {amount behind}.
+function mergeVarsForRecipient($recp, array $extraByMember, $churchName) {
+    $vars = [];
+    foreach (mergeFieldNames() as $f) $vars[$f] = '';
+
+    $full = trim((string)($recp['name'] ?? ''));
+    $parts = preg_split('/\s+/', $full, 2);
+    $vars['first name'] = $parts[0] ?? '';
+    $vars['last name']  = $parts[1] ?? '';
+    $vars['full name']  = $full;
+    $vars['church']     = $churchName;
+
+    $mid = !empty($recp['member_id']) ? (string)(int)$recp['member_id'] : '';
+    if ($mid !== '' && !empty($extraByMember[$mid]) && is_array($extraByMember[$mid])) {
+        foreach ($extraByMember[$mid] as $k => $v) {
+            $key = str_replace('_', ' ', (string)$k);
+            if (array_key_exists($key, $vars) && is_scalar($v)) $vars[$key] = (string)$v;
+        }
+    }
+    return $vars;
+}
+
 // Send a monitoring copy of an outgoing message to the church / admin, when the
 // pastor has switched it on in Settings. Deliberately ONE summary copy per
 // broadcast or reply (never one per recipient) so the church phone is not flooded.
@@ -561,6 +648,16 @@ switch ($method) {
                 // it on their phone) and it MUST be visible here - it silently went
                 // wrong once and every text failed with no clue where to look.
                 'twilio_number' => $settings['msg_twilio_number'] ?? '',
+            ]);
+        }
+
+        // The saved wording for the one-click thank-you and pledge reminder,
+        // with the built-in wording filled in wherever nothing has been saved.
+        if ($action === 'templates') {
+            jsonResponse([
+                'templates' => getMessageTemplates($db),
+                'defaults' => defaultMessageTemplates(),
+                'fields' => mergeFieldNames(),
             ]);
         }
 
@@ -751,6 +848,29 @@ switch ($method) {
             jsonResponse(['message' => 'Configuration saved (' . count($saved) . ' settings)', 'saved' => $saved]);
         }
 
+        // Save the thank-you / reminder wording. Unlike the keys above, a blank
+        // value here is meaningful: it clears the saved wording and puts the
+        // built-in wording back, which is what the Reset button does.
+        if ($action === 'templates') {
+            requireRole($currentUser, ['pastor', 'admin']);
+            $data = getRequestBody();
+            $saved = [];
+            foreach (array_keys(defaultMessageTemplates()) as $key) {
+                if (!array_key_exists($key, $data)) continue;
+                $val = (string)$data[$key];
+                try {
+                    $db->prepare("DELETE FROM settings WHERE `key` = ?")->execute([$key]);
+                    if (trim($val) !== '') {
+                        $db->prepare("INSERT INTO settings (`key`, `value`) VALUES (?, ?)")->execute([$key, $val]);
+                    }
+                    $saved[] = $key;
+                } catch (Exception $e) {
+                    jsonResponse(['error' => "Failed to save $key: " . $e->getMessage()], 500);
+                }
+            }
+            jsonResponse(['message' => 'Wording saved', 'saved' => $saved, 'templates' => getMessageTemplates($db)]);
+        }
+
         // Reply to one person in the Inbox (a direct 1-to-1 text). No consent
         // gate here: they texted us first, so answering is allowed.
         if ($action === 'reply') {
@@ -835,6 +955,10 @@ switch ($method) {
                 'send_type'        => $data['send_type'] ?? 'now',
                 'scheduled_at'     => $data['scheduled_at'] ?? null,
                 'recurring_pattern'=> $data['recurring_pattern'] ?? null,
+                // Parked with the draft on purpose. Without it a thank-you or a
+                // pledge reminder saved for later would go out with the literal
+                // text {amount} in it once the per-person figures were lost.
+                'merge'            => is_array($data['merge'] ?? null) ? $data['merge'] : null,
             ];
             $attachmentPath = $saved['attachment_names']
                 ? implode(',', array_map(fn($n) => __DIR__ . '/uploads/' . $n, $saved['attachment_names']))
@@ -890,6 +1014,10 @@ switch ($method) {
             $recipientType = $data['recipient_type'] ?? 'individual';
             $recipientIds = $data['recipient_ids'] ?? [];
             $recipientFilter = $data['recipient_filter'] ?? null;
+            // Per-person values for the placeholders, keyed by member id, e.g. the
+            // gift amount on a thank-you or the outstanding balance on a pledge
+            // reminder. Everyone gets the same wording but their own figures.
+            $mergeExtra = is_array($data['merge'] ?? null) ? $data['merge'] : [];
 
             // Handle file attachments (single or multiple)
             $attachmentPath = null;
@@ -1019,8 +1147,14 @@ switch ($method) {
 
                 $emailErrors = [];
                 $smsErrors = [];
+                $churchName = trim((string)($settings['msg_from_name'] ?? '')) ?: 'Hallelujah In The City';
                 foreach ($pendingRecps->fetchAll() as $recp) {
                     $success = false;
+                    // This person's own copy. With no placeholders in the wording
+                    // these come back byte-for-byte identical to what was typed.
+                    $vars = mergeVarsForRecipient($recp, $mergeExtra, $churchName);
+                    $thisBody = applyMergeFields($body, $vars);
+                    $thisSubject = applyMergeFields($subject, $vars);
                     if ($recp['channel'] === 'email') {
                         // Ask for the details, not just true/false. An email that fails
                         // used to be recorded as a bare "failed" with no reason, so a
@@ -1028,7 +1162,7 @@ switch ($method) {
                         // looked exactly like nothing happening at all.
                         $mailResult = deliverEmail(
                             $settings, $recp['email'], $recp['name'],
-                            $subject, $body, $attachmentPath, true
+                            $thisSubject, $thisBody, $attachmentPath, true
                         );
                         $success = $mailResult['success'];
                         if (!$success) {
@@ -1037,7 +1171,7 @@ switch ($method) {
                             $emailErrors[$errMsg] = ($emailErrors[$errMsg] ?? 0) + 1;
                         }
                     } elseif ($recp['channel'] === 'sms' && !empty($settings['msg_twilio_sid'])) {
-                        $smsBody = strip_tags($body);
+                        $smsBody = strip_tags($thisBody);
                         if (strlen($smsBody) > 1600) $smsBody = substr($smsBody, 0, 1597) . '...';
                         $mediaUrl = null;
                         if ($attachmentPath && file_exists($attachmentPath)) {
@@ -1080,6 +1214,12 @@ switch ($method) {
                     $sender = $currentUser['name'] ?? 'A church user';
                     $preview = trim(strip_tags($body));
                     if (strlen($preview) > 140) $preview = substr($preview, 0, 137) . '...';
+                    // The copy shows the wording as typed. Say so when the
+                    // placeholders were filled in differently for each person,
+                    // otherwise the {first name} in here looks like a fault.
+                    if ($preview !== '' && strpos($preview, '{') !== false) {
+                        $preview .= ' (each person got their own name and figures)';
+                    }
                     $label = $messageType === 'sms' ? 'text' : ($messageType === 'both' ? 'email + text' : 'email');
                     sendActivityCopy($db, $settings,
                         "[HITC] $sender sent a $label to $sentCount " . ($sentCount === 1 ? 'person' : 'people') . ": $preview",

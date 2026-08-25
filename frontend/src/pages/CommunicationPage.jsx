@@ -1,10 +1,11 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { messaging as msgApi, members as membersApi, groups as groupsApi, surveys as surveyApi } from '../utils/api';
 import { loadPersonTypes, DEFAULT_PERSON_TYPES } from '../utils/personTypes';
 import { useAuth } from '../contexts/AuthContext';
 import Modal from '../components/Modal';
 import Pagination from '../components/Pagination';
 import { formatStampChurch, formatClockChurch, isChurchToday } from '../utils/format';
+import { COMPOSE_PREFILL_KEY } from '../utils/composePrefill';
 import {
   Send, Mail, MessageSquare, Settings, Plus, Trash2, Eye, Check, X, Edit2,
   AlertCircle, Search, Users, Clock, CheckCircle, XCircle, Filter,
@@ -156,6 +157,15 @@ function ComposeTab({ setError, setMessage, openDraftId, onDraftOpened, onDrafts
   // Saving again updates that same draft rather than making another one.
   const [draftId, setDraftId] = useState(null);
   const [savingDraft, setSavingDraft] = useState(false);
+  // Each person's own figures for the {amount}/{amount behind} placeholders,
+  // keyed by member id. Set when this message was started from Finance.
+  const [mergeData, setMergeData] = useState(null);
+  // Plain-English note explaining where a prefilled message came from.
+  const [prefillNote, setPrefillNote] = useState('');
+  // A ready-made message from Finance arrives with both wordings: the email one
+  // and the shorter text one. Kept here so switching channel picks the right
+  // one - but only while it is still untouched, so nothing typed is lost.
+  const prefillBodies = useRef(null);
 
   useEffect(() => {
     membersApi.list({ limit: 9999, sort: 'last_name' }).then(d => setMembersList(d.members || []));
@@ -163,6 +173,32 @@ function ComposeTab({ setError, setMessage, openDraftId, onDraftOpened, onDrafts
     msgApi.config().then(d => setConfigStatus(d)).catch(() => {});
     msgApi.consentStats().then(d => setConsentStats(d)).catch(() => {});
     loadPersonTypes().then(setPersonTypes).catch(() => {});
+  }, []);
+
+  // A thank-you or a pledge reminder started on the Finance page hands the
+  // whole message over in sessionStorage and lands here. It is read once and
+  // cleared, so a later refresh does not resurrect an old message.
+  useEffect(() => {
+    let raw = null;
+    try {
+      raw = sessionStorage.getItem(COMPOSE_PREFILL_KEY);
+      if (raw) sessionStorage.removeItem(COMPOSE_PREFILL_KEY);
+    } catch { /* private browsing - nothing to restore */ }
+    if (!raw) return;
+    let p;
+    try { p = JSON.parse(raw); } catch { return; }
+    if (!p || typeof p !== 'object') return;
+
+    setMode('people');
+    setRecipientIds((p.recipient_ids || []).map(Number));
+    setMessageType(p.message_type || 'email');
+    setSubject(p.subject || '');
+    setBody(p.body || '');
+    prefillBodies.current = { email: p.body || '', sms: p.sms_body != null ? p.sms_body : (p.body || '') };
+    setMergeData(p.merge || null);
+    setPrefillNote(p.note || '');
+    setDraftId(null);
+    setSendProblems([]);
   }, []);
 
   // Put a saved draft back exactly as it was left - message, people, attachments.
@@ -185,6 +221,9 @@ function ComposeTab({ setError, setMessage, openDraftId, onDraftOpened, onDrafts
       setSendType(saved.send_type || 'now');
       setScheduledAt(saved.scheduled_at || '');
       setRecurringPattern(saved.recurring_pattern || '');
+      setMergeData(saved.merge || null);
+      setPrefillNote('');
+      prefillBodies.current = null;
       setSendProblems([]);
       setMessage('Draft opened. Finish it and send, or save it again.');
     }).catch(err => setError(err.message || 'Could not open that draft.'))
@@ -229,6 +268,15 @@ function ComposeTab({ setError, setMessage, openDraftId, onDraftOpened, onDrafts
 
   // The picked people, in the order they were picked, for the chips above the
   // Send button. Anyone whose record has since gone is simply skipped.
+  // People added to a personalised message who have no figures of their own.
+  // Their {amount} / {amount behind} would come out blank, so say so BEFORE
+  // it goes out rather than after.
+  const missingFigures = (mergeData && mode === 'people')
+    ? recipientIds.filter(id => !mergeData[String(id)])
+        .map(id => membersList.find(m => m.id === id))
+        .filter(Boolean)
+    : [];
+
   const selectedMembers = recipientIds
     .map(id => membersList.find(m => m.id === id))
     .filter(Boolean);
@@ -240,6 +288,19 @@ function ComposeTab({ setError, setMessage, openDraftId, onDraftOpened, onDrafts
 
   // Park the message half-finished. Deliberately no validation beyond "there is
   // something here" - the whole point of a draft is that it is not ready yet.
+  // Swap between the email wording and the shorter text wording when the
+  // channel changes, as long as the message has not been edited yet.
+  const changeMessageType = (next) => {
+    const pb = prefillBodies.current;
+    if (pb) {
+      const showing = messageType === 'sms' ? pb.sms : pb.email;
+      if (showing !== undefined && body === showing) {
+        setBody(next === 'sms' ? pb.sms : pb.email);
+      }
+    }
+    setMessageType(next);
+  };
+
   const handleSaveDraft = async () => {
     if (savingDraft) return;
     if (!subject.trim() && !body.trim()) { setError('Write a subject or a message first, then it can be saved.'); return; }
@@ -260,6 +321,7 @@ function ComposeTab({ setError, setMessage, openDraftId, onDraftOpened, onDrafts
         scheduled_at: sendType === 'scheduled' ? scheduledAt : null,
         recurring_pattern: sendType === 'recurring' ? recurringPattern : null,
         attachment_names: attachmentNames,
+        merge: mergeData || undefined,
       });
       setDraftId(res.draft_id);
       setMessage('Saved to Drafts. You can come back and finish it any time.');
@@ -298,6 +360,8 @@ function ComposeTab({ setError, setMessage, openDraftId, onDraftOpened, onDrafts
         recurring_pattern: sendType === 'recurring' ? recurringPattern : null,
         attachment_name: attachmentNames.length > 0 ? attachmentNames[0] : null,
         attachment_names: attachmentNames.length > 0 ? attachmentNames : null,
+        // Each person's own figures. Harmless when there are no placeholders.
+        merge: mergeData || undefined,
       };
       // If this started life as a draft, sending it finishes it off.
       if (draftId) sendData.draft_id = draftId;
@@ -328,6 +392,9 @@ function ComposeTab({ setError, setMessage, openDraftId, onDraftOpened, onDrafts
       setSaveContactName('');
       setAttachmentNames([]);
       setRecurringPattern('');
+      setMergeData(null);
+      setPrefillNote('');
+      prefillBodies.current = null;
       if (draftId) { setDraftId(null); onDraftsChanged && onDraftsChanged(); }
     } catch (err) {
       setError(err && err.message ? err.message : 'Failed to send. Please try again.');
@@ -339,6 +406,20 @@ function ComposeTab({ setError, setMessage, openDraftId, onDraftOpened, onDrafts
 
   return (
     <>
+      {/* Arrived here from the Finance page with the message already written. */}
+      {prefillNote && (
+        <div className="mb-4 p-4 bg-green-50 border border-green-200 rounded-xl flex items-start justify-between gap-3">
+          <div>
+            <p className="text-green-800 font-medium">{prefillNote}</p>
+            <p className="text-green-700 text-sm mt-1">
+              Read it over and change anything you like, then press Send. Nothing has gone out yet.
+              {mergeData && ' Each person gets their own name and figures where the {curly brackets} are.'}
+            </p>
+          </div>
+          <button onClick={() => setPrefillNote('')} className="text-green-400 hover:text-green-700 flex-shrink-0"><X size={18} /></button>
+        </div>
+      )}
+
       {notConfigured && (
         <div className="mb-4 p-4 bg-amber-50 border border-amber-200 rounded-xl">
           <p className="text-amber-800 font-medium">Email not configured yet</p>
@@ -397,7 +478,7 @@ function ComposeTab({ setError, setMessage, openDraftId, onDraftOpened, onDrafts
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
               <div>
                 <label className="label">Send Via</label>
-                <select className="input" value={messageType} onChange={e => setMessageType(e.target.value)}>
+                <select className="input" value={messageType} onChange={e => changeMessageType(e.target.value)}>
                   <option value="email">Email</option>
                   <option value="sms">SMS / Text</option>
                   <option value="both">Both Email + SMS</option>
@@ -594,6 +675,20 @@ function ComposeTab({ setError, setMessage, openDraftId, onDraftOpened, onDrafts
                     {showAllChips ? 'Show fewer' : `+${selectedMembers.length - CHIP_LIMIT} more`}
                   </button>
                 )}
+              </div>
+            )}
+
+            {missingFigures.length > 0 && (
+              <div className="mb-3 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm">
+                <p className="text-amber-800 font-medium">
+                  {missingFigures.length === 1 ? 'One person here has' : `${missingFigures.length} people here have`} no figures of their own
+                </p>
+                <p className="text-amber-700 text-xs mt-1">
+                  {missingFigures.slice(0, 6).map(m => `${m.first_name} ${m.last_name}`).join(', ')}
+                  {missingFigures.length > 6 ? ` and ${missingFigures.length - 6} more` : ''}
+                  {' '}were added after this message was prepared, so the amounts in curly brackets will come out
+                  blank for them. Take them off the list, or write the message out in full without the brackets.
+                </p>
               </div>
             )}
 
@@ -1374,6 +1469,155 @@ function SettingsTab({ setError, setMessage }) {
       <button onClick={handleSave} disabled={saving} className="btn-primary">
         {saving ? <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" /> : <Check size={16} />}
         Save Configuration
+      </button>
+
+      <div className="mt-8">
+        <MessageWordingCard setError={setError} setMessage={setMessage} />
+      </div>
+    </div>
+  );
+}
+
+/* ─── Message wording ───
+   The pastor's own words for the one-click thank-you and the pledge reminder.
+   Saves on its own, separately from the keys and numbers above. */
+const TPL_GROUPS = [
+  {
+    title: 'Thank you for a gift',
+    blurb: 'Used by the "Thank" button beside a gift on the Finance page.',
+    smsKey: 'msg_tpl_thanks_sms',
+    subjectKey: 'msg_tpl_thanks_subject',
+    bodyKey: 'msg_tpl_thanks_body',
+    fields: ['first name', 'last name', 'full name', 'amount', 'fund', 'date', 'church'],
+  },
+  {
+    title: 'Pledge reminder',
+    blurb: 'Used by the "Remind" buttons on the Finance page, Pledges tab.',
+    smsKey: 'msg_tpl_reminder_sms',
+    subjectKey: 'msg_tpl_reminder_subject',
+    bodyKey: 'msg_tpl_reminder_body',
+    fields: ['first name', 'last name', 'full name', 'fund', 'pledge amount', 'frequency', 'amount behind', 'total given', 'church'],
+  },
+];
+
+function MessageWordingCard({ setError, setMessage }) {
+  const [tpl, setTpl] = useState(null);
+  const [defaults, setDefaults] = useState({});
+  const [saving, setSaving] = useState(false);
+  // Which box in each group was typed in last, so a clicked placeholder goes
+  // into the text message or the email depending on where he was working.
+  const [lastFocus, setLastFocus] = useState({});
+  // One handle per box, so a placeholder lands where the cursor was left
+  // rather than being tacked on at the very end.
+  const boxes = useRef({});
+
+  useEffect(() => {
+    msgApi.templates()
+      .then(d => { setTpl(d.templates || {}); setDefaults(d.defaults || {}); })
+      .catch(() => setTpl({}));
+  }, []);
+
+  const setField = (k, v) => setTpl(t => ({ ...(t || {}), [k]: v }));
+
+  const insertField = (key, field) => {
+    const token = `{${field}}`;
+    const current = (tpl && tpl[key]) || '';
+    const el = boxes.current[key];
+    if (!el) { setField(key, current + token); return; }
+    const start = el.selectionStart == null ? current.length : el.selectionStart;
+    const end = el.selectionEnd == null ? start : el.selectionEnd;
+    setField(key, current.slice(0, start) + token + current.slice(end));
+    requestAnimationFrame(() => {
+      const pos = start + token.length;
+      el.focus();
+      try { el.setSelectionRange(pos, pos); } catch { /* not all inputs allow it */ }
+    });
+  };
+
+  const resetGroup = (g) => {
+    [g.smsKey, g.subjectKey, g.bodyKey].forEach(k => setField(k, defaults[k] || ''));
+  };
+
+  const save = async () => {
+    setSaving(true);
+    setError('');
+    try {
+      const res = await msgApi.saveTemplates(tpl || {});
+      if (res && res.templates) setTpl(res.templates);
+      setMessage('Wording saved. The thank-you and reminder buttons will use it from now on.');
+    } catch (err) {
+      setError((err && err.message) || 'Could not save the wording.');
+    }
+    setSaving(false);
+  };
+
+  if (!tpl) return null;
+
+  return (
+    <div className="card">
+      <h3 className="text-lg font-semibold text-gray-900 mb-1 flex items-center gap-2"><Edit2 size={20} /> Message Wording</h3>
+      <p className="text-sm text-gray-500 mb-4">
+        Your words for the two one-click messages. Anything in curly brackets is filled in
+        for each person when the message is written &mdash; <code className="text-gray-700">{'{first name}'}</code> becomes
+        their first name, <code className="text-gray-700">{'{amount}'}</code> becomes what they actually gave.
+        Click a field below to drop it in. Nothing here ever sends by itself: the buttons open the
+        message on the Compose screen and wait for you to press Send.
+      </p>
+
+      {TPL_GROUPS.map(g => (
+        <div key={g.smsKey} className="border-t border-gray-100 pt-4 mt-4 first:border-t-0 first:pt-0 first:mt-0">
+          <div className="flex items-center justify-between gap-3 mb-1">
+            <h4 className="font-semibold text-gray-800">{g.title}</h4>
+            <button type="button" onClick={() => resetGroup(g)}
+              className="text-xs font-medium text-gray-500 hover:text-gray-800 underline underline-offset-2">
+              Put the standard wording back
+            </button>
+          </div>
+          <p className="text-xs text-gray-500 mb-3">{g.blurb}</p>
+
+          <div className="flex flex-wrap gap-1.5 mb-3">
+            {g.fields.map(f => (
+              <button key={f} type="button" onClick={() => insertField(lastFocus[g.smsKey] || g.bodyKey, f)}
+                title={`Put {${f}} where the cursor is`}
+                className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 hover:bg-primary-50 hover:text-primary-700 text-xs font-mono">
+                {'{' + f + '}'}
+              </button>
+            ))}
+          </div>
+
+          <div className="space-y-3">
+            <div>
+              <label className="label">Text message</label>
+              <textarea rows="3" className="input font-normal"
+                ref={el => { boxes.current[g.smsKey] = el; }}
+                onFocus={() => setLastFocus(s => ({ ...s, [g.smsKey]: g.smsKey }))}
+                value={tpl[g.smsKey] || ''}
+                onChange={e => setField(g.smsKey, e.target.value)} />
+              <p className="text-xs text-gray-400 mt-1">Keep it short &mdash; long texts get split into several messages and cost more.</p>
+            </div>
+            <div>
+              <label className="label">Email subject</label>
+              <input className="input"
+                ref={el => { boxes.current[g.subjectKey] = el; }}
+                onFocus={() => setLastFocus(s => ({ ...s, [g.smsKey]: g.subjectKey }))}
+                value={tpl[g.subjectKey] || ''}
+                onChange={e => setField(g.subjectKey, e.target.value)} />
+            </div>
+            <div>
+              <label className="label">Email message</label>
+              <textarea rows="8" className="input font-normal"
+                ref={el => { boxes.current[g.bodyKey] = el; }}
+                onFocus={() => setLastFocus(s => ({ ...s, [g.smsKey]: g.bodyKey }))}
+                value={tpl[g.bodyKey] || ''}
+                onChange={e => setField(g.bodyKey, e.target.value)} />
+            </div>
+          </div>
+        </div>
+      ))}
+
+      <button onClick={save} disabled={saving} className="btn-primary mt-5">
+        {saving ? <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" /> : <Check size={16} />}
+        Save Wording
       </button>
     </div>
   );

@@ -692,6 +692,7 @@ switch ($method) {
 
                     if ($behindBy > 0.005) {
                         $alerts[] = [
+                            'member_id' => (int)$p['member_id'],
                             'member_name' => $p['first_name'] . ' ' . $p['last_name'],
                             // Sent separately as well so the screen can sort by last name
                             // or by first name without having to guess where the split is.
@@ -733,6 +734,7 @@ switch ($method) {
                     SELECT d.id, d.donation_date as date, d.amount, d.payment_method, d.notes,
                         d.created_at, d.recorded_by, d.routed_account_id,
                         COALESCE(CONCAT(m.first_name, ' ', m.last_name), d.donor_name, 'Anonymous') as who,
+                        d.member_id, m.first_name as member_first_name, m.last_name as member_last_name,
                         dc.name as category_name, u.name as recorded_by_name,
                         a.name as account_name
                     FROM donations d
@@ -753,6 +755,13 @@ switch ($method) {
                         'routed_account_id' => $r['routed_account_id'] ? (int)$r['routed_account_id'] : null,
                         'recorded_by' => $r['recorded_by_name'], 'created_at' => $r['created_at'],
                         'status' => 'recorded', 'notes' => $r['notes'],
+                        // Carried so the History tab can offer a one-click
+                        // thank-you. A gift with no member behind it (loose cash)
+                        // has no one to thank, and member_id stays null.
+                        'member_id' => $r['member_id'] ? (int)$r['member_id'] : null,
+                        'member_first_name' => $r['member_first_name'] ?? '',
+                        'member_last_name' => $r['member_last_name'] ?? '',
+                        'fund' => $r['category_name'],
                     ];
                 }
             }
