@@ -4,7 +4,7 @@ import { loadPersonTypes, DEFAULT_PERSON_TYPES } from '../utils/personTypes';
 import { useAuth } from '../contexts/AuthContext';
 import Modal from '../components/Modal';
 import Pagination from '../components/Pagination';
-import { formatStampChurch, formatClockChurch, isChurchToday } from '../utils/format';
+import { formatStampChurch, formatClockChurch, isChurchToday, toChurchInputValue } from '../utils/format';
 import { COMPOSE_PREFILL_KEY } from '../utils/composePrefill';
 import {
   Send, Mail, MessageSquare, Settings, Plus, Trash2, Eye, Check, X, Edit2,
@@ -116,7 +116,7 @@ export default function CommunicationPage() {
         </div>
       )}
 
-      {overdue.length > 0 && (
+      {overdue.length > 0 && tab !== 'scheduled' && (
         <div className="mb-4 p-3 bg-amber-50 border border-amber-300 rounded-lg text-amber-900 text-sm">
           <div className="flex items-start gap-2">
             <AlertCircle size={16} className="mt-0.5 flex-shrink-0" />
@@ -932,6 +932,13 @@ function ScheduledTab({ setError, setMessage, onChanged }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState(null);
+  // The message being read before it goes out, with its own editable copy of
+  // the wording and the time. Nothing is written until Save is pressed.
+  const [review, setReview] = useState(null);
+  const [draftSubject, setDraftSubject] = useState('');
+  const [draftBody, setDraftBody] = useState('');
+  const [draftWhen, setDraftWhen] = useState('');
+  const [saving, setSaving] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -941,6 +948,42 @@ function ScheduledTab({ setError, setMessage, onChanged }) {
   }, [setError]);
 
   useEffect(() => { load(); }, [load]);
+
+  const openReview = async (m) => {
+    setError('');
+    try {
+      const r = await msgApi.get(m.id);
+      const full = r.message || {};
+      // Text messages are stored as typed; email bodies carry <br> from Compose.
+      const plain = String(full.body || '')
+        .replace(/<br\s*\/?>/gi, '\n')
+        .replace(/<[^>]+>/g, '');
+      setReview({ ...m, recipients: r.recipients || [] });
+      setDraftSubject(full.subject || '');
+      setDraftBody(plain);
+      setDraftWhen(toChurchInputValue(full.scheduled_at));
+    } catch (err) { setError(err.message || 'Could not open that message.'); }
+  };
+
+  const handleSave = async () => {
+    if (!review) return;
+    setSaving(true);
+    setError('');
+    try {
+      const payload = { id: review.id, subject: draftSubject };
+      // Put the line breaks back the way Compose stores them for an email.
+      payload.body = review.message_type === 'email'
+        ? draftBody.replace(/\n/g, '<br>')
+        : draftBody;
+      if (draftWhen) payload.scheduled_at = draftWhen;
+      await msgApi.updateQueued(payload);
+      setMessage('Saved. It is still waiting and has not gone to anyone.');
+      setReview(null);
+      await load();
+      onChanged && onChanged();
+    } catch (err) { setError(err.message || 'Could not save that change.'); }
+    setSaving(false);
+  };
 
   const handleSendNow = async (m) => {
     const who = m.total_recipients === 1 ? '1 person' : `${m.total_recipients} people`;
@@ -1021,6 +1064,9 @@ function ScheduledTab({ setError, setMessage, onChanged }) {
               </p>
             </div>
             <div className="flex gap-2 flex-shrink-0">
+              <button onClick={() => openReview(m)} className="btn-secondary text-sm">
+                <Eye size={14} /> Review
+              </button>
               {canSend && (
                 <button onClick={() => handleSendNow(m)} disabled={busyId === m.id} className="btn-primary text-sm">
                   <Send size={14} /> {busyId === m.id ? 'Sending...' : 'Send now'}
@@ -1033,6 +1079,62 @@ function ScheduledTab({ setError, setMessage, onChanged }) {
           </div>
         ))}
       </div>
+
+      {review && (
+        <Modal isOpen={true} onClose={() => setReview(null)} title="Before it goes out" size="lg">
+          <div className="space-y-4">
+            <div className="text-sm text-gray-600">
+              Going to{' '}
+              <span className="font-medium text-gray-900">
+                {review.recipients.length === 1
+                  ? (review.recipients[0].name || review.recipients[0].phone || review.recipients[0].email)
+                  : `${review.recipients.length} people`}
+              </span>
+              {review.recipients.length === 1 && review.recipients[0].phone ? ` (${review.recipients[0].phone})` : ''}
+              {' '}by {review.message_type === 'both' ? 'email and text' : review.message_type === 'sms' ? 'text' : 'email'}.
+            </div>
+
+            {review.message_type !== 'sms' && (
+              <div>
+                <label className="label">Subject</label>
+                <input className="input" value={draftSubject} onChange={e => setDraftSubject(e.target.value)} />
+              </div>
+            )}
+
+            <div>
+              <label className="label">Message</label>
+              <textarea className="input font-normal" rows={9} value={draftBody}
+                onChange={e => setDraftBody(e.target.value)} />
+              <p className="text-xs text-gray-400 mt-1">
+                Change the wording here if it has gone stale. Nothing is saved until you press Save.
+              </p>
+            </div>
+
+            <div>
+              <label className="label">Send it at</label>
+              <input type="datetime-local" className="input" value={draftWhen}
+                onChange={e => setDraftWhen(e.target.value)} />
+              <p className="text-xs text-gray-400 mt-1">
+                Philadelphia time. Pick a new date and time to reschedule it, or leave it and use Send now below.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap gap-2 pt-2 border-t">
+              {canSend && (
+                <button onClick={handleSave} disabled={saving} className="btn-secondary">
+                  <Check size={15} /> {saving ? 'Saving...' : 'Save changes'}
+                </button>
+              )}
+              {canSend && (
+                <button onClick={() => { const m = review; setReview(null); handleSendNow(m); }} className="btn-primary">
+                  <Send size={15} /> Send now
+                </button>
+              )}
+              <button onClick={() => setReview(null)} className="btn-secondary ml-auto">Close</button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }

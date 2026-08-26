@@ -716,6 +716,52 @@ switch ($method) {
             }
         }
 
+        // Change a message that has not gone out yet - its wording, its time, or
+        // both. Only ever a queued one: once something has been sent, editing the
+        // record would rewrite history for a message people have already read.
+        if ($action === 'update_queued') {
+            requireSectionEdit($currentUser, 'communication', 'send');
+            $data = getRequestBody();
+            $msgId = (int)($data['id'] ?? $id ?? 0);
+            if (!$msgId) jsonResponse(['error' => 'Message ID required'], 400);
+
+            $cur = $db->prepare("SELECT status, message_type FROM messages WHERE id = ?");
+            $cur->execute([$msgId]);
+            $row = $cur->fetch();
+            if (!$row) jsonResponse(['error' => 'That message no longer exists.'], 404);
+            if ($row['status'] !== 'queued') {
+                jsonResponse(['error' => 'That message is not waiting any more - it has already been sent or is going out now.'], 409);
+            }
+
+            $sets = [];
+            $vals = [];
+            if (array_key_exists('subject', $data)) { $sets[] = 'subject = ?'; $vals[] = (string)$data['subject']; }
+            if (array_key_exists('body', $data)) {
+                if (trim(strip_tags((string)$data['body'])) === '') {
+                    jsonResponse(['error' => 'The message cannot be left empty.'], 400);
+                }
+                $sets[] = 'body = ?'; $vals[] = (string)$data['body'];
+            }
+            if (!empty($data['scheduled_at'])) {
+                // Typed in Philadelphia time, same as the box it came from.
+                $utc = churchToUtc((string)$data['scheduled_at']);
+                if (!$utc) jsonResponse(['error' => 'That date and time could not be read.'], 400);
+                if (strtotime($utc) < strtotime(utcNow()) + 60) {
+                    jsonResponse(['error' => 'Pick a time at least a minute from now, or use Send now.'], 400);
+                }
+                $sets[] = 'scheduled_at = ?'; $vals[] = $utc;
+            }
+            if (!$sets) jsonResponse(['error' => 'Nothing to change.'], 400);
+
+            $vals[] = $msgId;
+            $db->prepare("UPDATE messages SET " . implode(', ', $sets) . " WHERE id = ? AND status = 'queued'")
+               ->execute($vals);
+
+            $after = $db->prepare("SELECT scheduled_at FROM messages WHERE id = ?");
+            $after->execute([$msgId]);
+            jsonResponse(['message' => 'Saved.', 'id' => $msgId, 'scheduled_at' => $after->fetchColumn()]);
+        }
+
         // Send a message that is already sitting in the queue, right now, without
         // anybody having to type it again. This is the way out of anything the
         // scheduler has not done - a cron that stopped, a message held back for

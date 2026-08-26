@@ -437,6 +437,7 @@ export const messaging = {
   // Messages waiting on the clock. sendNow fires one immediately without retyping it.
   scheduled: () => request('messaging.php', { params: { action: 'scheduled' } }),
   sendNow: (id) => request('messaging.php', { method: 'POST', body: { id }, params: { action: 'send_now' } }),
+  updateQueued: (data) => request('messaging.php', { method: 'POST', body: data, params: { action: 'update_queued' } }),
 };
 
 // Surveys
