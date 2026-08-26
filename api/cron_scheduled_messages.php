@@ -124,5 +124,18 @@ foreach ($due->fetchAll() as $m) {
     }
 }
 
+/**
+ * Leave a mark every single run, whether or not anything was due.
+ *
+ * Without this the only evidence the scheduler is alive is a message going out
+ * on time, which means the first proof it has stopped is a message that did
+ * not. Recording the heartbeat separately means the app can say "nothing has
+ * checked the queue since Tuesday" while the queue is still empty and nothing
+ * has been lost yet.
+ */
+$db->prepare("INSERT INTO settings (`key`, value) VALUES ('sched_last_run', ?)
+              ON DUPLICATE KEY UPDATE value = VALUES(value)")
+   ->execute([utcNow()]);
+
 header('Content-Type: application/json');
 echo json_encode($report, JSON_PRETTY_PRINT);

@@ -90,7 +90,18 @@ switch ($method) {
                 unset($m['body']);
                 $rows[] = $m;
             }
-            jsonResponse(['scheduled' => $rows]);
+            // The scheduler's own heartbeat, written by cron_scheduled_messages.php
+            // on every run. Reported as minutes rather than a stamp so it cannot be
+            // confused with a send time, and so an empty queue still tells the
+            // truth about whether anything is watching it.
+            $lastRun = $db->query("SELECT value FROM settings WHERE `key` = 'sched_last_run'")->fetchColumn();
+            jsonResponse([
+                'scheduled' => $rows,
+                'scheduler' => [
+                    'ever_ran' => (bool)$lastRun,
+                    'minutes_since_last_run' => $lastRun ? (int)round(($now - strtotime($lastRun)) / 60) : null,
+                ],
+            ]);
         }
 
         // One draft, with everything needed to put the Compose form back the way
