@@ -16,7 +16,11 @@
     <div id="root"></div>
     <script>
       if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.register('/system/public/sw.js', { scope: '/system/' });
+        // No explicit scope. A worker may only claim its own folder and below,
+        // and asking for /system/ from /system/public/ made the browser reject
+        // the registration outright. The default scope is /system/public/,
+        // which is where the whole app lives anyway.
+        navigator.serviceWorker.register('/system/public/sw.js');
       }
     </script>
   </body>
