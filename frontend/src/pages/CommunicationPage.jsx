@@ -14,6 +14,21 @@ import {
 
 const typeColors = { sent: 'bg-green-100 text-green-700', draft: 'bg-gray-100 text-gray-700', queued: 'bg-blue-100 text-blue-700', sending: 'bg-amber-100 text-amber-700', failed: 'bg-red-100 text-red-700' };
 
+// The scheduler checks the queue every five minutes. A couple of missed runs is
+// a slow server, not a fault, so say nothing until enough of them have gone by
+// that something is genuinely wrong.
+const SCHEDULER_STALE_MINUTES = 20;
+
+// Plain words for a gap in time. "1440 minutes" tells a pastor nothing.
+const humanGap = (mins) => {
+  const m = Math.max(0, Math.round(mins || 0));
+  if (m < 90) return `${m} minute${m === 1 ? '' : 's'}`;
+  const h = Math.round(m / 60);
+  if (h < 36) return h === 1 ? 'about an hour' : `about ${h} hours`;
+  const d = Math.round(h / 24);
+  return d === 1 ? 'about a day' : `about ${d} days`;
+};
+
 // How many picked names to show as chips before folding the rest away.
 const CHIP_LIMIT = 25;
 
@@ -36,6 +51,9 @@ export default function CommunicationPage() {
   // Messages waiting on the clock, and how many of those are past their time.
   const [queuedCount, setQueuedCount] = useState(0);
   const [overdue, setOverdue] = useState([]);
+  // The scheduler's own heartbeat. Null until the first check comes back, so a
+  // slow first load never flashes a scary banner at him.
+  const [scheduler, setScheduler] = useState(null);
   // Set when a draft is opened from the Drafts tab; Compose picks it up and clears it.
   const [openDraftId, setOpenDraftId] = useState(null);
 
@@ -55,8 +73,17 @@ export default function CommunicationPage() {
       const rows = r.scheduled || [];
       setQueuedCount(rows.length);
       setOverdue(rows.filter(m => m.overdue));
+      setScheduler(r.scheduler || null);
     } catch { /* ignore */ }
   }, []);
+
+  // Is anything actually watching the queue? Deliberately separate from whether
+  // a message is late: with an empty queue nothing is overdue, and the scheduler
+  // could still have been dead for a week. This is the difference between
+  // finding out now and finding out when a message fails to arrive.
+  const schedulerDown = scheduler !== null && (
+    !scheduler.ever_ran || (scheduler.minutes_since_last_run ?? 0) > SCHEDULER_STALE_MINUTES
+  );
 
   useEffect(() => {
     refreshUnread();
@@ -113,6 +140,29 @@ export default function CommunicationPage() {
         <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded-lg flex items-center gap-2 text-green-700 text-sm">
           <Check size={16} /> {message}
           <button onClick={() => setMessage('')} className="ml-auto"><X size={14} /></button>
+        </div>
+      )}
+
+      {/* Shown on every tab including Scheduled, because unlike a late message
+          this is not something Send Now fixes - it means nothing is coming to
+          collect anything he schedules from here on. */}
+      {schedulerDown && (
+        <div className="mb-4 p-3 bg-red-50 border border-red-300 rounded-lg text-red-900 text-sm">
+          <div className="flex items-start gap-2">
+            <AlertCircle size={16} className="mt-0.5 flex-shrink-0" />
+            <div className="flex-1">
+              <p className="font-semibold">Scheduled messages are not being sent automatically.</p>
+              <p className="mt-0.5">
+                {!scheduler?.ever_ran
+                  ? 'The automatic sender has never run on this server. Anything you schedule will sit and wait instead of going out.'
+                  : `The automatic sender checks every five minutes, but it has not checked for ${humanGap(scheduler.minutes_since_last_run)}. Anything you schedule may not go out until it is working again.`}
+              </p>
+              <p className="mt-0.5">
+                Nothing has been sent to anyone by mistake. You can still send anything that is waiting yourself,
+                from the Scheduled tab. If this is still showing in a few minutes, it needs looking at.
+              </p>
+            </div>
+          </div>
         </div>
       )}
 
