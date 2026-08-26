@@ -14,7 +14,24 @@
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/messaging_core.php';
 
-$secret = $_GET['key'] ?? '';
+/**
+ * Two ways in, because the host offers two kinds of cron job.
+ *
+ * Over HTTP the key is the only thing standing between this and the open
+ * internet, so it is required. Run from the command line by the server's own
+ * cron there is no query string at all - PHP's CLI mode never fills $_GET - so
+ * requiring one would mean the PHP option silently 403s for ever. Reaching this
+ * file from a shell already means having the account, which is more authority
+ * than the key represents, so the key is optional there.
+ */
+if (PHP_SAPI === 'cli') {
+    $secret = 'hitc-scheduler-2026';
+    foreach (array_slice($argv ?? [], 1) as $arg) {
+        if (strpos($arg, 'key=') === 0) { $secret = substr($arg, 4); }
+    }
+} else {
+    $secret = $_GET['key'] ?? '';
+}
 if ($secret !== 'hitc-scheduler-2026') {
     http_response_code(403);
     echo json_encode(['error' => 'Unauthorized']);
