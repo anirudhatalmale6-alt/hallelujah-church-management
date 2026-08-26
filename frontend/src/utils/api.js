@@ -434,6 +434,9 @@ export const messaging = {
   drafts: () => request('messaging.php', { params: { action: 'drafts' } }),
   getDraft: (id) => request('messaging.php', { params: { action: 'draft', id } }),
   saveDraft: (data) => request('messaging.php', { method: 'POST', body: data, params: { action: 'save_draft' } }),
+  // Messages waiting on the clock. sendNow fires one immediately without retyping it.
+  scheduled: () => request('messaging.php', { params: { action: 'scheduled' } }),
+  sendNow: (id) => request('messaging.php', { method: 'POST', body: { id }, params: { action: 'send_now' } }),
 };
 
 // Surveys

@@ -33,6 +33,9 @@ export default function CommunicationPage() {
   const [message, setMessage] = useState('');
   const [unread, setUnread] = useState(0);
   const [draftCount, setDraftCount] = useState(0);
+  // Messages waiting on the clock, and how many of those are past their time.
+  const [queuedCount, setQueuedCount] = useState(0);
+  const [overdue, setOverdue] = useState([]);
   // Set when a draft is opened from the Drafts tab; Compose picks it up and clears it.
   const [openDraftId, setOpenDraftId] = useState(null);
 
@@ -44,12 +47,25 @@ export default function CommunicationPage() {
     try { const r = await msgApi.drafts(); setDraftCount((r.drafts || []).length); } catch { /* ignore */ }
   }, []);
 
+  // Checked from every tab, not just the Scheduled one. A message that should
+  // have gone out and did not is the thing nobody must have to go looking for.
+  const refreshScheduled = useCallback(async () => {
+    try {
+      const r = await msgApi.scheduled();
+      const rows = r.scheduled || [];
+      setQueuedCount(rows.length);
+      setOverdue(rows.filter(m => m.overdue));
+    } catch { /* ignore */ }
+  }, []);
+
   useEffect(() => {
     refreshUnread();
     refreshDrafts();
+    refreshScheduled();
     const t = setInterval(refreshUnread, 60000);
-    return () => clearInterval(t);
-  }, [refreshUnread, refreshDrafts]);
+    const q = setInterval(refreshScheduled, 60000);
+    return () => { clearInterval(t); clearInterval(q); };
+  }, [refreshUnread, refreshDrafts, refreshScheduled]);
 
   const handleOpenDraft = (id) => { setOpenDraftId(id); setTab('compose'); };
 
@@ -57,6 +73,7 @@ export default function CommunicationPage() {
     { key: 'compose', label: 'Compose', icon: Send },
     { key: 'drafts', label: 'Drafts', icon: Edit2, badge: draftCount },
     { key: 'inbox', label: 'Inbox', icon: Inbox, badge: unread },
+    { key: 'scheduled', label: 'Scheduled', icon: Clock, badge: queuedCount },
     { key: 'sent', label: 'Sent Messages', icon: Mail },
     { key: 'surveys', label: 'Surveys', icon: ClipboardList },
     { key: 'qrcode', label: 'QR Codes', icon: QrCode },
@@ -99,6 +116,29 @@ export default function CommunicationPage() {
         </div>
       )}
 
+      {overdue.length > 0 && (
+        <div className="mb-4 p-3 bg-amber-50 border border-amber-300 rounded-lg text-amber-900 text-sm">
+          <div className="flex items-start gap-2">
+            <AlertCircle size={16} className="mt-0.5 flex-shrink-0" />
+            <div className="flex-1">
+              <p className="font-semibold">
+                {overdue.length === 1
+                  ? 'One scheduled message has not gone out.'
+                  : `${overdue.length} scheduled messages have not gone out.`}
+              </p>
+              <p className="mt-0.5">
+                {overdue.length === 1
+                  ? 'Its time has passed and it is still waiting. Nothing has been sent to anyone. Open Scheduled to send it now, or delete it.'
+                  : 'Their time has passed and they are still waiting. Nothing has been sent to anyone. Open Scheduled to send them now, or delete them.'}
+              </p>
+            </div>
+            <button onClick={() => setTab('scheduled')} className="btn-primary text-sm flex-shrink-0">
+              <Clock size={14} /> Open
+            </button>
+          </div>
+        </div>
+      )}
+
       {tab === 'compose' && (
         <ComposeTab
           setError={setError}
@@ -106,12 +146,16 @@ export default function CommunicationPage() {
           openDraftId={openDraftId}
           onDraftOpened={() => setOpenDraftId(null)}
           onDraftsChanged={refreshDrafts}
+          onScheduled={refreshScheduled}
         />
       )}
       {tab === 'drafts' && (
         <DraftsTab setError={setError} setMessage={setMessage} onOpen={handleOpenDraft} onChanged={refreshDrafts} />
       )}
       {tab === 'inbox' && <InboxTab setError={setError} onRead={refreshUnread} />}
+      {tab === 'scheduled' && (
+        <ScheduledTab setError={setError} setMessage={setMessage} onChanged={refreshScheduled} />
+      )}
       {tab === 'sent' && <SentTab setError={setError} />}
       {tab === 'surveys' && <SurveysTab setError={setError} setMessage={setMessage} />}
       {tab === 'qrcode' && <QRCodeTab />}
@@ -120,7 +164,7 @@ export default function CommunicationPage() {
   );
 }
 
-function ComposeTab({ setError, setMessage, openDraftId, onDraftOpened, onDraftsChanged }) {
+function ComposeTab({ setError, setMessage, openDraftId, onDraftOpened, onDraftsChanged, onScheduled }) {
   const { canEdit, hasSectionAccess } = useAuth();
   const canSend = canEdit && hasSectionAccess('communication', 'send');
   const [membersList, setMembersList] = useState([]);
@@ -396,6 +440,9 @@ function ComposeTab({ setError, setMessage, openDraftId, onDraftOpened, onDrafts
       setPrefillNote('');
       prefillBodies.current = null;
       if (draftId) { setDraftId(null); onDraftsChanged && onDraftsChanged(); }
+      // A scheduled message goes straight to the queue, so the Scheduled tab
+      // and its count have to catch up the moment it is accepted.
+      if (sendType !== 'now') onScheduled && onScheduled();
     } catch (err) {
       setError(err && err.message ? err.message : 'Failed to send. Please try again.');
     }
@@ -865,6 +912,122 @@ function DraftsTab({ setError, setMessage, onOpen, onChanged }) {
               )}
               <button onClick={() => handleDelete(d)} disabled={deletingId === d.id} className="btn-danger text-sm">
                 <Trash2 size={14} /> {deletingId === d.id ? 'Deleting...' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ─── Scheduled Tab ───
+   Messages waiting on the clock. Nothing here has gone to anybody yet. The point
+   of this tab is that a scheduled message can no longer sit unsent and unnoticed:
+   anything past its time is flagged, and Send Now puts it out with one click
+   without retyping a word of it. */
+function ScheduledTab({ setError, setMessage, onChanged }) {
+  const { canEdit, hasSectionAccess } = useAuth();
+  const canSend = canEdit && hasSectionAccess('communication', 'send');
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try { const r = await msgApi.scheduled(); setRows(r.scheduled || []); }
+    catch (err) { setError(err.message || 'Could not load scheduled messages.'); }
+    setLoading(false);
+  }, [setError]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleSendNow = async (m) => {
+    const who = m.total_recipients === 1 ? '1 person' : `${m.total_recipients} people`;
+    if (!confirm(`Send this now to ${who}?${m.subject ? `\n\n"${m.subject}"` : ''}\n\nThis cannot be undone.`)) return;
+    setBusyId(m.id);
+    setError('');
+    try {
+      const res = await msgApi.sendNow(m.id);
+      setMessage(res.message || 'Sent.');
+      const problems = [...(res.email_problems || []), ...(res.sms_problems || [])];
+      if (problems.length) setError(problems.map(p => `${p.count}: ${p.reason}`).join(' | '));
+      await load();
+      onChanged && onChanged();
+    } catch (err) { setError(err.message || 'Could not send that message.'); }
+    setBusyId(null);
+  };
+
+  const handleDelete = async (m) => {
+    if (!confirm(`Delete this scheduled message${m.subject ? ` ("${m.subject}")` : ''}? It has not been sent to anyone.`)) return;
+    setBusyId(m.id);
+    try {
+      await msgApi.delete(m.id);
+      setMessage('Scheduled message deleted.');
+      await load();
+      onChanged && onChanged();
+    } catch (err) { setError(err.message || 'Could not delete that message.'); }
+    setBusyId(null);
+  };
+
+  const typeLabel = (t) => (t === 'both' ? 'Email + Text' : t === 'sms' ? 'Text' : 'Email');
+
+  const lateness = (mins) => {
+    if (mins < 60) return `${mins} min late`;
+    const h = Math.round(mins / 60);
+    if (h < 48) return `${h} ${h === 1 ? 'hour' : 'hours'} late`;
+    return `${Math.round(h / 24)} days late`;
+  };
+
+  if (loading) return <div className="card text-center text-gray-400 py-10">Loading scheduled messages...</div>;
+
+  if (rows.length === 0) {
+    return (
+      <div className="card text-center py-12">
+        <Clock size={32} className="mx-auto text-gray-300 mb-3" />
+        <p className="text-gray-700 font-medium">Nothing scheduled</p>
+        <p className="text-gray-500 text-sm mt-1">
+          In Compose, choose Schedule instead of Send now and pick a date and time. It will appear here until it goes out.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="card p-0 overflow-hidden">
+      <div className="px-4 py-3 bg-gray-50 border-b text-sm text-gray-600">
+        {rows.length} {rows.length === 1 ? 'message' : 'messages'} waiting &mdash; none of these have been sent yet.
+      </div>
+      <div className="divide-y">
+        {rows.map(m => (
+          <div key={m.id} className={`flex flex-col sm:flex-row sm:items-center gap-3 px-4 py-3 ${m.overdue ? 'bg-amber-50' : 'hover:bg-gray-50'}`}>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-medium text-gray-900 truncate">{m.subject || '(no subject)'}</span>
+                <span className="px-2 py-0.5 rounded-full text-xs bg-gray-100 text-gray-600">{typeLabel(m.message_type)}</span>
+                <span className="px-2 py-0.5 rounded-full text-xs bg-blue-50 text-blue-700">
+                  {m.total_recipients} {m.total_recipients === 1 ? 'person' : 'people'}
+                </span>
+                {m.overdue && (
+                  <span className="px-2 py-0.5 rounded-full text-xs bg-amber-200 text-amber-900 font-semibold">
+                    {lateness(m.minutes_late)}
+                  </span>
+                )}
+              </div>
+              {m.preview && <p className="text-sm text-gray-500 mt-0.5 truncate">{m.preview}</p>}
+              <p className="text-xs text-gray-400 mt-0.5">
+                Due {formatStampChurch(m.scheduled_at)}
+                {m.created_by_name ? ` \u2014 scheduled by ${m.created_by_name}` : ''}
+              </p>
+            </div>
+            <div className="flex gap-2 flex-shrink-0">
+              {canSend && (
+                <button onClick={() => handleSendNow(m)} disabled={busyId === m.id} className="btn-primary text-sm">
+                  <Send size={14} /> {busyId === m.id ? 'Sending...' : 'Send now'}
+                </button>
+              )}
+              <button onClick={() => handleDelete(m)} disabled={busyId === m.id} className="btn-danger text-sm">
+                <Trash2 size={14} /> Delete
               </button>
             </div>
           </div>
